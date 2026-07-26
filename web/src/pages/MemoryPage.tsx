@@ -1,7 +1,8 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Brain, Database, MagnifyingGlass, Plus, Trash } from '@phosphor-icons/react'
 import { del, get, post } from '@/lib/api'
 import { useApi } from '@/lib/hooks'
+import { useI18n, useTimeAgo } from '@/lib/i18n'
 import { PageBody } from '@/components/layout/AppShell'
 import { Button } from '@/components/ui/button'
 import {
@@ -20,8 +21,17 @@ import {
   TabsTrigger,
   Textarea,
 } from '@/components/ui/primitives'
+import {
+  Dialog,
+  DialogBody,
+  DialogClose,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
 import { SkeletonList } from '@/components/ui/skeleton'
-import { useI18n, useTimeAgo } from '@/lib/i18n'
 
 interface MemoryItem {
   id: string
@@ -69,7 +79,7 @@ function MemoryTab() {
   const [query, setQuery] = useState('')
   const [results, setResults] = useState<MemoryItem[] | null>(null)
   const [busy, setBusy] = useState(false)
-  const [draft, setDraft] = useState({ key: '', content: '' })
+  const [adding, setAdding] = useState(false)
   const { data, loading, reload } = useApi<{ memories: MemoryItem[] }>('/memory')
 
   const search = async () => {
@@ -82,18 +92,6 @@ function MemoryTab() {
     try {
       const r = await get<{ memories: MemoryItem[] }>(`/memory/search?q=${encodeURIComponent(q)}`)
       setResults(r.memories)
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  const add = async () => {
-    if (!draft.content.trim()) return
-    setBusy(true)
-    try {
-      await post('/memory', { key: draft.key, content: draft.content, scope: 'global' })
-      setDraft({ key: '', content: '' })
-      reload()
     } finally {
       setBusy(false)
     }
@@ -114,39 +112,12 @@ function MemoryTab() {
 
   return (
     <div className="space-y-4">
-      <Card>
-        <CardHeader>
-          <CardTitle>{t('memory.add')}</CardTitle>
-          <CardDescription>{t('memory.addDesc')}</CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          <div className="space-y-1.5">
-            <Label htmlFor="mem-key">{t('memory.key')} ({t('common.optional')})</Label>
-            <Input
-              id="mem-key"
-              value={draft.key}
-              onChange={(e) => setDraft((d) => ({ ...d, key: e.target.value }))}
-              placeholder={t('memory.keyPlaceholder')}
-            />
-          </div>
-          <div className="space-y-1.5">
-            <Label htmlFor="mem-content">{t('memory.content')}</Label>
-            <Textarea
-              id="mem-content"
-              value={draft.content}
-              onChange={(e) => setDraft((d) => ({ ...d, content: e.target.value }))}
-              placeholder={t('memory.contentPlaceholder')}
-              className="h-20"
-            />
-          </div>
-          <Button size="sm" onClick={add} loading={busy} disabled={!draft.content.trim()} className="gap-1.5">
-            <Plus className="size-4" /> {t('common.save')}
-          </Button>
-        </CardContent>
-      </Card>
+      <AddMemoryDialog open={adding} onOpenChange={setAdding} onSaved={reload} />
 
+      {/* Search and the add action share one row: the list is what matters here,
+          so the rarely used form stays behind a button. */}
       <div className="flex gap-2">
-        <div className="relative flex-1">
+        <div className="relative min-w-0 flex-1">
           <MagnifyingGlass className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
           <Input
             value={query}
@@ -156,8 +127,12 @@ function MemoryTab() {
             className="pl-9"
           />
         </div>
-        <Button variant="outline" onClick={search} loading={busy}>
+        <Button variant="outline" onClick={search} loading={busy} className="shrink-0">
           {t('common.search')}
+        </Button>
+        <Button onClick={() => setAdding(true)} className="shrink-0 gap-1.5">
+          <Plus className="size-4" />
+          <span className="hidden sm:inline">{t('common.new')}</span>
         </Button>
       </div>
 
@@ -168,6 +143,11 @@ function MemoryTab() {
           icon={<Brain className="size-8" />}
           title={t('memory.none')}
           description={t('memory.noneDesc')}
+          action={
+            <Button size="sm" onClick={() => setAdding(true)}>
+              {t('memory.add')}
+            </Button>
+          }
         />
       ) : (
         <div className="space-y-2">
@@ -195,6 +175,91 @@ function MemoryTab() {
         </div>
       )}
     </div>
+  )
+}
+
+function AddMemoryDialog({
+  open,
+  onOpenChange,
+  onSaved,
+}: {
+  open: boolean
+  onOpenChange: (v: boolean) => void
+  onSaved: () => void
+}) {
+  const { t } = useI18n()
+  const [draft, setDraft] = useState({ key: '', content: '' })
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState<string>()
+
+  useEffect(() => {
+    if (open) {
+      setDraft({ key: '', content: '' })
+      setError(undefined)
+    }
+  }, [open])
+
+  const save = async () => {
+    if (!draft.content.trim()) return
+    setSaving(true)
+    setError(undefined)
+    try {
+      await post('/memory', { key: draft.key, content: draft.content, scope: 'global' })
+      onSaved()
+      onOpenChange(false)
+    } catch (e) {
+      setError((e as Error).message)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>{t('memory.add')}</DialogTitle>
+          <DialogDescription>{t('memory.addDesc')}</DialogDescription>
+        </DialogHeader>
+
+        <DialogBody>
+          <div className="space-y-1.5">
+            <Label htmlFor="mem-content">{t('memory.content')}</Label>
+            <Textarea
+              id="mem-content"
+              autoFocus
+              value={draft.content}
+              onChange={(e) => setDraft((d) => ({ ...d, content: e.target.value }))}
+              placeholder={t('memory.contentPlaceholder')}
+              className="h-24"
+            />
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="mem-key">
+              {t('memory.key')} ({t('common.optional')})
+            </Label>
+            <Input
+              id="mem-key"
+              value={draft.key}
+              onChange={(e) => setDraft((d) => ({ ...d, key: e.target.value }))}
+              placeholder={t('memory.keyPlaceholder')}
+            />
+          </div>
+          {error ? <p className="text-xs text-destructive">{error}</p> : null}
+        </DialogBody>
+
+        <DialogFooter>
+          <DialogClose asChild>
+            <Button variant="outline" size="sm">
+              {t('common.close')}
+            </Button>
+          </DialogClose>
+          <Button size="sm" onClick={save} loading={saving} disabled={!draft.content.trim()}>
+            {t('common.save')}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   )
 }
 
@@ -261,23 +326,27 @@ function RagTab() {
           <CardDescription>{t('memory.indexDocsDesc')}</CardDescription>
         </CardHeader>
         <CardContent className="space-y-3">
-          <div className="space-y-1.5">
-            <Label htmlFor="rag-path">{t('memory.path')}</Label>
-            <Input
-              id="rag-path"
-              value={path}
-              onChange={(e) => setPath(e.target.value)}
-              placeholder={t('memory.pathPlaceholder')}
-            />
-          </div>
-          <div className="space-y-1.5">
-            <Label htmlFor="rag-col">{t('memory.collection')} ({t('common.optional')})</Label>
-            <Input
-              id="rag-col"
-              value={collection}
-              onChange={(e) => setCollection(e.target.value)}
-              placeholder={t('memory.collectionPlaceholder')}
-            />
+          <div className="grid gap-3 sm:grid-cols-2">
+            <div className="space-y-1.5">
+              <Label htmlFor="rag-path">{t('memory.path')}</Label>
+              <Input
+                id="rag-path"
+                value={path}
+                onChange={(e) => setPath(e.target.value)}
+                placeholder={t('memory.pathPlaceholder')}
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="rag-col">
+                {t('memory.collection')} ({t('common.optional')})
+              </Label>
+              <Input
+                id="rag-col"
+                value={collection}
+                onChange={(e) => setCollection(e.target.value)}
+                placeholder={t('memory.collectionPlaceholder')}
+              />
+            </div>
           </div>
           <Button size="sm" onClick={index} loading={busy} disabled={!data?.enabled || !path.trim()}>
             {t('memory.indexNow')}

@@ -2,23 +2,30 @@ import { useEffect, useState } from 'react'
 import { ClockCounterClockwise, Play, Plus, Trash } from '@phosphor-icons/react'
 import { del, get, post } from '@/lib/api'
 import { useApi } from '@/lib/hooks'
+import { useI18n, useTimeAgo } from '@/lib/i18n'
 import { PageBody } from '@/components/layout/AppShell'
+import { usePageActions } from '@/components/layout/PageChrome'
 import { Button } from '@/components/ui/button'
 import {
   Badge,
   Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
   EmptyState,
   Input,
   Label,
   Switch,
   Textarea,
 } from '@/components/ui/primitives'
+import {
+  Dialog,
+  DialogBody,
+  DialogClose,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
 import { SkeletonList } from '@/components/ui/skeleton'
-import { useI18n, useTimeAgo } from '@/lib/i18n'
 
 interface CronJob {
   id: string
@@ -32,47 +39,22 @@ interface CronJob {
   last_state: string
 }
 
+const EMPTY_DRAFT = { name: '', schedule: '0 8 * * *', prompt: '' }
+
 export default function CronPage() {
   const { t, locale } = useI18n()
   const timeAgo = useTimeAgo()
   const { data, loading, reload } = useApi<{ jobs: CronJob[] }>('/cron/jobs')
   const [busy, setBusy] = useState('')
-  const [draft, setDraft] = useState({ name: '', schedule: '0 8 * * *', prompt: '' })
-  const [error, setError] = useState<string>()
-  const [preview, setPreview] = useState<{ valid: boolean; upcoming?: string[]; error?: string }>()
+  const [open, setOpen] = useState(false)
 
-  // Preview the next few activations so a wrong expression is obvious before
-  // the job is ever created.
-  useEffect(() => {
-    const expr = draft.schedule.trim()
-    if (!expr) {
-      setPreview(undefined)
-      return
-    }
-    const timer = setTimeout(() => {
-      get<{ valid: boolean; upcoming?: string[]; error?: string }>(
-        `/cron/validate?schedule=${encodeURIComponent(expr)}`,
-      )
-        .then(setPreview)
-        .catch(() => setPreview(undefined))
-    }, 350)
-    return () => clearTimeout(timer)
-  }, [draft.schedule])
-
-  const create = async () => {
-    if (!draft.name.trim() || !draft.prompt.trim()) return
-    setBusy('new')
-    setError(undefined)
-    try {
-      await post('/cron/jobs', draft)
-      setDraft({ name: '', schedule: '0 8 * * *', prompt: '' })
-      reload()
-    } catch (e) {
-      setError((e as Error).message)
-    } finally {
-      setBusy('')
-    }
-  }
+  usePageActions(
+    <Button size="sm" onClick={() => setOpen(true)} className="gap-1.5">
+      <Plus className="size-4" />
+      {t('common.new')}
+    </Button>,
+    [t],
+  )
 
   const act = async (id: string, fn: () => Promise<unknown>) => {
     setBusy(id)
@@ -86,68 +68,7 @@ export default function CronPage() {
 
   return (
     <PageBody>
-      <Card>
-        <CardHeader>
-          <CardTitle>{t('cron.newSchedule')}</CardTitle>
-          <CardDescription>{t('cron.newScheduleDesc')}</CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          <div className="grid gap-3 sm:grid-cols-2">
-            <div className="space-y-1.5">
-              <Label htmlFor="cron-name">{t('cron.name')}</Label>
-              <Input
-                id="cron-name"
-                value={draft.name}
-                onChange={(e) => setDraft((d) => ({ ...d, name: e.target.value }))}
-                placeholder={t('cron.namePlaceholder')}
-              />
-            </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="cron-schedule">{t('cron.schedule')}</Label>
-              <Input
-                id="cron-schedule"
-                value={draft.schedule}
-                onChange={(e) => setDraft((d) => ({ ...d, schedule: e.target.value }))}
-                className="font-mono"
-                aria-invalid={preview?.valid === false}
-              />
-              {preview ? (
-                preview.valid ? (
-                  <p className="text-[11px] text-muted-foreground">
-                    {t('cron.nextRuns')}:{' '}
-                    {(preview.upcoming ?? [])
-                      .slice(0, 3)
-                      .map((iso) => new Date(iso).toLocaleString(locale))
-                      .join(' · ')}
-                  </p>
-                ) : (
-                  <p className="text-[11px] text-destructive">{preview.error}</p>
-                )
-              ) : null}
-            </div>
-          </div>
-          <div className="space-y-1.5">
-            <Label htmlFor="cron-prompt">{t('cron.instruction')}</Label>
-            <Textarea
-              id="cron-prompt"
-              value={draft.prompt}
-              onChange={(e) => setDraft((d) => ({ ...d, prompt: e.target.value }))}
-              placeholder={t('cron.instructionPlaceholder')}
-              className="h-20"
-            />
-          </div>
-          {error ? <p className="text-xs text-destructive">{error}</p> : null}
-          <Button
-            size="sm"
-            onClick={create}
-            loading={busy === 'new'}
-            disabled={preview?.valid === false || !draft.name.trim() || !draft.prompt.trim()}
-            className="gap-1.5"
-          >
-            <Plus className="size-4" /> {t('cron.create')}
-          </Button>
-        </CardContent>
-      </Card>
+      <NewJobDialog open={open} onOpenChange={setOpen} onCreated={reload} />
 
       {loading && !data ? (
         <SkeletonList count={3} />
@@ -156,6 +77,12 @@ export default function CronPage() {
           icon={<ClockCounterClockwise className="size-8" />}
           title={t('cron.none')}
           description={t('cron.noneDesc')}
+          action={
+            <Button size="sm" onClick={() => setOpen(true)} className="gap-1.5">
+              <Plus className="size-4" />
+              {t('cron.create')}
+            </Button>
+          }
         />
       ) : (
         <div className="space-y-2">
@@ -186,7 +113,9 @@ export default function CronPage() {
                   <Switch
                     checked={j.enabled}
                     disabled={busy === j.id}
-                    onCheckedChange={(v) => act(j.id, () => post(`/cron/jobs/${j.id}/toggle`, { enabled: v }))}
+                    onCheckedChange={(v) =>
+                      act(j.id, () => post(`/cron/jobs/${j.id}/toggle`, { enabled: v }))
+                    }
                     aria-label={t('common.enable')}
                   />
                   <Button
@@ -215,5 +144,146 @@ export default function CronPage() {
         </div>
       )}
     </PageBody>
+  )
+}
+
+function NewJobDialog({
+  open,
+  onOpenChange,
+  onCreated,
+}: {
+  open: boolean
+  onOpenChange: (v: boolean) => void
+  onCreated: () => void
+}) {
+  const { t, locale } = useI18n()
+  const [draft, setDraft] = useState(EMPTY_DRAFT)
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState<string>()
+  const [preview, setPreview] = useState<{ valid: boolean; upcoming?: string[]; error?: string }>()
+
+  // Start each visit from a clean slate rather than a half-typed previous job.
+  useEffect(() => {
+    if (open) {
+      setDraft(EMPTY_DRAFT)
+      setError(undefined)
+    }
+  }, [open])
+
+  // Preview the next few activations so a wrong expression is obvious before
+  // the job is ever created.
+  useEffect(() => {
+    const expr = draft.schedule.trim()
+    if (!open || !expr) {
+      setPreview(undefined)
+      return
+    }
+    const timer = setTimeout(() => {
+      get<{ valid: boolean; upcoming?: string[]; error?: string }>(
+        `/cron/validate?schedule=${encodeURIComponent(expr)}`,
+      )
+        .then(setPreview)
+        .catch(() => setPreview(undefined))
+    }, 350)
+    return () => clearTimeout(timer)
+  }, [draft.schedule, open])
+
+  const create = async () => {
+    if (!draft.name.trim() || !draft.prompt.trim()) return
+    setSaving(true)
+    setError(undefined)
+    try {
+      await post('/cron/jobs', draft)
+      onCreated()
+      onOpenChange(false)
+    } catch (e) {
+      setError((e as Error).message)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const invalid = preview?.valid === false || !draft.name.trim() || !draft.prompt.trim()
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>{t('cron.newSchedule')}</DialogTitle>
+          <DialogDescription>{t('cron.newScheduleDesc')}</DialogDescription>
+        </DialogHeader>
+
+        <DialogBody>
+          <div className="space-y-1.5">
+            <Label htmlFor="cron-name">{t('cron.name')}</Label>
+            <Input
+              id="cron-name"
+              autoFocus
+              value={draft.name}
+              onChange={(e) => setDraft((d) => ({ ...d, name: e.target.value }))}
+              placeholder={t('cron.namePlaceholder')}
+            />
+          </div>
+
+          <div className="space-y-1.5">
+            <Label htmlFor="cron-schedule">{t('cron.schedule')}</Label>
+            <Input
+              id="cron-schedule"
+              value={draft.schedule}
+              onChange={(e) => setDraft((d) => ({ ...d, schedule: e.target.value }))}
+              className="font-mono"
+              aria-invalid={preview?.valid === false}
+            />
+            {preview ? (
+              preview.valid ? (
+                <p className="text-[11px] leading-relaxed text-muted-foreground">
+                  {t('cron.nextRuns')}:{' '}
+                  {(preview.upcoming ?? [])
+                    .slice(0, 3)
+                    // A full locale timestamp three times over wrapped to two lines on
+                    // a phone; day and time is enough to sanity-check a schedule.
+                    .map((iso) =>
+                      new Date(iso).toLocaleString(locale, {
+                        day: 'numeric',
+                        month: 'short',
+                        hour: '2-digit',
+                        minute: '2-digit',
+                      }),
+                    )
+                    .join(' · ')}
+                </p>
+              ) : (
+                <p className="text-[11px] text-destructive">{preview.error}</p>
+              )
+            ) : null}
+          </div>
+
+          <div className="space-y-1.5">
+            <Label htmlFor="cron-prompt">{t('cron.instruction')}</Label>
+            <Textarea
+              id="cron-prompt"
+              value={draft.prompt}
+              onChange={(e) => setDraft((d) => ({ ...d, prompt: e.target.value }))}
+              placeholder={t('cron.instructionPlaceholder')}
+              className="h-24"
+            />
+          </div>
+
+          {error ? <p className="text-xs text-destructive">{error}</p> : null}
+        </DialogBody>
+
+        <DialogFooter>
+          <DialogClose asChild>
+            <Button variant="outline" size="sm">
+              {t('common.close')}
+            </Button>
+          </DialogClose>
+          <Button size="sm" onClick={create} loading={saving} disabled={invalid} className="gap-1.5">
+            <Plus className="size-4" />
+            {t('cron.create')}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   )
 }

@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { CaretDown, Plus, Sparkle, Trash } from '@phosphor-icons/react'
 import { del, get, post } from '@/lib/api'
 import { useApi } from '@/lib/hooks'
@@ -10,16 +10,22 @@ import { Button } from '@/components/ui/button'
 import {
   Badge,
   Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
   EmptyState,
   Input,
   Label,
   Switch,
   Textarea,
 } from '@/components/ui/primitives'
+import {
+  Dialog,
+  DialogBody,
+  DialogClose,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
 import { Skeleton, SkeletonList } from '@/components/ui/skeleton'
 
 interface Skill {
@@ -41,17 +47,15 @@ export default function SkillsPage() {
   const [filter, setFilter] = useState('')
   const [busy, setBusy] = useState('')
   const [composing, setComposing] = useState(false)
-  const [draft, setDraft] = useState({ name: '', description: '', body: '' })
-  const [error, setError] = useState<string>()
   const [expanded, setExpanded] = useState<string | null>(null)
   const [bodies, setBodies] = useState<Record<string, string>>({})
 
   usePageActions(
-    <Button size="sm" onClick={() => setComposing((v) => !v)} className="gap-1.5">
+    <Button size="sm" onClick={() => setComposing(true)} className="gap-1.5">
       <Plus className="size-4" />
       {t('common.new')}
     </Button>,
-    [composing, t],
+    [t],
   )
 
   const toggle = async (name: string, enabled: boolean) => {
@@ -69,22 +73,6 @@ export default function SkillsPage() {
     try {
       await del(`/skills/${encodeURIComponent(name)}`)
       reload()
-    } finally {
-      setBusy('')
-    }
-  }
-
-  const create = async () => {
-    if (!draft.name.trim() || !draft.body.trim()) return
-    setBusy('new')
-    setError(undefined)
-    try {
-      await post('/skills', draft)
-      setDraft({ name: '', description: '', body: '' })
-      setComposing(false)
-      reload()
-    } catch (e) {
-      setError((e as Error).message)
     } finally {
       setBusy('')
     }
@@ -112,55 +100,7 @@ export default function SkillsPage() {
 
   return (
     <PageBody>
-      {composing ? (
-        <Card>
-          <CardHeader>
-            <CardTitle>{t('skills.compose')}</CardTitle>
-            <CardDescription>{t('skills.composeDesc')}</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-3">
-            <div className="grid gap-3 sm:grid-cols-2">
-              <div className="space-y-1.5">
-                <Label htmlFor="skill-name">{t('skills.name')}</Label>
-                <Input
-                  id="skill-name"
-                  value={draft.name}
-                  onChange={(e) => setDraft((d) => ({ ...d, name: e.target.value }))}
-                  placeholder="deploy-homeserver"
-                />
-              </div>
-              <div className="space-y-1.5">
-                <Label htmlFor="skill-desc">{t('skills.whenToUse')}</Label>
-                <Input
-                  id="skill-desc"
-                  value={draft.description}
-                  onChange={(e) => setDraft((d) => ({ ...d, description: e.target.value }))}
-                  placeholder={t('skills.whenToUsePlaceholder')}
-                />
-              </div>
-            </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="skill-body">{t('skills.procedure')}</Label>
-              <Textarea
-                id="skill-body"
-                value={draft.body}
-                onChange={(e) => setDraft((d) => ({ ...d, body: e.target.value }))}
-                placeholder={t('skills.procedurePlaceholder')}
-                className="h-48 font-mono text-xs"
-              />
-            </div>
-            {error ? <p className="text-xs text-destructive">{error}</p> : null}
-            <div className="flex gap-2">
-              <Button size="sm" onClick={create} loading={busy === 'new'}>
-                {t('common.save')}
-              </Button>
-              <Button size="sm" variant="outline" onClick={() => setComposing(false)}>
-                {t('common.close')}
-              </Button>
-            </div>
-          </CardContent>
-        </Card>
-      ) : null}
+      <NewSkillDialog open={composing} onOpenChange={setComposing} onSaved={reload} />
 
       <Input
         value={filter}
@@ -241,5 +181,104 @@ export default function SkillsPage() {
         </div>
       )}
     </PageBody>
+  )
+}
+
+function NewSkillDialog({
+  open,
+  onOpenChange,
+  onSaved,
+}: {
+  open: boolean
+  onOpenChange: (v: boolean) => void
+  onSaved: () => void
+}) {
+  const { t } = useI18n()
+  const [draft, setDraft] = useState({ name: '', description: '', body: '' })
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState<string>()
+
+  useEffect(() => {
+    if (open) {
+      setDraft({ name: '', description: '', body: '' })
+      setError(undefined)
+    }
+  }, [open])
+
+  const create = async () => {
+    if (!draft.name.trim() || !draft.body.trim()) return
+    setSaving(true)
+    setError(undefined)
+    try {
+      await post('/skills', draft)
+      onSaved()
+      onOpenChange(false)
+    } catch (e) {
+      setError((e as Error).message)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-2xl">
+        <DialogHeader>
+          <DialogTitle>{t('skills.compose')}</DialogTitle>
+          <DialogDescription>{t('skills.composeDesc')}</DialogDescription>
+        </DialogHeader>
+
+        <DialogBody>
+          <div className="grid gap-4 sm:grid-cols-2">
+            <div className="space-y-1.5">
+              <Label htmlFor="skill-name">{t('skills.name')}</Label>
+              <Input
+                id="skill-name"
+                autoFocus
+                value={draft.name}
+                onChange={(e) => setDraft((d) => ({ ...d, name: e.target.value }))}
+                placeholder="deploy-homeserver"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="skill-desc">{t('skills.whenToUse')}</Label>
+              <Input
+                id="skill-desc"
+                value={draft.description}
+                onChange={(e) => setDraft((d) => ({ ...d, description: e.target.value }))}
+                placeholder={t('skills.whenToUsePlaceholder')}
+              />
+            </div>
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="skill-body">{t('skills.procedure')}</Label>
+            <Textarea
+              id="skill-body"
+              value={draft.body}
+              onChange={(e) => setDraft((d) => ({ ...d, body: e.target.value }))}
+              placeholder={t('skills.procedurePlaceholder')}
+              className="h-56 font-mono text-xs"
+            />
+          </div>
+          {error ? <p className="text-xs text-destructive">{error}</p> : null}
+        </DialogBody>
+
+        <DialogFooter>
+          <DialogClose asChild>
+            <Button variant="outline" size="sm">
+              {t('common.close')}
+            </Button>
+          </DialogClose>
+          <Button
+            size="sm"
+            onClick={create}
+            loading={saving}
+            disabled={!draft.name.trim() || !draft.body.trim()}
+          >
+            {t('common.save')}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   )
 }

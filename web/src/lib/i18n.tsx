@@ -190,7 +190,7 @@ const en = {
   'cron.instructionPlaceholder': "Summarise yesterday's repo changes and send them to Telegram.",
   'cron.create': 'Create schedule',
   'cron.none': 'No schedules yet',
-  'cron.noneDesc': 'Create one above, or ask Antares to set it up for you in chat.',
+  'cron.noneDesc': 'Create your first schedule, or just ask Antares to set one up in chat.',
   'cron.lastRun': 'Last {time} · next {next}',
   'cron.nextRuns': 'Next runs',
 
@@ -508,7 +508,7 @@ const id: Dict = {
   'cron.instructionPlaceholder': 'Ringkas perubahan repo kemarin lalu kirim ke Telegram.',
   'cron.create': 'Buat jadwal',
   'cron.none': 'Belum ada jadwal',
-  'cron.noneDesc': 'Buat di atas, atau minta Antares membuatkannya lewat obrolan.',
+  'cron.noneDesc': 'Buat jadwal pertamamu, atau minta saja Antares membuatkannya lewat obrolan.',
   'cron.lastRun': 'Terakhir {time} · berikutnya {next}',
   'cron.nextRuns': 'Jadwal berikutnya',
 
@@ -818,7 +818,7 @@ const ja: Dict = {
   'cron.instructionPlaceholder': '昨日のリポジトリ変更をまとめて Telegram に送って。',
   'cron.create': 'スケジュール作成',
   'cron.none': 'スケジュールがありません',
-  'cron.noneDesc': '上で作成するか、チャットで Antares に頼んでください。',
+  'cron.noneDesc': '最初のスケジュールを作るか、チャットで Antares に頼んでください。',
   'cron.lastRun': '前回 {time} · 次回 {next}',
   'cron.nextRuns': '次回の実行',
 
@@ -1127,7 +1127,7 @@ const zh: Dict = {
   'cron.instructionPlaceholder': '总结昨天的仓库变更并发送到 Telegram。',
   'cron.create': '创建排程',
   'cron.none': '还没有排程',
-  'cron.noneDesc': '在上面创建，或在对话里让 Antares 帮你设置。',
+  'cron.noneDesc': '创建第一条排程，或直接在对话里让 Antares 帮你设置。',
   'cron.lastRun': '上次 {time} · 下次 {next}',
   'cron.nextRuns': '接下来的运行',
 
@@ -1437,7 +1437,7 @@ const ru: Dict = {
   'cron.instructionPlaceholder': 'Собери вчерашние изменения в репозитории и отправь в Telegram.',
   'cron.create': 'Создать расписание',
   'cron.none': 'Расписаний пока нет',
-  'cron.noneDesc': 'Создайте выше или попросите Antares сделать это в чате.',
+  'cron.noneDesc': 'Создайте первое расписание или просто попросите Antares в чате.',
   'cron.lastRun': 'Последний {time} · следующий {next}',
   'cron.nextRuns': 'Ближайшие запуски',
 
