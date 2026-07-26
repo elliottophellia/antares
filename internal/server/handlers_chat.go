@@ -42,6 +42,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		"database":        s.db.Driver(),
 		"uptime_seconds":  int(time.Since(s.started).Seconds()),
 		"active_sessions": s.agent.ActiveCount(),
+		"needs_setup":     NeedsSetup(cfg),
 	})
 }
 

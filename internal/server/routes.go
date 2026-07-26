@@ -33,6 +33,11 @@ func (s *Server) routes() {
 	m.HandleFunc("DELETE /api/sessions/{id}", s.handleDeleteSession)
 	m.HandleFunc("POST /api/sessions/{id}/title", s.handleRenameSession)
 
+	// Setup / onboarding
+	m.HandleFunc("GET /api/setup/status", s.handleSetupStatus)
+	m.HandleFunc("POST /api/setup/test", s.handleSetupTest)
+	m.HandleFunc("POST /api/setup/complete", s.handleSetupComplete)
+
 	// Config
 	m.HandleFunc("GET /api/config", s.handleGetConfig)
 	m.HandleFunc("POST /api/config", s.handleUpdateConfig)

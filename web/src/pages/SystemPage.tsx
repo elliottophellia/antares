@@ -142,7 +142,7 @@ export default function SystemPage() {
               <CardTitle>{t('system.activeConfig')}</CardTitle>
             </CardHeader>
             <CardContent className="grid gap-x-6 gap-y-2 text-xs sm:grid-cols-2">
-              <Row label={t('system.model')} value={data.model || '—'} />
+              <Row label={t('system.model')} value={data.model || '—'} wrap />
               <Row label={t('system.provider')} value={data.provider || '—'} />
               <Row
                 label={t('system.rag')}
@@ -155,8 +155,16 @@ export default function SystemPage() {
                 }
               />
               <Row label={t('system.storedMemories')} value={formatCount(data.store.memories)} />
-              <Row label={t('system.workspace')} value={<code className="font-mono">{data.workspace}</code>} />
-              <Row label={t('system.configPath')} value={<code className="font-mono">{data.config_path}</code>} />
+              <Row
+                label={t('system.workspace')}
+                wrap
+                value={<code className="font-mono">{data.workspace}</code>}
+              />
+              <Row
+                label={t('system.configPath')}
+                wrap
+                value={<code className="font-mono">{data.config_path}</code>}
+              />
             </CardContent>
           </Card>
         </>
@@ -165,9 +173,30 @@ export default function SystemPage() {
   )
 }
 
-function Row({ label, value }: { label: string; value: React.ReactNode }) {
+/**
+ * One key/value line. `wrap` is for values with no natural break points —
+ * filesystem paths and the like — which otherwise force the whole grid wider
+ * than the viewport, since grid items default to min-width:auto.
+ */
+function Row({
+  label,
+  value,
+  wrap,
+}: {
+  label: string
+  value: React.ReactNode
+  wrap?: boolean
+}) {
+  if (wrap) {
+    return (
+      <div className="min-w-0 border-b border-border py-1.5 last:border-0">
+        <span className="text-muted-foreground">{label}</span>
+        <p className="mt-0.5 break-all font-medium">{value}</p>
+      </div>
+    )
+  }
   return (
-    <div className="flex items-center justify-between gap-3 border-b border-border py-1.5 last:border-0">
+    <div className="flex min-w-0 items-center justify-between gap-3 border-b border-border py-1.5 last:border-0">
       <span className="shrink-0 text-muted-foreground">{label}</span>
       <span className="min-w-0 truncate text-right font-medium">{value}</span>
     </div>

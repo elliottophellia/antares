@@ -13,6 +13,8 @@ import (
 	"syscall"
 	"time"
 
+	"golang.org/x/term"
+
 	"github.com/enowdev/antares/internal/agent"
 	"github.com/enowdev/antares/internal/config"
 	"github.com/enowdev/antares/internal/cron"
@@ -24,6 +26,7 @@ import (
 	"github.com/enowdev/antares/internal/skills"
 	"github.com/enowdev/antares/internal/store"
 	"github.com/enowdev/antares/internal/tools"
+	"github.com/enowdev/antares/internal/tui"
 	"github.com/enowdev/antares/internal/version"
 )
 
@@ -36,7 +39,13 @@ func main() {
 
 func run() error {
 	args := os.Args[1:]
-	command := "serve"
+
+	// Bare `antares` opens the TUI when there is a terminal to draw on, and
+	// falls back to serving when there is not (systemd, Docker, cron).
+	command := "tui"
+	if !term.IsTerminal(int(os.Stdin.Fd())) {
+		command = "serve"
+	}
 	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
 		command, args = args[0], args[1:]
 	}
@@ -44,12 +53,16 @@ func run() error {
 	switch command {
 	case "serve", "start":
 		return cmdServe()
+	case "tui", "chat-ui":
+		return cmdTUI()
 	case "chat":
 		return cmdChat(args)
 	case "config":
 		return cmdConfig(args)
 	case "model":
 		return cmdModel(args)
+	case "setup":
+		return cmdSetup(args)
 	case "doctor":
 		return cmdDoctor()
 	case "version", "--version", "-v":
@@ -68,9 +81,11 @@ func printUsage() {
 	fmt.Printf(`%s %s — AI agent
 
 Usage:
-  antares                  Run the API server and dashboard
-  antares serve            Same as above
-  antares chat <message>   Send one message from the terminal
+  antares                  Open the terminal UI (serves the API when headless)
+  antares serve            Run the API server and dashboard
+  antares tui              Open the terminal UI explicitly
+  antares setup            Configure Antares (web or terminal wizard)
+  antares chat <message>   Send one message and print the reply
   antares model [id]       Show or change the active model
   antares config get <path>
   antares config set <path> <value>
@@ -84,6 +99,33 @@ Environment:
   ANTARES_MODEL            Model override
   ANTARES_LOG_LEVEL        debug|info|warn|error
 `, version.Display, version.Version)
+}
+
+func cmdTUI() error {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	rt, err := bootstrap(ctx)
+	if err != nil {
+		return err
+	}
+	defer rt.close()
+
+	// A first run with nothing configured drops into setup rather than an
+	// empty prompt the user cannot do anything with.
+	if needsSetup(rt.cfg) {
+		if err := runSetupWizard(ctx, rt); err != nil {
+			return err
+		}
+		cfg, err := config.Reload()
+		if err != nil {
+			return err
+		}
+		rt.cfg = cfg
+		rt.agent.SetConfig(cfg)
+	}
+
+	return tui.New(rt.agent, rt.cfg, rt.db).Run(ctx)
 }
 
 // runtimeServices bundles everything a running server needs, so a config reload

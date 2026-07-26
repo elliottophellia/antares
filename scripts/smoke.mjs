@@ -21,6 +21,7 @@ const BASE = process.env.SMOKE_BASE ?? 'http://127.0.0.1:8788'
 const ROUTES = [
   '/', '/sessions', '/models', '/tools', '/memory', '/skills', '/cron',
   '/channels', '/mcp', '/analytics', '/files', '/logs', '/config', '/system',
+  '/setup',
 ]
 
 const chrome = spawn(CHROME, [

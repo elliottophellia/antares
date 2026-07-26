@@ -60,10 +60,20 @@ function readPath(obj: Record<string, unknown>, path: string): unknown {
   }, obj)
 }
 
-/** "prompt_caching" → "Prompt caching" */
+const ACRONYMS: Record<string, string> = {
+  rag: 'RAG',
+  mcp: 'MCP',
+  yaml: 'YAML',
+  dsn: 'DSN',
+  api: 'API',
+}
+
+/** "prompt_caching" → "Prompt caching", "rag" → "RAG" */
 function humanizeGroup(name: string): string {
-  const spaced = name.replace(/_/g, ' ')
-  return spaced.charAt(0).toUpperCase() + spaced.slice(1)
+  return name
+    .split('_')
+    .map((w, i) => ACRONYMS[w] ?? (i === 0 ? w.charAt(0).toUpperCase() + w.slice(1) : w))
+    .join(' ')
 }
 
 export default function ConfigPage() {
@@ -278,7 +288,7 @@ export default function ConfigPage() {
                 {visible.length === 0 ? (
                   <EmptyState title={t('config.nothingHere')} />
                 ) : (
-                  renderRows(visible)
+                  renderRows(visible, section === ESSENTIALS)
                 )}
 
                 {hiddenCount > 0 ? (

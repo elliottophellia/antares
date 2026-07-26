@@ -63,11 +63,16 @@ export default function ModelsPage() {
     [activeProvider],
   )
 
-  const models = useMemo(() => {
+  // Aggregators publish hundreds of models; rendering them all produced a page
+  // tens of thousands of pixels tall. Cap the list and let search reach the rest.
+  const MAX_ROWS = 25
+  const { models, total } = useMemo(() => {
     const list = modelsState.data?.models ?? []
     const q = filter.trim().toLowerCase()
-    if (!q) return list
-    return list.filter((m) => m.id.toLowerCase().includes(q) || m.name.toLowerCase().includes(q))
+    const matched = q
+      ? list.filter((m) => m.id.toLowerCase().includes(q) || m.name.toLowerCase().includes(q))
+      : list
+    return { models: matched.slice(0, MAX_ROWS), total: matched.length }
   }, [modelsState.data, filter])
 
   const selectModel = async (id: string) => {
@@ -148,6 +153,11 @@ export default function ModelsPage() {
                   />
                 ) : (
                   <div className="space-y-2">
+                    {total > models.length ? (
+                      <p className="text-xs text-muted-foreground">
+                        {t('models.showingOf', { shown: models.length, total })}
+                      </p>
+                    ) : null}
                     {models.map((m) => {
                       const isActive = m.id === data.active.model && p.id === data.active.provider
                       return (
@@ -167,24 +177,24 @@ export default function ModelsPage() {
                                   {t('models.ctx', { n: Math.round(m.context_window / 1000) })}
                                 </Badge>
                               ) : null}
+                              {m.input_cost > 0 ? (
+                                <Badge variant="outline">
+                                  ${m.input_cost.toFixed(2)}/${m.output_cost.toFixed(2)} {t('models.per1M')}
+                                </Badge>
+                              ) : null}
                               {m.vision ? (
-                                <Badge variant="secondary">
+                                <Badge variant="secondary" className="hidden sm:inline-flex">
                                   <Eye className="size-3" /> {t('models.vision')}
                                 </Badge>
                               ) : null}
                               {m.tools ? (
-                                <Badge variant="secondary">
+                                <Badge variant="secondary" className="hidden sm:inline-flex">
                                   <Wrench className="size-3" /> {t('models.tools')}
                                 </Badge>
                               ) : null}
                               {m.reasoning ? (
-                                <Badge variant="secondary">
+                                <Badge variant="secondary" className="hidden sm:inline-flex">
                                   <Lightning className="size-3" /> {t('models.reasoning')}
-                                </Badge>
-                              ) : null}
-                              {m.input_cost > 0 ? (
-                                <Badge variant="outline">
-                                  ${m.input_cost.toFixed(2)}/${m.output_cost.toFixed(2)} {t('models.per1M')}
                                 </Badge>
                               ) : null}
                             </div>

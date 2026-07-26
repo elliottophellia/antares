@@ -81,7 +81,7 @@ function LanguagePicker() {
       >
         {LANGUAGES.map((l) => (
           <option key={l.code} value={l.code} className="bg-popover text-popover-foreground">
-            {l.flag} {l.label}
+            {l.label}
           </option>
         ))}
       </select>

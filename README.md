@@ -12,7 +12,9 @@ work, and answers from Telegram and Discord — all from a single process you ru
 on your own machine.
 
 ```
+antares            # terminal UI
 antares serve      # API + dashboard on :8787
+antares setup      # configure it, in the browser or the terminal
 ```
 
 ---
@@ -36,17 +38,29 @@ else is the standard library.
 
 ```bash
 make install          # Go modules, Air, frontend packages
-make dev              # backend with hot reload + Vite dev server
+make build            # single binary with the dashboard embedded
+./bin/antares         # first run drops straight into setup
+```
+
+Setup asks how you want to configure it:
+
+```
+    1  Browser   — a guided page in the dashboard
+    2  Terminal  — a few questions right here
+```
+
+Both write the same `~/.antares/config.yaml`, so pick whichever is in front of
+you. On a headless box the browser option prints every address the setup page is
+reachable on, so you can finish from a laptop on the same network.
+
+For development, run both servers with hot reload:
+
+```bash
+make dev              # backend (Air) + frontend (Vite)
 ```
 
 - Dashboard: http://localhost:5173
 - API: http://localhost:8787
-
-Then open **Settings → Providers** and set an API key, or:
-
-```bash
-echo 'OPENROUTER_API_KEY=sk-or-v1-…' >> ~/.antares/.env
-```
 
 Production build:
 
@@ -158,6 +172,11 @@ gate access behind an allow list or a pairing approval flow.
 Their tools are namespaced `mcp__<server>__<tool>` and made available to the
 model automatically; a server that fails to start is reported, never fatal.
 
+**Two interfaces.** A full-screen terminal UI (`antares`) and a web dashboard
+(`antares serve`) over the same agent, sessions, and memory. The TUI has a
+multiline composer, slash-command completion, live tool output, history recall,
+scrollback, and Ctrl+C interrupt. Run `/help` inside it for the full list.
+
 **Context compaction.** As a conversation approaches the model's context window,
 older turns are summarised while recent ones stay verbatim — and tool-call turns
 are never split from their results.
@@ -178,6 +197,7 @@ internal/
   cron/               schedule parser and runner
   gateway/            Telegram and Discord adapters
   mcp/                Model Context Protocol client
+  tui/                the terminal interface
   server/             HTTP API and dashboard hosting
   wsutil/             minimal RFC 6455 client
   config/             layered configuration and its schema
