@@ -1,10 +1,12 @@
 import { useEffect, useMemo, useState } from 'react'
 import {
+  CaretDown,
   CheckCircle,
   Eye,
   EyeSlash,
   FloppyDisk,
   MagnifyingGlass,
+  Sparkle,
   Warning,
 } from '@phosphor-icons/react'
 import { post } from '@/lib/api'
@@ -12,6 +14,7 @@ import { useApi } from '@/lib/hooks'
 import { useI18n } from '@/lib/i18n'
 import { cn } from '@/lib/utils'
 import { PageBody } from '@/components/layout/AppShell'
+import { usePageActions } from '@/components/layout/PageChrome'
 import { Button } from '@/components/ui/button'
 import {
   Badge,
@@ -27,13 +30,15 @@ import {
   Textarea,
 } from '@/components/ui/primitives'
 import { Skeleton, SkeletonList } from '@/components/ui/skeleton'
-import { usePageActions } from '@/components/layout/PageChrome'
+
+type Tier = 'essential' | 'common' | 'advanced'
 
 interface Field {
   path: string
   label: string
   group: string
   type: 'string' | 'number' | 'boolean' | 'string[]' | 'object'
+  tier: Tier
   default: unknown
   secret: boolean
   enum?: string[]
@@ -45,9 +50,9 @@ interface ConfigResponse {
   schema: Field[]
 }
 
-const YAML_GROUP = '__yaml'
+const ESSENTIALS = '__essentials'
+const YAML = '__yaml'
 
-/** Read a dotted path out of the nested config object. */
 function readPath(obj: Record<string, unknown>, path: string): unknown {
   return path.split('.').reduce<unknown>((acc, key) => {
     if (acc && typeof acc === 'object') return (acc as Record<string, unknown>)[key]
@@ -73,49 +78,52 @@ export default function ConfigPage() {
   const [filter, setFilter] = useState('')
   const [revealed, setRevealed] = useState<Record<string, boolean>>({})
   const [yamlDraft, setYamlDraft] = useState<string | null>(null)
-  const [group, setGroup] = useState<string>('')
-
-  const groups = useMemo(() => {
-    if (!data) return []
-    const seen: string[] = []
-    for (const f of data.schema) if (!seen.includes(f.group)) seen.push(f.group)
-    return seen
-  }, [data])
-
-  useEffect(() => {
-    if (!group && groups.length) setGroup(groups[0])
-  }, [groups, group])
+  const [section, setSection] = useState<string>(ESSENTIALS)
+  const [showAdvanced, setShowAdvanced] = useState(false)
 
   const query = filter.trim().toLowerCase()
   const searching = query.length > 0
+  const dirty = Object.keys(edits).length
 
-  const matches = (f: Field) =>
-    f.type !== 'object' &&
-    (!query || f.path.toLowerCase().includes(query) || f.label.toLowerCase().includes(query))
+  const fields = useMemo(() => (data?.schema ?? []).filter((f) => f.type !== 'object'), [data])
 
-  // While searching, results span every group so nothing hides behind a tab.
-  const visibleFields = useMemo(() => {
-    const all = (data?.schema ?? []).filter(matches)
-    return searching ? all : all.filter((f) => f.group === group)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [data, group, query])
+  const groups = useMemo(() => {
+    const seen: string[] = []
+    for (const f of fields) if (!seen.includes(f.group)) seen.push(f.group)
+    return seen
+  }, [fields])
 
-  const countPerGroup = useMemo(() => {
-    const counts: Record<string, number> = {}
-    for (const f of data?.schema ?? []) {
-      if (f.type === 'object') continue
-      counts[f.group] = (counts[f.group] ?? 0) + 1
-    }
-    return counts
-  }, [data])
+  // Searching spans every group and tier so nothing hides behind disclosure.
+  const results = useMemo(
+    () =>
+      fields.filter(
+        (f) =>
+          !query || f.path.toLowerCase().includes(query) || f.label.toLowerCase().includes(query),
+      ),
+    [fields, query],
+  )
+
+  const sectionFields = useMemo(() => {
+    if (section === ESSENTIALS) return fields.filter((f) => f.tier === 'essential')
+    return fields.filter((f) => f.group === section)
+  }, [fields, section])
+
+  const visible = sectionFields.filter((f) => showAdvanced || f.tier !== 'advanced')
+  const hiddenCount = sectionFields.length - visible.length
 
   const dirtyPerGroup = useMemo(() => {
     const counts: Record<string, number> = {}
-    for (const f of data?.schema ?? []) {
-      if (f.path in edits) counts[f.group] = (counts[f.group] ?? 0) + 1
-    }
+    for (const f of fields) if (f.path in edits) counts[f.group] = (counts[f.group] ?? 0) + 1
     return counts
-  }, [data, edits])
+  }, [fields, edits])
+
+  const dirtyEssentials = useMemo(
+    () => fields.filter((f) => f.tier === 'essential' && f.path in edits).length,
+    [fields, edits],
+  )
+
+  // Reset disclosure when moving between sections.
+  useEffect(() => setShowAdvanced(false), [section])
 
   const valueOf = (f: Field): unknown => {
     if (f.path in edits) return edits[f.path]
@@ -129,7 +137,7 @@ export default function ConfigPage() {
   }
 
   const save = async () => {
-    if (Object.keys(edits).length === 0) return
+    if (!dirty) return
     setSaving(true)
     setError(undefined)
     try {
@@ -163,14 +171,31 @@ export default function ConfigPage() {
     }
   }
 
-  const dirty = Object.keys(edits).length
-
   usePageActions(
     <Button size="sm" onClick={save} loading={saving} disabled={!dirty} className="gap-1.5">
       {saved ? <CheckCircle className="size-4" weight="fill" /> : <FloppyDisk className="size-4" />}
       {saved ? t('common.saved') : dirty ? t('config.saveN', { n: dirty }) : t('common.save')}
     </Button>,
     [dirty, saving, saved, t],
+  )
+
+  const renderRows = (list: Field[], withGroup = false) => (
+    <Card>
+      <CardContent className="divide-y divide-border p-0">
+        {list.map((f) => (
+          <FieldRow
+            key={f.path}
+            field={f}
+            showGroup={withGroup}
+            value={valueOf(f)}
+            dirty={f.path in edits}
+            revealed={!!revealed[f.path]}
+            onReveal={() => setRevealed((r) => ({ ...r, [f.path]: !r[f.path] }))}
+            onChange={(v) => setValue(f.path, v)}
+          />
+        ))}
+      </CardContent>
+    </Card>
   )
 
   return (
@@ -193,84 +218,34 @@ export default function ConfigPage() {
       </div>
 
       {loading && !data ? (
-        <div className="grid gap-4 lg:grid-cols-[13rem_1fr]">
-          <Skeleton className="hidden h-96 w-full rounded-[var(--radius-lg)] lg:block" />
-          <SkeletonList count={6} />
+        <div className="grid gap-5 lg:grid-cols-[13rem_1fr]">
+          <Skeleton className="hidden h-80 w-full rounded-[var(--radius-lg)] lg:block" />
+          <SkeletonList count={5} />
         </div>
       ) : !data ? (
         <EmptyState title={t('config.loadFailed')} />
+      ) : searching ? (
+        // Search replaces the layout entirely: one flat list, group shown per row.
+        <div className="space-y-3">
+          <p className="text-xs text-muted-foreground">{t('config.matches', { n: results.length })}</p>
+          {results.length === 0 ? (
+            <EmptyState title={t('config.noMatch')} />
+          ) : (
+            renderRows(results, true)
+          )}
+        </div>
       ) : (
-        <div className="grid gap-4 lg:grid-cols-[13rem_1fr] lg:items-start">
-          {/* Group picker: a vertical rail on desktop, a select on mobile —
-              far easier to reach than a long horizontal tab strip. */}
-          <nav className="hidden lg:sticky lg:top-4 lg:block">
-            <ul className="space-y-0.5">
-              {groups.map((g) => (
-                <li key={g}>
-                  <button
-                    onClick={() => {
-                      setGroup(g)
-                      setFilter('')
-                    }}
-                    className={cn(
-                      'flex w-full items-center gap-2 rounded-[var(--radius-sm)] px-3 py-2 text-left text-sm transition-colors',
-                      !searching && g === group
-                        ? 'bg-primary/12 font-medium text-primary'
-                        : 'text-muted-foreground hover:bg-accent hover:text-accent-foreground',
-                    )}
-                  >
-                    <span className="min-w-0 flex-1 truncate">{humanizeGroup(g)}</span>
-                    {dirtyPerGroup[g] ? (
-                      <span className="size-1.5 shrink-0 rounded-full bg-primary" />
-                    ) : (
-                      <span className="shrink-0 text-[10px] tabular-nums opacity-60">
-                        {countPerGroup[g] ?? 0}
-                      </span>
-                    )}
-                  </button>
-                </li>
-              ))}
-              <li className="pt-1">
-                <button
-                  onClick={() => {
-                    setGroup(YAML_GROUP)
-                    setFilter('')
-                  }}
-                  className={cn(
-                    'w-full rounded-[var(--radius-sm)] px-3 py-2 text-left text-sm transition-colors',
-                    !searching && group === YAML_GROUP
-                      ? 'bg-primary/12 font-medium text-primary'
-                      : 'text-muted-foreground hover:bg-accent hover:text-accent-foreground',
-                  )}
-                >
-                  YAML
-                </button>
-              </li>
-            </ul>
-          </nav>
+        <div className="grid gap-5 lg:grid-cols-[13rem_1fr] lg:items-start">
+          <SectionRail
+            groups={groups}
+            section={section}
+            onSelect={setSection}
+            dirtyPerGroup={dirtyPerGroup}
+            dirtyEssentials={dirtyEssentials}
+          />
 
-          <div className="lg:hidden">
-            <select
-              value={searching ? '' : group}
-              onChange={(e) => {
-                setGroup(e.target.value)
-                setFilter('')
-              }}
-              className="h-10 w-full rounded-[var(--radius-sm)] border border-input bg-background px-3 text-sm"
-              aria-label={t('config.title')}
-            >
-              {groups.map((g) => (
-                <option key={g} value={g}>
-                  {humanizeGroup(g)} ({countPerGroup[g] ?? 0})
-                  {dirtyPerGroup[g] ? ' •' : ''}
-                </option>
-              ))}
-              <option value={YAML_GROUP}>YAML</option>
-            </select>
-          </div>
-
-          <div className="min-w-0 space-y-3">
-            {!searching && group === YAML_GROUP ? (
+          <div className="min-w-0 space-y-4">
+            {section === YAML ? (
               <Card>
                 <CardHeader>
                   <CardTitle>{t('config.editDirect')}</CardTitle>
@@ -278,13 +253,13 @@ export default function ConfigPage() {
                 </CardHeader>
                 <CardContent className="space-y-3">
                   {rawState.loading ? (
-                    <Skeleton className="h-80 w-full" />
+                    <Skeleton className="h-[55dvh] w-full" />
                   ) : (
                     <Textarea
                       value={yamlDraft ?? rawState.data?.yaml ?? ''}
                       onChange={(e) => setYamlDraft(e.target.value)}
                       spellCheck={false}
-                      className="h-[60dvh] font-mono text-xs"
+                      className="h-[55dvh] font-mono text-xs"
                     />
                   )}
                   <Button size="sm" onClick={saveYaml} loading={saving} disabled={yamlDraft === null}>
@@ -292,30 +267,119 @@ export default function ConfigPage() {
                   </Button>
                 </CardContent>
               </Card>
-            ) : visibleFields.length === 0 ? (
-              <EmptyState title={t('config.noMatch')} />
             ) : (
-              <Card>
-                <CardContent className="divide-y divide-border pt-5">
-                  {visibleFields.map((f) => (
-                    <FieldRow
-                      key={f.path}
-                      field={f}
-                      showGroup={searching}
-                      value={valueOf(f)}
-                      dirty={f.path in edits}
-                      revealed={!!revealed[f.path]}
-                      onReveal={() => setRevealed((r) => ({ ...r, [f.path]: !r[f.path] }))}
-                      onChange={(v) => setValue(f.path, v)}
-                    />
-                  ))}
-                </CardContent>
-              </Card>
+              <>
+                {section === ESSENTIALS ? (
+                  <p className="text-xs leading-relaxed text-muted-foreground sm:text-sm">
+                    {t('config.essentialsHint')}
+                  </p>
+                ) : null}
+
+                {visible.length === 0 ? (
+                  <EmptyState title={t('config.nothingHere')} />
+                ) : (
+                  renderRows(visible)
+                )}
+
+                {hiddenCount > 0 ? (
+                  <button
+                    onClick={() => setShowAdvanced(true)}
+                    className="flex w-full items-center justify-center gap-1.5 rounded-[var(--radius-sm)] border border-dashed border-border py-2.5 text-xs text-muted-foreground transition-colors hover:border-primary/40 hover:text-foreground"
+                  >
+                    <CaretDown className="size-3.5" />
+                    {t('config.showAdvanced', { n: hiddenCount })}
+                  </button>
+                ) : showAdvanced && sectionFields.some((f) => f.tier === 'advanced') ? (
+                  <button
+                    onClick={() => setShowAdvanced(false)}
+                    className="flex w-full items-center justify-center gap-1.5 rounded-[var(--radius-sm)] border border-dashed border-border py-2.5 text-xs text-muted-foreground transition-colors hover:text-foreground"
+                  >
+                    <CaretDown className="size-3.5 rotate-180" />
+                    {t('config.hideAdvanced')}
+                  </button>
+                ) : null}
+              </>
             )}
           </div>
         </div>
       )}
     </PageBody>
+  )
+}
+
+function SectionRail({
+  groups,
+  section,
+  onSelect,
+  dirtyPerGroup,
+  dirtyEssentials,
+}: {
+  groups: string[]
+  section: string
+  onSelect: (s: string) => void
+  dirtyPerGroup: Record<string, number>
+  dirtyEssentials: number
+}) {
+  const { t } = useI18n()
+
+  const dot = (n: number) =>
+    n > 0 ? <span className="size-1.5 shrink-0 rounded-full bg-primary" /> : null
+
+  const item = (id: string, label: string, badge?: React.ReactNode, icon?: React.ReactNode) => (
+    <button
+      key={id}
+      onClick={() => onSelect(id)}
+      className={cn(
+        'flex w-full items-center gap-2 rounded-[var(--radius-sm)] px-3 py-2 text-left text-sm transition-colors',
+        section === id
+          ? 'bg-primary/12 font-medium text-primary'
+          : 'text-muted-foreground hover:bg-accent hover:text-accent-foreground',
+      )}
+    >
+      {icon}
+      <span className="min-w-0 flex-1 truncate">{label}</span>
+      {badge}
+    </button>
+  )
+
+  return (
+    <>
+      <nav className="hidden lg:sticky lg:top-4 lg:block">
+        <div className="space-y-0.5">
+          {item(
+            ESSENTIALS,
+            t('config.essentials'),
+            dot(dirtyEssentials),
+            <Sparkle
+              className="size-4 shrink-0"
+              weight={section === ESSENTIALS ? 'fill' : 'regular'}
+            />,
+          )}
+          <div className="my-1.5 h-px bg-border" />
+          {groups.map((g) => item(g, humanizeGroup(g), dot(dirtyPerGroup[g] ?? 0)))}
+          <div className="my-1.5 h-px bg-border" />
+          {item(YAML, t('config.yamlSection'))}
+        </div>
+      </nav>
+
+      <div className="lg:hidden">
+        <select
+          value={section}
+          onChange={(e) => onSelect(e.target.value)}
+          className="h-10 w-full rounded-[var(--radius-sm)] border border-input bg-background px-3 text-sm"
+          aria-label={t('config.title')}
+        >
+          <option value={ESSENTIALS}>{t('config.essentials')}</option>
+          {groups.map((g) => (
+            <option key={g} value={g}>
+              {humanizeGroup(g)}
+              {dirtyPerGroup[g] ? ' •' : ''}
+            </option>
+          ))}
+          <option value={YAML}>{t('config.yamlSection')}</option>
+        </select>
+      </div>
+    </>
   )
 }
 
@@ -337,22 +401,33 @@ function FieldRow({
   onChange: (v: unknown) => void
 }) {
   const { t } = useI18n()
-  return (
-    <div className="flex flex-col gap-2 py-3 first:pt-0 last:pb-0 sm:flex-row sm:items-center sm:gap-4">
-      <div className="min-w-0 sm:w-1/2">
-        <div className="flex items-center gap-2">
-          <Label className={cn(dirty && 'text-primary')}>{field.label}</Label>
-          {showGroup ? <Badge variant="outline">{humanizeGroup(field.group)}</Badge> : null}
-          {dirty ? <Badge>{t('config.changed')}</Badge> : null}
+
+  // Booleans read best as one compact row with the switch on the right.
+  if (field.type === 'boolean') {
+    return (
+      <div className="flex items-center gap-4 px-4 py-3 sm:px-5">
+        <div className="min-w-0 flex-1">
+          <FieldLabel field={field} dirty={dirty} showGroup={showGroup} />
+          {field.help ? (
+            <p className="mt-0.5 text-[11px] leading-relaxed text-muted-foreground">{field.help}</p>
+          ) : null}
         </div>
-        <p className="truncate font-mono text-[10px] text-muted-foreground">{field.path}</p>
-        {field.help ? <p className="mt-0.5 text-[11px] text-muted-foreground">{field.help}</p> : null}
+        <Switch checked={!!value} onCheckedChange={onChange} />
+      </div>
+    )
+  }
+
+  return (
+    <div className="flex flex-col gap-2 px-4 py-3 sm:flex-row sm:items-start sm:gap-4 sm:px-5">
+      <div className="min-w-0 sm:w-[42%] sm:pt-1.5">
+        <FieldLabel field={field} dirty={dirty} showGroup={showGroup} />
+        {field.help ? (
+          <p className="mt-0.5 text-[11px] leading-relaxed text-muted-foreground">{field.help}</p>
+        ) : null}
       </div>
 
-      <div className="sm:flex-1">
-        {field.type === 'boolean' ? (
-          <Switch checked={!!value} onCheckedChange={onChange} />
-        ) : field.enum ? (
+      <div className="min-w-0 sm:flex-1">
+        {field.enum ? (
           <select
             value={String(value ?? '')}
             onChange={(e) => onChange(e.target.value)}
@@ -402,5 +477,27 @@ function FieldRow({
         )}
       </div>
     </div>
+  )
+}
+
+function FieldLabel({
+  field,
+  dirty,
+  showGroup,
+}: {
+  field: Field
+  dirty: boolean
+  showGroup?: boolean
+}) {
+  const { t } = useI18n()
+  return (
+    <>
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+        <Label className={cn('text-sm', dirty && 'text-primary')}>{field.label}</Label>
+        {showGroup ? <Badge variant="outline">{humanizeGroup(field.group)}</Badge> : null}
+        {dirty ? <Badge>{t('config.changed')}</Badge> : null}
+      </div>
+      <p className="truncate font-mono text-[10px] text-muted-foreground/70">{field.path}</p>
+    </>
   )
 }

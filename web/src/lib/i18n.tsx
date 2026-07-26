@@ -232,6 +232,13 @@ const en = {
   'logs.none': 'No log entries yet',
   'logs.lines': '{n} lines · updated {time}',
 
+  'config.essentials': 'Essentials',
+  'config.essentialsHint': 'The handful of settings that decide whether Antares works at all. Everything else has a sensible default.',
+  'config.yamlSection': 'YAML',
+  'config.showAdvanced': 'Show {n} advanced settings',
+  'config.hideAdvanced': 'Hide advanced settings',
+  'config.matches': '{n} matching settings',
+  'config.nothingHere': 'Nothing to configure here',
   'config.title': 'Settings',
   'config.desc': 'Every Antares option. Changes are written to ~/.antares/config.yaml immediately.',
   'config.saveN': 'Save {n}',
@@ -268,6 +275,10 @@ const en = {
   'system.configPath': 'Config',
   'system.down': 'Backend is not responding',
   'system.downDesc': 'Make sure the antares serve process is running.',
+
+  'error.pageTitle': 'This page hit an error',
+  'error.pageDesc': 'The rest of Antares is still running. Try again, or switch pages.',
+  'error.retry': 'Try again',
 
   'time.justNow': 'just now',
   'time.minutes': '{n} min ago',
@@ -501,6 +512,13 @@ const id: Dict = {
   'logs.none': 'Belum ada log',
   'logs.lines': '{n} baris · diperbarui {time}',
 
+  'config.essentials': 'Yang penting',
+  'config.essentialsHint': 'Segelintir pengaturan yang menentukan Antares bisa jalan atau tidak. Sisanya sudah punya default yang masuk akal.',
+  'config.yamlSection': 'YAML',
+  'config.showAdvanced': 'Tampilkan {n} pengaturan lanjutan',
+  'config.hideAdvanced': 'Sembunyikan pengaturan lanjutan',
+  'config.matches': '{n} pengaturan cocok',
+  'config.nothingHere': 'Tidak ada yang perlu diatur di sini',
   'config.title': 'Pengaturan',
   'config.desc': 'Semua opsi Antares. Perubahan langsung ditulis ke ~/.antares/config.yaml.',
   'config.saveN': 'Simpan {n}',
@@ -537,6 +555,10 @@ const id: Dict = {
   'system.configPath': 'Konfigurasi',
   'system.down': 'Backend tidak merespons',
   'system.downDesc': 'Pastikan proses antares serve sedang berjalan.',
+
+  'error.pageTitle': 'Halaman ini bermasalah',
+  'error.pageDesc': 'Bagian lain Antares tetap berjalan. Coba lagi, atau pindah halaman.',
+  'error.retry': 'Coba lagi',
 
   'time.justNow': 'baru saja',
   'time.minutes': '{n} menit lalu',
@@ -762,6 +784,13 @@ const ja: Dict = {
   'logs.none': 'ログがありません',
   'logs.lines': '{n} 行 · 更新 {time}',
 
+  'config.essentials': '基本設定',
+  'config.essentialsHint': 'Antares が動くかどうかを決める最小限の設定です。他は妥当な初期値が入っています。',
+  'config.yamlSection': 'YAML',
+  'config.showAdvanced': '詳細設定 {n} 件を表示',
+  'config.hideAdvanced': '詳細設定を隠す',
+  'config.matches': '一致する設定 {n} 件',
+  'config.nothingHere': 'ここに設定項目はありません',
   'config.title': '設定',
   'config.desc': 'Antares のすべての設定。変更は ~/.antares/config.yaml に即時保存されます。',
   'config.saveN': '{n} 件保存',
@@ -798,6 +827,10 @@ const ja: Dict = {
   'system.configPath': '設定ファイル',
   'system.down': 'バックエンドが応答しません',
   'system.downDesc': 'antares serve プロセスが動いているか確認してください。',
+
+  'error.pageTitle': 'このページでエラーが発生しました',
+  'error.pageDesc': 'Antares の他の部分は動作しています。再試行するか、別のページへ移動してください。',
+  'error.retry': '再試行',
 
   'time.justNow': 'たった今',
   'time.minutes': '{n} 分前',
@@ -1021,6 +1054,13 @@ const zh: Dict = {
   'logs.none': '还没有日志',
   'logs.lines': '{n} 行 · 更新于 {time}',
 
+  'config.essentials': '核心设置',
+  'config.essentialsHint': '决定 Antares 能否运行的少数几项。其余都有合理的默认值。',
+  'config.yamlSection': 'YAML',
+  'config.showAdvanced': '显示 {n} 项高级设置',
+  'config.hideAdvanced': '隐藏高级设置',
+  'config.matches': '{n} 项匹配的设置',
+  'config.nothingHere': '这里没有可配置项',
   'config.title': '设置',
   'config.desc': 'Antares 的全部选项。改动会立即写入 ~/.antares/config.yaml。',
   'config.saveN': '保存 {n} 项',
@@ -1057,6 +1097,10 @@ const zh: Dict = {
   'system.configPath': '配置文件',
   'system.down': '后端无响应',
   'system.downDesc': '请确认 antares serve 进程正在运行。',
+
+  'error.pageTitle': '此页面出错了',
+  'error.pageDesc': 'Antares 的其余部分仍在运行。请重试，或切换到其他页面。',
+  'error.retry': '重试',
 
   'time.justNow': '刚刚',
   'time.minutes': '{n} 分钟前',
@@ -1283,6 +1327,13 @@ const ru: Dict = {
   'logs.none': 'Записей пока нет',
   'logs.lines': 'строк: {n} · обновлено {time}',
 
+  'config.essentials': 'Основное',
+  'config.essentialsHint': 'Немногие настройки, от которых зависит, заработает ли Antares вообще. У остального разумные значения по умолчанию.',
+  'config.yamlSection': 'YAML',
+  'config.showAdvanced': 'Показать дополнительные настройки ({n})',
+  'config.hideAdvanced': 'Скрыть дополнительные настройки',
+  'config.matches': 'найдено настроек: {n}',
+  'config.nothingHere': 'Здесь нечего настраивать',
   'config.title': 'Настройки',
   'config.desc': 'Все параметры Antares. Изменения сразу пишутся в ~/.antares/config.yaml.',
   'config.saveN': 'Сохранить ({n})',
@@ -1319,6 +1370,10 @@ const ru: Dict = {
   'system.configPath': 'Конфигурация',
   'system.down': 'Бэкенд не отвечает',
   'system.downDesc': 'Убедитесь, что процесс antares serve запущен.',
+
+  'error.pageTitle': 'На этой странице произошла ошибка',
+  'error.pageDesc': 'Остальная часть Antares работает. Повторите попытку или перейдите на другую страницу.',
+  'error.retry': 'Повторить',
 
   'time.justNow': 'только что',
   'time.minutes': '{n} мин назад',

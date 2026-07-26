@@ -197,9 +197,15 @@ make dev         # backend (Air) + frontend (Vite), both hot-reloading
 make dev-api     # backend only
 make dev-web     # frontend only
 make check       # go vet + go test + tsc
+make smoke       # load every dashboard route in a real browser
 make build       # single binary with the dashboard embedded
 make doctor      # diagnose configuration and connectivity
 ```
+
+`make smoke` exists because two of the worst bugs so far passed every type
+check: a hook called from inside an effect, and the server bouncing SPA routes
+to `./`. Both blanked the entire dashboard. Loading each route in a real browser
+catches that class of failure; nothing static does.
 
 `antares doctor` checks the config file, workspace, database, provider
 credentials, and RAG backend in one pass.

@@ -35,22 +35,6 @@ export default function LogsPage() {
   const [loading, setLoading] = useState(true)
   const bottomRef = useRef<HTMLDivElement>(null)
 
-  useEffect(() => {
-    let alive = true
-    const load = () =>
-      get<{ entries: LogEntry[] }>(`/logs?limit=500&level=${level}`)
-        .then((r) => {
-          if (alive) setEntries(r.entries ?? [])
-        })
-        .catch(() => {})
-        .finally(() => alive && setLoading(false))
-
-    load()
-    if (!live) return () => {
-      alive = false
-    }
-    const timer = setInterval(load, 2000)
-  
   usePageActions(
     <>
       <Button variant="outline" size="sm" onClick={() => setLive((v) => !v)} className="gap-1.5">
@@ -65,9 +49,26 @@ export default function LogsPage() {
     [live, t],
   )
 
-  return () => {
+  useEffect(() => {
+    let alive = true
+    let timer: ReturnType<typeof setInterval> | undefined
+
+    const load = () =>
+      get<{ entries: LogEntry[] }>(`/logs?limit=500&level=${level}`)
+        .then((r) => {
+          if (alive) setEntries(r.entries ?? [])
+        })
+        .catch(() => {})
+        .finally(() => {
+          if (alive) setLoading(false)
+        })
+
+    load()
+    if (live) timer = setInterval(load, 2000)
+
+    return () => {
       alive = false
-      clearInterval(timer)
+      if (timer) clearInterval(timer)
     }
   }, [level, live])
 

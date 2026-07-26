@@ -9,6 +9,7 @@ import { Button } from '@/components/ui/button'
 import { TooltipProvider } from '@/components/ui/primitives'
 import { StatusPill } from '@/components/layout/StatusPill'
 import { PageChromeProvider, usePageChrome } from '@/components/layout/PageChrome'
+import { ErrorBoundary } from '@/components/layout/ErrorBoundary'
 import { SkeletonList, SkeletonStats } from '@/components/ui/skeleton'
 
 /** Applies the persisted theme to <html>. */
@@ -128,11 +129,25 @@ function PageFrame() {
   const { actions } = usePageChrome()
   const route = routeFor(location.pathname)
 
+  const labels = {
+    title: t('error.pageTitle'),
+    description: t('error.pageDesc'),
+    retry: t('error.retry'),
+  }
+
   if (route?.fullBleed) {
     return (
-      <Suspense fallback={<div className="p-6"><RouteFallback /></div>}>
-        <Outlet />
-      </Suspense>
+      <ErrorBoundary resetKey={location.pathname} labels={labels}>
+        <Suspense
+          fallback={
+            <div className="p-6">
+              <RouteFallback />
+            </div>
+          }
+        >
+          <Outlet />
+        </Suspense>
+      </ErrorBoundary>
     )
   }
 
@@ -156,9 +171,11 @@ function PageFrame() {
         </header>
       ) : null}
 
-      <Suspense fallback={<RouteFallback />}>
-        <Outlet />
-      </Suspense>
+      <ErrorBoundary resetKey={location.pathname} labels={labels}>
+        <Suspense fallback={<RouteFallback />}>
+          <Outlet />
+        </Suspense>
+      </ErrorBoundary>
     </div>
   )
 }

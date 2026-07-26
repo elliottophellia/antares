@@ -1,9 +1,13 @@
 package server
 
 import (
+	"bytes"
 	"io/fs"
+	"mime"
 	"net/http"
+	"path/filepath"
 	"strings"
+	"time"
 )
 
 // routes registers every API endpoint plus the dashboard fallback.
@@ -117,18 +121,35 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 	if path == "" {
 		path = "index.html"
 	}
-	if _, err := fs.Stat(s.distFS, path); err != nil {
+	// Client-side routes have no matching file; serve the SPA entry instead.
+	info, err := fs.Stat(s.distFS, path)
+	if err != nil || info.IsDir() {
 		path = "index.html"
 	}
-	// Hashed assets are immutable; the entry document must not be cached.
+
+	// Hashed assets are immutable; the entry document must never be cached, or
+	// a deploy leaves clients pinned to a stale bundle.
 	if strings.HasPrefix(path, "assets/") {
 		w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
 	} else {
 		w.Header().Set("Cache-Control", "no-cache")
 	}
-	r2 := r.Clone(r.Context())
-	r2.URL.Path = "/" + path
-	http.FileServer(http.FS(s.distFS)).ServeHTTP(w, r2)
+
+	// Serving the bytes directly avoids http.FileServer's index.html redirect,
+	// which would bounce every SPA route back to "./".
+	data, err := fs.ReadFile(s.distFS, path)
+	if err != nil {
+		writeError(w, http.StatusNotFound, errNotFound)
+		return
+	}
+	if ctype := mime.TypeByExtension(filepath.Ext(path)); ctype != "" {
+		w.Header().Set("Content-Type", ctype)
+	}
+	modTime := time.Time{}
+	if info != nil {
+		modTime = info.ModTime()
+	}
+	http.ServeContent(w, r, path, modTime, bytes.NewReader(data))
 }
 
 const devPlaceholder = `<!doctype html>
