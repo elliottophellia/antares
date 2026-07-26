@@ -22,6 +22,7 @@ import (
 	"github.com/enowdev/antares/internal/config"
 	"github.com/enowdev/antares/internal/cron"
 	"github.com/enowdev/antares/internal/gateway"
+	"github.com/enowdev/antares/internal/mcp"
 	"github.com/enowdev/antares/internal/skills"
 	"github.com/enowdev/antares/internal/store"
 	"github.com/enowdev/antares/internal/version"
@@ -35,6 +36,7 @@ type Server struct {
 	skills  *skills.Manager
 	cron    *cron.Runner
 	gateway *gateway.Manager
+	mcp     *mcp.Manager
 	mux     *http.ServeMux
 	started time.Time
 
@@ -60,6 +62,7 @@ type Options struct {
 	Skills  *skills.Manager
 	Cron    *cron.Runner
 	Gateway *gateway.Manager
+	MCP     *mcp.Manager
 }
 
 // New builds the HTTP server and registers every route.
@@ -71,6 +74,7 @@ func New(o Options) *Server {
 		skills:   o.Skills,
 		cron:     o.Cron,
 		gateway:  o.Gateway,
+		mcp:      o.MCP,
 		mux:      http.NewServeMux(),
 		started:  time.Now(),
 		distFS:   o.Dist,

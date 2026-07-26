@@ -330,3 +330,17 @@ func (s *Server) handleDeleteCron(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, map[string]bool{"deleted": true})
 }
+
+// ---- mcp --------------------------------------------------------------------
+
+func (s *Server) handleMCPStatus(w http.ResponseWriter, r *http.Request) {
+	cfg := s.config()
+	if s.mcp == nil {
+		writeJSON(w, http.StatusOK, map[string]any{"enabled": false, "servers": []any{}})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"enabled": cfg.MCP.Enabled,
+		"servers": s.mcp.Status(cfg),
+	})
+}

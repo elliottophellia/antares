@@ -157,6 +157,15 @@ func (r *Registry) Resolve(toolset string, enabled, disabled []string) []Tool {
 
 	r.mu.RLock()
 	defer r.mu.RUnlock()
+
+	// Tools borrowed from MCP servers are opt-out rather than opt-in: if a
+	// server is configured, its tools are meant to be reachable.
+	for name := range r.tools {
+		if strings.HasPrefix(name, MCPPrefix) && !contains(disabled, name) {
+			want[name] = true
+		}
+	}
+
 	out := make([]Tool, 0, len(want))
 	for name := range want {
 		if t, ok := r.tools[name]; ok {
@@ -206,6 +215,18 @@ func ToolsetNames() []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+// MCPPrefix namespaces tools imported from MCP servers.
+const MCPPrefix = "mcp__"
+
+func contains(list []string, want string) bool {
+	for _, v := range list {
+		if strings.TrimSpace(v) == want {
+			return true
+		}
+	}
+	return false
 }
 
 var globalRegistry = NewRegistry()

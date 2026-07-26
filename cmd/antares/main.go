@@ -18,6 +18,7 @@ import (
 	"github.com/enowdev/antares/internal/cron"
 	"github.com/enowdev/antares/internal/gateway"
 	"github.com/enowdev/antares/internal/logx"
+	"github.com/enowdev/antares/internal/mcp"
 	"github.com/enowdev/antares/internal/rag"
 	"github.com/enowdev/antares/internal/server"
 	"github.com/enowdev/antares/internal/skills"
@@ -96,6 +97,7 @@ type runtimeServices struct {
 	skills  *skills.Manager
 	cron    *cron.Runner
 	gateway *gateway.Manager
+	mcp     *mcp.Manager
 }
 
 func bootstrap(ctx context.Context) (*runtimeServices, error) {
@@ -135,6 +137,14 @@ func bootstrap(ctx context.Context) (*runtimeServices, error) {
 	ag.SetSkills(skillMgr)
 
 	rt := &runtimeServices{cfg: cfg, db: db, shell: shell, agent: ag, skills: skillMgr}
+
+	// MCP servers are optional; a failing one is recorded, never fatal.
+	rt.mcp = mcp.NewManager()
+	rt.mcp.Connect(ctx, cfg)
+	if names := rt.mcp.Register(tools.Default()); len(names) > 0 {
+		slog.Info("mcp tools registered", "count", len(names))
+	}
+
 	rt.gateway = gateway.NewManager(cfg, db, rt.handleGatewayMessage)
 	rt.cron = cron.New(cron.Options{
 		Store:         db,
@@ -243,6 +253,9 @@ func (rt *runtimeServices) reload() error {
 }
 
 func (rt *runtimeServices) close() {
+	if rt.mcp != nil {
+		rt.mcp.Close()
+	}
 	if rt.gateway != nil {
 		rt.gateway.StopAll()
 	}
@@ -269,6 +282,7 @@ func cmdServe() error {
 		Skills:  rt.skills,
 		Cron:    rt.cron,
 		Gateway: rt.gateway,
+		MCP:     rt.mcp,
 	})
 
 	if rt.cfg.Cron.Enabled {
@@ -456,6 +470,13 @@ func cmdDoctor() error {
 		fmt.Printf("· rag           disabled\n")
 	}
 
+	for _, st := range rt.mcp.Status(rt.cfg) {
+		if st.Connected {
+			fmt.Printf("✓ mcp %-10s %d tool(s)\n", st.Name, len(st.Tools))
+		} else {
+			fmt.Printf("✗ mcp %-10s %s\n", st.Name, st.Error)
+		}
+	}
 	fmt.Printf("✓ tools         %d registered\n", len(tools.Default().Names()))
 	return nil
 }

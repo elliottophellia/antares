@@ -154,6 +154,10 @@ output to a messaging channel.
 (websocket gateway). Both share the same sessions, memory, and tools, and both
 gate access behind an allow list or a pairing approval flow.
 
+**MCP.** External Model Context Protocol servers over stdio or streamable HTTP.
+Their tools are namespaced `mcp__<server>__<tool>` and made available to the
+model automatically; a server that fails to start is reported, never fatal.
+
 **Context compaction.** As a conversation approaches the model's context window,
 older turns are summarised while recent ones stay verbatim — and tool-call turns
 are never split from their results.
@@ -173,6 +177,7 @@ internal/
   skills/             the skill library
   cron/               schedule parser and runner
   gateway/            Telegram and Discord adapters
+  mcp/                Model Context Protocol client
   server/             HTTP API and dashboard hosting
   wsutil/             minimal RFC 6455 client
   config/             layered configuration and its schema

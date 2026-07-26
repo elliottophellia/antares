@@ -85,6 +85,10 @@ func (s *Server) routes() {
 	m.HandleFunc("POST /api/cron/jobs/{id}/toggle", s.handleToggleCron)
 	m.HandleFunc("POST /api/cron/jobs/{id}/run", s.handleRunCron)
 	m.HandleFunc("GET /api/cron/jobs/{id}/runs", s.handleCronRuns)
+	// MCP
+	m.HandleFunc("GET /api/mcp", s.handleMCPStatus)
+
+	// Channels & pairing
 	m.HandleFunc("GET /api/channels", s.handleListChannels)
 	m.HandleFunc("POST /api/channels/{id}/toggle", s.handleToggleChannel)
 	m.HandleFunc("POST /api/channels/{id}/token", s.handleSetChannelToken)
