@@ -158,6 +158,17 @@ func (s *Server) handleModelOptions(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleModelList(w http.ResponseWriter, r *http.Request) {
 	provider := r.URL.Query().Get("provider")
+
+	// Calling a provider we know has no credential just turns a known state
+	// into an opaque 401. Report the missing key instead.
+	id, p := s.config().ResolveProvider(provider)
+	if p.APIKey == "" && !isLocalEndpoint(p.BaseURL) {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"models": []any{}, "needs_key": true, "provider": id,
+		})
+		return
+	}
+
 	models, err := s.agent.Models(r.Context(), provider)
 	if err != nil {
 		// Report as a soft error so the page can still render the provider tab.

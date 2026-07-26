@@ -49,6 +49,7 @@ func (s *Server) routes() {
 	m.HandleFunc("GET /api/model/options", s.handleModelOptions)
 	m.HandleFunc("GET /api/model/list", s.handleModelList)
 	m.HandleFunc("POST /api/model/set", s.handleModelSet)
+	m.HandleFunc("POST /api/providers/{id}/key", s.handleSetProviderKey)
 
 	// Tools
 	m.HandleFunc("GET /api/tools", s.handleListTools)

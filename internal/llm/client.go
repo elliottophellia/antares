@@ -77,14 +77,65 @@ type apiError struct {
 }
 
 func (e *apiError) Error() string {
-	body := strings.TrimSpace(e.Body)
-	if len(body) > 800 {
-		body = body[:800] + "…"
+	if msg := extractAPIMessage(e.Body); msg != "" {
+		return msg
 	}
-	if body == "" {
-		body = http.StatusText(e.Status)
+	if txt := http.StatusText(e.Status); txt != "" {
+		return fmt.Sprintf("the provider returned %d %s", e.Status, txt)
 	}
-	return fmt.Sprintf("provider returned %d: %s", e.Status, body)
+	return fmt.Sprintf("the provider returned %d", e.Status)
+}
+
+// extractAPIMessage pulls the human sentence out of a provider's error body.
+// Vendors disagree on the shape, and none of them are worth showing raw:
+//
+//	{"error": {"message": "..."}}          OpenAI, Gemini, most compatibles
+//	{"type": "error", "error": {...}}      Anthropic
+//	{"message": "..."} / {"error": "..."}  everyone else
+func extractAPIMessage(body string) string {
+	body = strings.TrimSpace(body)
+	if body == "" || body[0] != '{' {
+		return ""
+	}
+
+	var envelope struct {
+		Message string          `json:"message"`
+		Detail  string          `json:"detail"`
+		Error   json.RawMessage `json:"error"`
+	}
+	if err := json.Unmarshal([]byte(body), &envelope); err != nil {
+		return ""
+	}
+
+	if len(envelope.Error) > 0 {
+		// Either a bare string or a nested object.
+		var text string
+		if json.Unmarshal(envelope.Error, &text) == nil && text != "" {
+			return sentence(text)
+		}
+		var nested struct {
+			Message string `json:"message"`
+			Detail  string `json:"detail"`
+		}
+		if json.Unmarshal(envelope.Error, &nested) == nil {
+			if m := firstNonEmpty(nested.Message, nested.Detail); m != "" {
+				return sentence(m)
+			}
+		}
+	}
+	return sentence(firstNonEmpty(envelope.Message, envelope.Detail))
+}
+
+// sentence trims a provider message to something a UI can show inline.
+func sentence(s string) string {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return ""
+	}
+	if len(s) > 240 {
+		s = strings.TrimSpace(s[:240]) + "…"
+	}
+	return s
 }
 
 // IsAuthError reports whether err came back as 401/403.

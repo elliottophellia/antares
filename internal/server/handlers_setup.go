@@ -324,3 +324,87 @@ func (s *Server) handleSetupComplete(w http.ResponseWriter, r *http.Request) {
 			cfg.Gateway.Telegram.Enabled || cfg.Gateway.Discord.Enabled,
 	})
 }
+
+// handleSetProviderKey verifies a credential and stores it in one step, so a
+// provider can be connected from wherever the user noticed it was missing
+// rather than sending them to hunt through Settings.
+//
+// It exists because config.SetPath cannot write into the providers map: map
+// values are not addressable through reflection.
+func (s *Server) handleSetProviderKey(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		APIKey  string `json:"api_key"`
+		BaseURL string `json:"base_url"`
+	}
+	if err := decodeBody(r, &body); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+
+	id := r.PathValue("id")
+	cfg, err := config.Reload()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+
+	var chosen *setupProvider
+	for _, p := range setupProviderCatalogue(cfg) {
+		if p.ID == id {
+			cp := p
+			chosen = &cp
+			break
+		}
+	}
+	if chosen == nil {
+		writeError(w, http.StatusBadRequest, errors.New("unknown provider"))
+		return
+	}
+
+	entry := cfg.Providers[id]
+	if entry.Kind == "" {
+		entry.Kind = chosen.Kind
+	}
+	baseURL := firstNonEmpty(body.BaseURL, entry.BaseURL, chosen.BaseURL)
+	key := strings.TrimSpace(body.APIKey)
+	if key == "" && !isLocalEndpoint(baseURL) {
+		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": "An API key is required."})
+		return
+	}
+
+	// Reject a bad key here rather than saving it and failing on the next turn.
+	client, err := llm.New(llm.Options{
+		Kind: entry.Kind, BaseURL: baseURL, APIKey: key,
+		ProviderID: id, Timeout: 30 * time.Second,
+	})
+	if err != nil {
+		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": err.Error()})
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+
+	models, err := client.Models(ctx)
+	if err != nil && llm.IsAuthError(err) {
+		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": err.Error()})
+		return
+	}
+
+	entry.APIKey = key
+	entry.BaseURL = baseURL
+	entry.Enabled = true
+	if entry.Label == "" {
+		entry.Label = chosen.Label
+	}
+	cfg.Providers[id] = entry
+
+	if err := config.Save(cfg); err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	if err := s.applyReload(); err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "models": len(models)})
+}
