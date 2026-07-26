@@ -272,7 +272,16 @@ export default function ChatPage() {
       <div className="flex min-h-[calc(100dvh-8rem)] flex-col lg:min-h-dvh">
         <div className="flex flex-1 items-center justify-center px-4 py-10 sm:px-6">
           <div className="w-full max-w-3xl space-y-6">
-            <div className="space-y-2 text-center">
+            <div className="space-y-3 text-center">
+              <img
+                src="/antares-192.png"
+                alt=""
+                aria-hidden
+                width={64}
+                height={64}
+                className="mx-auto size-16 select-none object-contain"
+                draggable={false}
+              />
               <h1 className="text-2xl font-semibold tracking-tight sm:text-3xl">
                 {t('chat.welcomeTitle')}
               </h1>

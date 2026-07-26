@@ -23,20 +23,15 @@ function useTheme() {
 
 function AntaresMark({ className }: { className?: string }) {
   return (
-    <span
-      className={cn(
-        'grid size-8 shrink-0 place-items-center rounded-[var(--radius-sm)] bg-primary text-primary-foreground',
-        className,
-      )}
+    <img
+      src="/antares-192.png"
+      alt=""
       aria-hidden
-    >
-      <svg viewBox="0 0 24 24" className="size-4.5" fill="none" stroke="currentColor" strokeWidth="2">
-        <path
-          d="M12 2.5 14.6 9l6.9.4-5.3 4.4 1.7 6.7L12 16.8 6.1 20.5l1.7-6.7L2.5 9.4 9.4 9Z"
-          strokeLinejoin="round"
-        />
-      </svg>
-    </span>
+      width={32}
+      height={32}
+      className={cn('size-8 shrink-0 select-none object-contain', className)}
+      draggable={false}
+    />
   )
 }
 

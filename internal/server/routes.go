@@ -137,6 +137,7 @@ const devPlaceholder = `<!doctype html>
  a{color:#e05a4e}
 </style>
 <div>
+  <img src="/antares-192.png" alt="" width="72" height="72" style="opacity:.9">
   <h1>Antares API</h1>
   <p>The backend is running. No dashboard is embedded in this binary.</p>
   <p>Development: run <code>make dev-web</code> and open port <code>5173</code>.</p>

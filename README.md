@@ -1,6 +1,10 @@
-# Antares
+<p align="center">
+  <img src="antares.png" alt="Antares" width="180">
+</p>
 
-A self-hosted AI agent. Go backend, React dashboard, one binary.
+<h1 align="center">Antares</h1>
+
+<p align="center">A self-hosted AI agent. Go backend, React dashboard, one binary.</p>
 
 Antares reads and writes files, runs shell commands, searches the web, remembers
 what matters across sessions, retrieves from a semantic index, schedules its own
