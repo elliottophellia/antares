@@ -1,0 +1,17 @@
+# Go
+bin/
+.air/
+*.test
+
+# Node
+node_modules/
+web/dist/
+internal/server/dist/*
+!internal/server/dist/.gitkeep
+
+# Local state
+*.db
+*.db-wal
+*.db-shm
+.env
+.env.local

@@ -1,0 +1,364 @@
+package tools
+
+import (
+	"bytes"
+	"context"
+	"fmt"
+	"io"
+	"os"
+	"os/exec"
+	"runtime"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/enowdev/antares/internal/config"
+)
+
+// ShellManager owns one long-lived shell per session so `cd`, exported
+// variables, and activated virtualenvs survive between tool calls.
+type ShellManager struct {
+	mu       sync.Mutex
+	sessions map[string]*shellSession
+	cfg      config.Terminal
+}
+
+// NewShellManager builds a manager for the given terminal config.
+func NewShellManager(cfg config.Terminal) *ShellManager {
+	return &ShellManager{sessions: map[string]*shellSession{}, cfg: cfg}
+}
+
+type shellSession struct {
+	mu       sync.Mutex
+	cmd      *exec.Cmd
+	stdin    io.WriteCloser
+	out      *lockedBuffer
+	lastUsed time.Time
+	cwd      string
+	dead     bool
+}
+
+// lockedBuffer collects interleaved stdout/stderr safely.
+type lockedBuffer struct {
+	mu sync.Mutex
+	b  bytes.Buffer
+}
+
+func (l *lockedBuffer) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.b.Write(p)
+}
+
+func (l *lockedBuffer) drain() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	s := l.b.String()
+	l.b.Reset()
+	return s
+}
+
+func (l *lockedBuffer) snapshot() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.b.String()
+}
+
+func defaultShell(configured string) (string, []string) {
+	if configured != "" {
+		return configured, []string{"-i"}
+	}
+	if runtime.GOOS == "windows" {
+		return "powershell.exe", []string{"-NoLogo", "-NoProfile", "-Command", "-"}
+	}
+	for _, sh := range []string{os.Getenv("SHELL"), "/bin/bash", "/bin/sh"} {
+		if sh == "" {
+			continue
+		}
+		if _, err := os.Stat(sh); err == nil {
+			return sh, nil
+		}
+	}
+	return "/bin/sh", nil
+}
+
+// session returns the live shell for a session id, starting one if needed.
+func (m *ShellManager) session(id, workspace string) (*shellSession, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if s, ok := m.sessions[id]; ok && !s.dead && s.cmd.ProcessState == nil {
+		s.lastUsed = time.Now()
+		return s, nil
+	}
+
+	shell, shellArgs := defaultShell(m.cfg.Shell)
+	var cmd *exec.Cmd
+	switch strings.ToLower(m.cfg.Backend) {
+	case "docker":
+		image := m.cfg.DockerImage
+		if image == "" {
+			image = "debian:bookworm-slim"
+		}
+		net := "none"
+		if m.cfg.AllowNetwork {
+			net = "bridge"
+		}
+		cmd = exec.Command("docker", "run", "--rm", "-i",
+			"--network", net,
+			"-v", workspace+":/workspace", "-w", "/workspace",
+			image, "/bin/sh")
+	case "ssh":
+		if m.cfg.SSHHost == "" {
+			return nil, fmt.Errorf("terminal.ssh_host is not configured")
+		}
+		cmd = exec.Command("ssh", "-tt", m.cfg.SSHHost, "/bin/sh")
+	default:
+		cmd = exec.Command(shell, shellArgs...)
+		cmd.Dir = workspace
+		cmd.Env = append(os.Environ(), "ANTARES_SESSION="+id, "TERM=dumb", "PAGER=cat", "GIT_PAGER=cat")
+	}
+
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		return nil, err
+	}
+	out := &lockedBuffer{}
+	cmd.Stdout = out
+	cmd.Stderr = out
+	if err := cmd.Start(); err != nil {
+		return nil, fmt.Errorf("start shell: %w", err)
+	}
+
+	s := &shellSession{cmd: cmd, stdin: stdin, out: out, lastUsed: time.Now(), cwd: workspace}
+	go func() {
+		_ = cmd.Wait()
+		s.mu.Lock()
+		s.dead = true
+		s.mu.Unlock()
+	}()
+	m.sessions[id] = s
+	return s, nil
+}
+
+// Close terminates a session's shell.
+func (m *ShellManager) Close(id string) {
+	m.mu.Lock()
+	s, ok := m.sessions[id]
+	delete(m.sessions, id)
+	m.mu.Unlock()
+	if ok {
+		s.terminate()
+	}
+}
+
+// CloseAll terminates every live shell.
+func (m *ShellManager) CloseAll() {
+	m.mu.Lock()
+	all := make([]*shellSession, 0, len(m.sessions))
+	for _, s := range m.sessions {
+		all = append(all, s)
+	}
+	m.sessions = map[string]*shellSession{}
+	m.mu.Unlock()
+	for _, s := range all {
+		s.terminate()
+	}
+}
+
+// Active reports how many shells are currently running.
+func (m *ShellManager) Active() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return len(m.sessions)
+}
+
+// ReapIdle closes shells idle for longer than lifetime.
+func (m *ShellManager) ReapIdle(lifetime time.Duration) {
+	if lifetime <= 0 {
+		return
+	}
+	cutoff := time.Now().Add(-lifetime)
+	m.mu.Lock()
+	var stale []*shellSession
+	for id, s := range m.sessions {
+		if s.lastUsed.Before(cutoff) {
+			stale = append(stale, s)
+			delete(m.sessions, id)
+		}
+	}
+	m.mu.Unlock()
+	for _, s := range stale {
+		s.terminate()
+	}
+}
+
+func (s *shellSession) terminate() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.cmd == nil || s.cmd.Process == nil {
+		return
+	}
+	_ = s.stdin.Close()
+	_ = s.cmd.Process.Kill()
+	s.dead = true
+}
+
+// sentinel marks the end of one command's output and carries its exit code.
+const sentinelPrefix = "__ANTARES_DONE_"
+
+// run executes a command in the persistent shell and waits for the sentinel.
+func (s *shellSession) run(ctx context.Context, command string, timeout time.Duration, onChunk func(string)) (string, int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.dead {
+		return "", -1, fmt.Errorf("shell has exited")
+	}
+	s.lastUsed = time.Now()
+	s.out.drain()
+
+	marker := fmt.Sprintf("%s%d__", sentinelPrefix, time.Now().UnixNano())
+	script := command + "\nprintf '\\n" + marker + "%s\\n' \"$?\"\n"
+	if _, err := io.WriteString(s.stdin, script); err != nil {
+		s.dead = true
+		return "", -1, fmt.Errorf("write to shell: %w", err)
+	}
+
+	deadline := time.Now().Add(timeout)
+	ticker := time.NewTicker(60 * time.Millisecond)
+	defer ticker.Stop()
+	sent := 0
+
+	for {
+		select {
+		case <-ctx.Done():
+			return s.finish(marker), -1, ctx.Err()
+		case <-ticker.C:
+			buf := s.out.snapshot()
+			if onChunk != nil && len(buf) > sent {
+				chunk := buf[sent:]
+				if idx := strings.Index(chunk, marker); idx >= 0 {
+					chunk = chunk[:idx]
+				}
+				if chunk != "" {
+					onChunk(chunk)
+				}
+				sent = len(buf)
+			}
+			if idx := strings.Index(buf, marker); idx >= 0 {
+				tail := buf[idx+len(marker):]
+				if strings.Contains(tail, "\n") {
+					code := 0
+					fmt.Sscanf(strings.TrimSpace(strings.SplitN(tail, "\n", 2)[0]), "%d", &code)
+					s.out.drain()
+					return strings.TrimRight(buf[:idx], "\n"), code, nil
+				}
+			}
+			if time.Now().After(deadline) {
+				out := s.finish(marker)
+				return out, -1, fmt.Errorf("command timed out after %s", timeout)
+			}
+		}
+	}
+}
+
+// finish drains whatever output exists, stripping any sentinel fragment.
+func (s *shellSession) finish(marker string) string {
+	buf := s.out.drain()
+	if idx := strings.Index(buf, marker); idx >= 0 {
+		buf = buf[:idx]
+	}
+	return strings.TrimRight(buf, "\n")
+}
+
+// ---- terminal tool ----------------------------------------------------------
+
+type terminalTool struct{}
+
+func (terminalTool) Name() string { return "terminal" }
+func (terminalTool) Description() string {
+	return "Run a shell command in a persistent session. Working directory, environment variables, and shell state persist across calls."
+}
+func (terminalTool) RequiresApproval() bool { return true }
+func (terminalTool) Schema() map[string]any {
+	return schema(map[string]any{
+		"command": prop("string", "Shell command to execute."),
+		"timeout": propDefault("integer", "Seconds before the command is aborted.", 300),
+	}, "command")
+}
+
+func (terminalTool) Execute(ctx context.Context, in Input) Result {
+	var args struct {
+		Command string `json:"command"`
+		Timeout int    `json:"timeout"`
+	}
+	if err := in.Bind(&args); err != nil {
+		return Errorf("%v", err)
+	}
+	cmdText := strings.TrimSpace(args.Command)
+	if cmdText == "" {
+		return Errorf("command is required")
+	}
+	if in.Deps == nil || in.Deps.Shell == nil {
+		return Errorf("terminal backend is not available")
+	}
+	cfg := in.Deps.Config
+	for _, blocked := range cfg.Terminal.BlockedCommands {
+		if blocked != "" && strings.Contains(cmdText, blocked) {
+			return Errorf("command blocked by policy (matched %q). Adjust terminal.blocked_commands to allow it.", blocked)
+		}
+	}
+
+	timeout := time.Duration(args.Timeout) * time.Second
+	if timeout <= 0 {
+		timeout = time.Duration(max(cfg.Terminal.Timeout, 60)) * time.Second
+	}
+	if timeout > 30*time.Minute {
+		timeout = 30 * time.Minute
+	}
+
+	sess, err := in.Deps.Shell.session(in.SessionID, in.Workspace)
+	if err != nil {
+		return Errorf("cannot start shell: %v", err)
+	}
+
+	out, code, err := sess.run(ctx, cmdText, timeout, func(chunk string) {
+		in.Emit(Progress{Tool: "terminal", Chunk: chunk})
+	})
+	out = trimOutput(out, cfg.Tools.MaxOutputChars)
+
+	switch {
+	case err != nil && strings.Contains(err.Error(), "timed out"):
+		return Result{Content: fmt.Sprintf("Command timed out after %s.\n\nPartial output:\n%s", timeout, out), IsError: true}
+	case err != nil:
+		return Errorf("shell error: %v\n%s", err, out)
+	case code != 0:
+		return Result{
+			Content: fmt.Sprintf("Exit code %d\n\n%s", code, out),
+			IsError: true,
+			Meta:    map[string]any{"exit_code": code},
+		}
+	}
+	if strings.TrimSpace(out) == "" {
+		out = "(no output)"
+	}
+	return Result{Content: out, Meta: map[string]any{"exit_code": 0}}
+}
+
+func trimOutput(s string, limit int) string {
+	if limit <= 0 {
+		limit = 60000
+	}
+	if len(s) <= limit {
+		return s
+	}
+	head := limit * 2 / 3
+	tail := limit - head
+	return s[:head] + fmt.Sprintf("\n\n… %d characters omitted …\n\n", len(s)-limit) + s[len(s)-tail:]
+}
+
+func max(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
+}

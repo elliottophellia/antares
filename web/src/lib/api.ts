@@ -1,0 +1,159 @@
+/** Typed client for the Antares HTTP API. */
+
+export class ApiError extends Error {
+  status: number
+  body?: unknown
+
+  constructor(status: number, message: string, body?: unknown) {
+    super(message)
+    this.name = 'ApiError'
+    this.status = status
+    this.body = body
+  }
+}
+
+const TOKEN_KEY = 'antares.token'
+
+export function getToken(): string {
+  return localStorage.getItem(TOKEN_KEY) ?? ''
+}
+
+export function setToken(token: string) {
+  if (token) localStorage.setItem(TOKEN_KEY, token)
+  else localStorage.removeItem(TOKEN_KEY)
+}
+
+function authHeaders(): Record<string, string> {
+  const token = getToken()
+  return token ? { Authorization: `Bearer ${token}` } : {}
+}
+
+export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
+  const res = await fetch(`/api${path}`, {
+    ...init,
+    headers: {
+      ...(init.body ? { 'Content-Type': 'application/json' } : {}),
+      ...authHeaders(),
+      ...(init.headers as Record<string, string>),
+    },
+  })
+
+  const text = await res.text()
+  let body: unknown = text
+  if (text) {
+    try {
+      body = JSON.parse(text)
+    } catch {
+      /* keep raw text */
+    }
+  }
+
+  if (!res.ok) {
+    const msg =
+      typeof body === 'object' && body !== null && 'error' in body
+        ? String((body as { error: unknown }).error)
+        : res.statusText || `HTTP ${res.status}`
+    throw new ApiError(res.status, msg, body)
+  }
+  return body as T
+}
+
+export const get = <T,>(path: string) => api<T>(path)
+export const post = <T,>(path: string, data?: unknown) =>
+  api<T>(path, { method: 'POST', body: data === undefined ? undefined : JSON.stringify(data) })
+export const put = <T,>(path: string, data?: unknown) =>
+  api<T>(path, { method: 'PUT', body: data === undefined ? undefined : JSON.stringify(data) })
+export const del = <T,>(path: string) => api<T>(path, { method: 'DELETE' })
+
+/* ---------- Streaming ---------- */
+
+export interface StreamEvent {
+  type: string
+  [key: string]: unknown
+}
+
+/**
+ * POST a request and consume the server-sent event stream it returns.
+ * Returns an abort function.
+ */
+export function streamPost(
+  path: string,
+  data: unknown,
+  onEvent: (event: StreamEvent) => void,
+  onError?: (err: Error) => void,
+  onDone?: () => void,
+): () => void {
+  const controller = new AbortController()
+
+  ;(async () => {
+    try {
+      const res = await fetch(`/api${path}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
+        body: JSON.stringify(data),
+        signal: controller.signal,
+      })
+      if (!res.ok || !res.body) {
+        const text = await res.text().catch(() => '')
+        throw new ApiError(res.status, text || res.statusText)
+      }
+
+      const reader = res.body.getReader()
+      const decoder = new TextDecoder()
+      let buffer = ''
+
+      for (;;) {
+        const { done, value } = await reader.read()
+        if (done) break
+        buffer += decoder.decode(value, { stream: true })
+
+        // SSE frames are separated by a blank line.
+        let idx: number
+        while ((idx = buffer.indexOf('\n\n')) !== -1) {
+          const frame = buffer.slice(0, idx)
+          buffer = buffer.slice(idx + 2)
+          const payload = frame
+            .split('\n')
+            .filter((l) => l.startsWith('data:'))
+            .map((l) => l.slice(5).replace(/^ /, ''))
+            .join('\n')
+          if (!payload || payload === '[DONE]') continue
+          try {
+            onEvent(JSON.parse(payload) as StreamEvent)
+          } catch {
+            /* ignore malformed frame */
+          }
+        }
+      }
+      onDone?.()
+    } catch (err) {
+      if ((err as Error).name === 'AbortError') {
+        onDone?.()
+        return
+      }
+      onError?.(err as Error)
+    }
+  })()
+
+  return () => controller.abort()
+}
+
+/** Subscribe to a GET SSE endpoint (logs, events). */
+export function streamGet(
+  path: string,
+  onEvent: (event: StreamEvent) => void,
+  onError?: (err: Error) => void,
+): () => void {
+  const token = getToken()
+  const url = `/api${path}${path.includes('?') ? '&' : '?'}${token ? `token=${encodeURIComponent(token)}` : ''}`
+  const source = new EventSource(url)
+  source.onmessage = (e) => {
+    try {
+      onEvent(JSON.parse(e.data) as StreamEvent)
+    } catch {
+      /* ignore */
+    }
+  }
+  source.onerror = () => onError?.(new Error('stream disconnected'))
+  return () => source.close()
+}

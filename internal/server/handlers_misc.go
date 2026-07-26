@@ -1,0 +1,493 @@
+package server
+
+import (
+	"errors"
+	"fmt"
+	"net/http"
+	"os"
+	"path/filepath"
+	"sort"
+	"strings"
+	"time"
+
+	"github.com/enowdev/antares/internal/config"
+	"github.com/enowdev/antares/internal/logx"
+	"github.com/enowdev/antares/internal/rag"
+	"github.com/enowdev/antares/internal/store"
+	"github.com/enowdev/antares/internal/tools"
+)
+
+// ---- memory -----------------------------------------------------------------
+
+func (s *Server) handleListMemory(w http.ResponseWriter, r *http.Request) {
+	items, err := s.db.ListMemories(r.Context(),
+		r.URL.Query().Get("scope"), r.URL.Query().Get("scope_key"), queryInt(r, "limit", 200))
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"memories": items})
+}
+
+func (s *Server) handleSearchMemory(w http.ResponseWriter, r *http.Request) {
+	items, err := s.db.SearchMemories(r.Context(), r.URL.Query().Get("q"), queryInt(r, "limit", 30))
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"memories": items})
+}
+
+func (s *Server) handlePutMemory(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		ID      string `json:"id"`
+		Key     string `json:"key"`
+		Content string `json:"content"`
+		Scope   string `json:"scope"`
+		Pinned  bool   `json:"pinned"`
+	}
+	if err := decodeBody(r, &body); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	if strings.TrimSpace(body.Content) == "" {
+		writeError(w, http.StatusBadRequest, errors.New("content is required"))
+		return
+	}
+	if body.Scope == "" {
+		body.Scope = "global"
+	}
+	if body.Key == "" {
+		body.Key = fmt.Sprintf("manual-%d", time.Now().Unix())
+	}
+	if body.ID == "" {
+		body.ID = "mem_" + fmt.Sprintf("%x", time.Now().UnixNano())
+	}
+	m := &store.Memory{
+		ID: body.ID, Scope: body.Scope, Key: body.Key, Content: body.Content,
+		Source: "dashboard", Pinned: body.Pinned, Tags: "[]",
+	}
+	if err := s.db.PutMemory(r.Context(), m); err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, m)
+}
+
+func (s *Server) handleDeleteMemory(w http.ResponseWriter, r *http.Request) {
+	if err := s.db.DeleteMemory(r.Context(), r.PathValue("id")); err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"deleted": true})
+}
+
+func (s *Server) handleResetMemory(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Scope    string `json:"scope"`
+		ScopeKey string `json:"scope_key"`
+	}
+	_ = decodeBody(r, &body)
+	n, err := s.db.ClearMemories(r.Context(), body.Scope, body.ScopeKey)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"deleted": n})
+}
+
+// ---- rag --------------------------------------------------------------------
+
+func (s *Server) handleRagStatus(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, rag.Describe(r.Context(), s.config(), s.agent.RAG()))
+}
+
+func (s *Server) handleRagIndex(w http.ResponseWriter, r *http.Request) {
+	provider := s.agent.RAG()
+	if provider == nil {
+		writeError(w, http.StatusBadRequest, errors.New("RAG is disabled"))
+		return
+	}
+	var body struct {
+		Path       string `json:"path"`
+		Collection string `json:"collection"`
+	}
+	if err := decodeBody(r, &body); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	cfg := s.config()
+	collection := body.Collection
+	if collection == "" {
+		collection = firstNonEmpty(cfg.RAG.EnowxProject, "antares")
+	}
+
+	docs, err := collectDocs(cfg.Agent.Workspace, body.Path)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	if len(docs) == 0 {
+		writeJSON(w, http.StatusOK, map[string]any{"files": 0, "chunks": 0})
+		return
+	}
+	chunks, err := provider.Index(r.Context(), collection, docs)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"files": len(docs), "chunks": chunks, "collection": collection})
+}
+
+func (s *Server) handleRagSearch(w http.ResponseWriter, r *http.Request) {
+	provider := s.agent.RAG()
+	if provider == nil {
+		writeError(w, http.StatusBadRequest, errors.New("RAG is disabled"))
+		return
+	}
+	var body struct {
+		Query      string `json:"query"`
+		Collection string `json:"collection"`
+		TopK       int    `json:"top_k"`
+	}
+	if err := decodeBody(r, &body); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	cfg := s.config()
+	if body.Collection == "" {
+		body.Collection = firstNonEmpty(cfg.RAG.EnowxProject, "antares")
+	}
+	if body.TopK <= 0 {
+		body.TopK = cfg.RAG.TopK
+	}
+	hits, err := provider.Search(r.Context(), body.Collection, body.Query, body.TopK)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"results": hits})
+}
+
+func (s *Server) handleRagDelete(w http.ResponseWriter, r *http.Request) {
+	provider := s.agent.RAG()
+	if provider == nil {
+		writeError(w, http.StatusBadRequest, errors.New("RAG is disabled"))
+		return
+	}
+	if err := provider.Delete(r.Context(), r.PathValue("name")); err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"deleted": true})
+}
+
+// collectDocs walks a workspace-relative path collecting indexable text files.
+func collectDocs(workspace, target string) ([]tools.RAGDoc, error) {
+	if strings.TrimSpace(target) == "" {
+		target = "."
+	}
+	root := target
+	if !filepath.IsAbs(root) {
+		root = filepath.Join(workspace, root)
+	}
+	root = filepath.Clean(root)
+	if rel, err := filepath.Rel(workspace, root); err != nil || strings.HasPrefix(rel, "..") {
+		return nil, fmt.Errorf("path %q is outside the workspace", target)
+	}
+
+	fi, err := os.Stat(root)
+	if err != nil {
+		return nil, err
+	}
+	var docs []tools.RAGDoc
+	add := func(p string) {
+		data, err := os.ReadFile(p)
+		if err != nil || len(data) == 0 || len(data) > 2<<20 {
+			return
+		}
+		rel, _ := filepath.Rel(workspace, p)
+		docs = append(docs, tools.RAGDoc{
+			ID: rel, Path: rel, Content: string(data),
+			Meta: map[string]any{"path": rel, "bytes": len(data)},
+		})
+	}
+	if !fi.IsDir() {
+		add(root)
+		return docs, nil
+	}
+	err = filepath.WalkDir(root, func(p string, d os.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		if d.IsDir() {
+			switch d.Name() {
+			case ".git", "node_modules", "dist", "build", ".venv", "__pycache__", "target", ".next":
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		switch strings.ToLower(filepath.Ext(p)) {
+		case ".md", ".txt", ".go", ".py", ".ts", ".tsx", ".js", ".jsx", ".rs", ".java",
+			".rb", ".php", ".c", ".h", ".cpp", ".cs", ".sh", ".yaml", ".yml", ".toml",
+			".json", ".sql", ".html", ".css":
+			add(p)
+		}
+		if len(docs) >= 3000 {
+			return filepath.SkipAll
+		}
+		return nil
+	})
+	return docs, err
+}
+
+// ---- analytics --------------------------------------------------------------
+
+func (s *Server) handleAnalytics(w http.ResponseWriter, r *http.Request) {
+	since := time.Now().AddDate(0, 0, -7)
+	switch r.URL.Query().Get("range") {
+	case "24h":
+		since = time.Now().Add(-24 * time.Hour)
+	case "30d":
+		since = time.Now().AddDate(0, 0, -30)
+	}
+	bucket := r.URL.Query().Get("bucket")
+	if bucket == "" {
+		bucket = "day"
+	}
+
+	series, err := s.db.UsageSeries(r.Context(), since, bucket)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	byModel, err := s.db.UsageByModel(r.Context(), since)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	totals := struct {
+		TokensIn  int64   `json:"tokens_in"`
+		TokensOut int64   `json:"tokens_out"`
+		Cost      float64 `json:"cost"`
+		Calls     int64   `json:"calls"`
+	}{}
+	for _, p := range series {
+		totals.TokensIn += p.TokensIn
+		totals.TokensOut += p.TokensOut
+		totals.Cost += p.Cost
+		totals.Calls += p.Calls
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"series": series, "by_model": byModel, "totals": totals})
+}
+
+// ---- logs -------------------------------------------------------------------
+
+func (s *Server) handleLogs(w http.ResponseWriter, r *http.Request) {
+	entries := logx.Tail(queryInt(r, "limit", 300), r.URL.Query().Get("level"), r.URL.Query().Get("q"))
+	writeJSON(w, http.StatusOK, map[string]any{"entries": entries})
+}
+
+func (s *Server) handleLogStream(w http.ResponseWriter, r *http.Request) {
+	sse, err := newSSE(w)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	ch, cancel := logx.Subscribe()
+	defer cancel()
+
+	ticker := time.NewTicker(25 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-r.Context().Done():
+			return
+		case <-ticker.C:
+			sse.comment("keepalive")
+		case e, ok := <-ch:
+			if !ok {
+				return
+			}
+			if err := sse.send(e); err != nil {
+				return
+			}
+		}
+	}
+}
+
+// ---- files ------------------------------------------------------------------
+
+func (s *Server) handleListFiles(w http.ResponseWriter, r *http.Request) {
+	cfg := s.config()
+	target := r.URL.Query().Get("path")
+	if target == "" {
+		target = "."
+	}
+	abs, err := safeJoin(cfg.Agent.Workspace, target)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	entries, err := os.ReadDir(abs)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+
+	type entry struct {
+		Name     string    `json:"name"`
+		Path     string    `json:"path"`
+		IsDir    bool      `json:"is_dir"`
+		Size     int64     `json:"size"`
+		Modified time.Time `json:"modified"`
+	}
+	out := make([]entry, 0, len(entries))
+	for _, e := range entries {
+		info, err := e.Info()
+		if err != nil {
+			continue
+		}
+		rel, _ := filepath.Rel(cfg.Agent.Workspace, filepath.Join(abs, e.Name()))
+		out = append(out, entry{
+			Name: e.Name(), Path: filepath.ToSlash(rel), IsDir: e.IsDir(),
+			Size: info.Size(), Modified: info.ModTime(),
+		})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].IsDir != out[j].IsDir {
+			return out[i].IsDir
+		}
+		return strings.ToLower(out[i].Name) < strings.ToLower(out[j].Name)
+	})
+
+	parent := ""
+	if rel, _ := filepath.Rel(cfg.Agent.Workspace, abs); rel != "." && rel != "" {
+		parent = filepath.ToSlash(filepath.Dir(rel))
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"path": filepath.ToSlash(relOrSelf(cfg.Agent.Workspace, abs)), "parent": parent, "entries": out,
+	})
+}
+
+func (s *Server) handleReadFile(w http.ResponseWriter, r *http.Request) {
+	cfg := s.config()
+	abs, err := safeJoin(cfg.Agent.Workspace, r.URL.Query().Get("path"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	fi, err := os.Stat(abs)
+	if err != nil {
+		writeError(w, http.StatusNotFound, err)
+		return
+	}
+	if fi.Size() > 2<<20 {
+		writeError(w, http.StatusBadRequest, errors.New("file is too large to preview (over 2 MB)"))
+		return
+	}
+	data, err := os.ReadFile(abs)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"content": string(data), "size": fi.Size()})
+}
+
+func safeJoin(workspace, target string) (string, error) {
+	if strings.TrimSpace(target) == "" {
+		target = "."
+	}
+	p := target
+	if !filepath.IsAbs(p) {
+		p = filepath.Join(workspace, p)
+	}
+	p = filepath.Clean(p)
+	rel, err := filepath.Rel(workspace, p)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("path is outside the workspace")
+	}
+	return p, nil
+}
+
+func relOrSelf(base, p string) string {
+	if rel, err := filepath.Rel(base, p); err == nil {
+		return rel
+	}
+	return p
+}
+
+// ---- channels ---------------------------------------------------------------
+
+func (s *Server) handleListChannels(w http.ResponseWriter, r *http.Request) {
+	cfg := s.config()
+	pairings, _ := s.db.ListPairings(r.Context())
+	if pairings == nil {
+		pairings = []store.Pairing{}
+	}
+	live := map[string]bool{}
+	if s.gateway != nil {
+		live = s.gateway.Status()
+	}
+
+	type channel struct {
+		ID        string `json:"id"`
+		Label     string `json:"label"`
+		Enabled   bool   `json:"enabled"`
+		Connected bool   `json:"connected"`
+		Detail    string `json:"detail"`
+		HasToken  bool   `json:"has_token"`
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"channels": []channel{
+			{
+				ID: "telegram", Label: "Telegram",
+				Enabled:   cfg.Gateway.Telegram.Enabled,
+				Connected: live["telegram"],
+				HasToken:  cfg.Gateway.Telegram.BotToken != "",
+				Detail:    "Telegram bot — long polling, no public domain required.",
+			},
+			{
+				ID: "discord", Label: "Discord",
+				Enabled:   cfg.Gateway.Discord.Enabled,
+				Connected: live["discord"],
+				HasToken:  cfg.Gateway.Discord.BotToken != "",
+				Detail:    "Discord bot — websocket gateway.",
+			},
+		},
+		"pairings": pairings,
+	})
+}
+
+func (s *Server) handleSetChannelToken(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Token string `json:"token"`
+	}
+	if err := decodeBody(r, &body); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	cfg, err := config.Reload()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	switch r.PathValue("id") {
+	case "telegram":
+		cfg.Gateway.Telegram.BotToken = body.Token
+	case "discord":
+		cfg.Gateway.Discord.BotToken = body.Token
+	default:
+		writeError(w, http.StatusBadRequest, errors.New("unknown channel"))
+		return
+	}
+	if err := config.Save(cfg); err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	if err := s.applyReload(); err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"saved": true})
+}

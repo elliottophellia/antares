@@ -1,0 +1,35 @@
+# Air hot-reload configuration for the Antares backend.
+# Run with: make dev-api  (or: air)
+root = "."
+tmp_dir = ".air"
+
+[build]
+  cmd = "go build -o ./.air/antares ./cmd/antares"
+  bin = "./.air/antares"
+  full_bin = "./.air/antares serve"
+  include_ext = ["go", "yaml", "yml"]
+  exclude_dir = [".air", "web", "dist", ".git", "node_modules", "internal/server/dist"]
+  exclude_regex = ["_test\\.go"]
+  exclude_unchanged = true
+  follow_symlink = false
+  delay = 400
+  stop_on_error = false
+  send_interrupt = true
+  kill_delay = 2000
+
+[log]
+  time = false
+  main_only = false
+
+[color]
+  main = "magenta"
+  watcher = "cyan"
+  build = "yellow"
+  runner = "green"
+
+[misc]
+  clean_on_exit = true
+
+[screen]
+  clear_on_rebuild = false
+  keep_scroll = true

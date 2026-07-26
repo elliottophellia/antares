@@ -1,0 +1,240 @@
+// Package tools implements the agent's callable tool surface and the toolset
+// groupings that decide which tools a given platform exposes.
+package tools
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"sort"
+	"strings"
+	"sync"
+)
+
+// Progress is an incremental update emitted while a tool runs.
+type Progress struct {
+	Tool    string `json:"tool"`
+	Message string `json:"message"`
+	Chunk   string `json:"chunk,omitempty"`
+	Percent int    `json:"percent,omitempty"`
+}
+
+// Input carries everything a tool needs to run one invocation.
+type Input struct {
+	Args      json.RawMessage
+	CallID    string
+	SessionID string
+	UserID    string
+	Platform  string
+	Workspace string
+	// Emit reports progress; it is never nil.
+	Emit func(Progress)
+	// Deps exposes shared services (store, memory, rag, llm factory, sub-agent).
+	Deps *Deps
+}
+
+// Bind decodes the tool arguments into v.
+func (in Input) Bind(v any) error {
+	if len(in.Args) == 0 {
+		return nil
+	}
+	dec := json.NewDecoder(strings.NewReader(string(in.Args)))
+	if err := dec.Decode(v); err != nil {
+		return fmt.Errorf("invalid arguments: %w", err)
+	}
+	return nil
+}
+
+// Result is the outcome of a tool invocation.
+type Result struct {
+	// Content is what the model sees.
+	Content string `json:"content"`
+	// Display is an optional richer rendering for the dashboard.
+	Display string         `json:"display,omitempty"`
+	IsError bool           `json:"is_error,omitempty"`
+	Meta    map[string]any `json:"meta,omitempty"`
+}
+
+// Errorf builds a failed Result the model can read and recover from.
+func Errorf(format string, args ...any) Result {
+	return Result{Content: fmt.Sprintf(format, args...), IsError: true}
+}
+
+// Text builds a successful text Result.
+func Text(s string) Result { return Result{Content: s} }
+
+// Tool is one callable capability.
+type Tool interface {
+	Name() string
+	Description() string
+	Schema() map[string]any
+	Execute(ctx context.Context, in Input) Result
+}
+
+// Approval reports whether a tool mutates state and should be gated.
+type Approval interface {
+	RequiresApproval() bool
+}
+
+// Registry holds the process-wide tool set.
+type Registry struct {
+	mu    sync.RWMutex
+	tools map[string]Tool
+}
+
+// NewRegistry returns an empty registry.
+func NewRegistry() *Registry { return &Registry{tools: map[string]Tool{}} }
+
+// Register adds or replaces a tool.
+func (r *Registry) Register(t Tool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.tools[t.Name()] = t
+}
+
+// Get looks up a tool by name.
+func (r *Registry) Get(name string) (Tool, bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	t, ok := r.tools[name]
+	return t, ok
+}
+
+// Names returns all registered tool names, sorted.
+func (r *Registry) Names() []string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	out := make([]string, 0, len(r.tools))
+	for n := range r.tools {
+		out = append(out, n)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// All returns every registered tool, sorted by name.
+func (r *Registry) All() []Tool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	out := make([]Tool, 0, len(r.tools))
+	for _, t := range r.tools {
+		out = append(out, t)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name() < out[j].Name() })
+	return out
+}
+
+// Resolve expands a toolset name plus explicit enable/disable lists into the
+// concrete tools handed to the model.
+func (r *Registry) Resolve(toolset string, enabled, disabled []string) []Tool {
+	want := map[string]bool{}
+	for _, n := range ExpandToolset(toolset) {
+		want[n] = true
+	}
+	for _, n := range enabled {
+		n = strings.TrimSpace(n)
+		if n == "" {
+			continue
+		}
+		if strings.HasPrefix(n, "@") {
+			for _, m := range ExpandToolset(strings.TrimPrefix(n, "@")) {
+				want[m] = true
+			}
+			continue
+		}
+		want[n] = true
+	}
+	for _, n := range disabled {
+		n = strings.TrimSpace(n)
+		if strings.HasPrefix(n, "@") {
+			for _, m := range ExpandToolset(strings.TrimPrefix(n, "@")) {
+				delete(want, m)
+			}
+			continue
+		}
+		delete(want, n)
+	}
+
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	out := make([]Tool, 0, len(want))
+	for name := range want {
+		if t, ok := r.tools[name]; ok {
+			out = append(out, t)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name() < out[j].Name() })
+	return out
+}
+
+// Toolsets are named groupings mirroring the platform toolset config.
+var Toolsets = map[string][]string{
+	"minimal": {"read_file", "list_files", "grep", "todo"},
+	"coding": {
+		"read_file", "write_file", "edit_file", "list_files", "glob", "grep",
+		"terminal", "todo", "skill", "delegate_task",
+	},
+	"research": {"read_file", "web_search", "web_fetch", "grep", "todo", "memory", "session_search", "rag_search", "skill"},
+	"default": {
+		"read_file", "write_file", "edit_file", "list_files", "glob", "grep",
+		"terminal", "web_search", "web_fetch", "todo", "memory", "session_search",
+		"rag_search", "rag_index", "skill", "delegate_task",
+	},
+	"all": nil, // resolved dynamically to every registered tool
+}
+
+// ExpandToolset returns the tool names in a named toolset.
+func ExpandToolset(name string) []string {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		name = "default"
+	}
+	if name == "all" {
+		return globalRegistry.Names()
+	}
+	if set, ok := Toolsets[name]; ok {
+		return set
+	}
+	return Toolsets["default"]
+}
+
+// ToolsetNames lists the available toolsets, sorted.
+func ToolsetNames() []string {
+	out := make([]string, 0, len(Toolsets))
+	for k := range Toolsets {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}
+
+var globalRegistry = NewRegistry()
+
+// Default returns the process-wide registry.
+func Default() *Registry { return globalRegistry }
+
+// schema is a small helper for building JSON Schema objects.
+func schema(props map[string]any, required ...string) map[string]any {
+	if props == nil {
+		props = map[string]any{}
+	}
+	out := map[string]any{"type": "object", "properties": props}
+	if len(required) > 0 {
+		out["required"] = required
+	} else {
+		out["required"] = []string{}
+	}
+	return out
+}
+
+func prop(typ, desc string) map[string]any {
+	return map[string]any{"type": typ, "description": desc}
+}
+
+func propEnum(desc string, values ...string) map[string]any {
+	return map[string]any{"type": "string", "description": desc, "enum": values}
+}
+
+func propDefault(typ, desc string, def any) map[string]any {
+	return map[string]any{"type": typ, "description": desc, "default": def}
+}
