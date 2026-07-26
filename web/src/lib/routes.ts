@@ -33,6 +33,12 @@ export interface RouteDef {
   primary?: boolean
   /** Renders without the standard page container and header. */
   fullBleed?: boolean
+  /**
+   * Pins the page to the viewport on desktop so it can scroll its own panes
+   * instead of the document. Used where a long side rail would otherwise
+   * scroll away from the content it navigates.
+   */
+  fillViewport?: boolean
 }
 
 /**
@@ -136,6 +142,7 @@ export const ROUTES: RouteDef[] = [
     icon: Gear,
     component: lazy(() => import('@/pages/ConfigPage')),
     primary: true,
+    fillViewport: true,
   },
   {
     path: '/system',

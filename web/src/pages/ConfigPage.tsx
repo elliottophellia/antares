@@ -13,7 +13,6 @@ import { post } from '@/lib/api'
 import { useApi } from '@/lib/hooks'
 import { useI18n } from '@/lib/i18n'
 import { cn } from '@/lib/utils'
-import { PageBody } from '@/components/layout/AppShell'
 import { usePageActions } from '@/components/layout/PageChrome'
 import { Button } from '@/components/ui/button'
 import {
@@ -209,7 +208,7 @@ export default function ConfigPage() {
   )
 
   return (
-    <PageBody>
+    <div className="flex flex-col gap-5 lg:min-h-0 lg:flex-1">
       {error ? (
         <div className="flex items-start gap-2 rounded-[var(--radius-sm)] border border-destructive/40 bg-destructive/10 p-3 text-xs text-destructive">
           <Warning className="mt-0.5 size-4 shrink-0" weight="fill" />
@@ -217,7 +216,7 @@ export default function ConfigPage() {
         </div>
       ) : null}
 
-      <div className="relative">
+      <div className="relative lg:shrink-0">
         <MagnifyingGlass className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
         <Input
           value={filter}
@@ -236,7 +235,7 @@ export default function ConfigPage() {
         <EmptyState title={t('config.loadFailed')} />
       ) : searching ? (
         // Search replaces the layout entirely: one flat list, group shown per row.
-        <div className="space-y-3">
+        <div className="space-y-3 lg:min-h-0 lg:flex-1 lg:overflow-y-auto lg:pr-1">
           <p className="text-xs text-muted-foreground">{t('config.matches', { n: results.length })}</p>
           {results.length === 0 ? (
             <EmptyState title={t('config.noMatch')} />
@@ -245,7 +244,7 @@ export default function ConfigPage() {
           )}
         </div>
       ) : (
-        <div className="grid gap-5 lg:grid-cols-[13rem_1fr] lg:items-start">
+        <div className="grid gap-5 lg:min-h-0 lg:flex-1 lg:grid-cols-[13rem_1fr] lg:overflow-hidden">
           <SectionRail
             groups={groups}
             section={section}
@@ -254,7 +253,7 @@ export default function ConfigPage() {
             dirtyEssentials={dirtyEssentials}
           />
 
-          <div className="min-w-0 space-y-4">
+          <div className="min-w-0 space-y-4 lg:h-full lg:overflow-y-auto lg:pb-6 lg:pr-1">
             {section === YAML ? (
               <Card>
                 <CardHeader>
@@ -313,7 +312,7 @@ export default function ConfigPage() {
           </div>
         </div>
       )}
-    </PageBody>
+    </div>
   )
 }
 
@@ -354,7 +353,7 @@ function SectionRail({
 
   return (
     <>
-      <nav className="hidden lg:sticky lg:top-4 lg:block">
+      <nav className="hidden lg:block lg:h-full lg:overflow-y-auto lg:pb-6 lg:pr-1">
         <div className="space-y-0.5">
           {item(
             ESSENTIALS,

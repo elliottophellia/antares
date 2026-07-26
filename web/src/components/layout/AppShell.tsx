@@ -151,10 +151,24 @@ function PageFrame() {
     )
   }
 
+  // A fill-viewport page owns its own scrolling on desktop: the frame stops
+  // growing, and the page splits the remaining height between its panes.
+  const fill = !!route?.fillViewport
+
   return (
-    <div className="mx-auto w-full max-w-6xl px-4 py-5 sm:px-6 sm:py-7 lg:px-8">
+    <div
+      className={cn(
+        'mx-auto w-full max-w-6xl px-4 py-5 sm:px-6 sm:py-7 lg:px-8',
+        fill && 'lg:flex lg:h-dvh lg:flex-col lg:overflow-hidden',
+      )}
+    >
       {route ? (
-        <header className="mb-6 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between sm:gap-4">
+        <header
+          className={cn(
+            'mb-6 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between sm:gap-4',
+            fill && 'lg:shrink-0',
+          )}
+        >
           <div className="min-w-0 space-y-1.5">
             <h1 className="text-lg font-semibold leading-tight tracking-tight text-balance sm:text-xl">
               {t(route.titleKey)}
@@ -173,7 +187,9 @@ function PageFrame() {
 
       <ErrorBoundary resetKey={location.pathname} labels={labels}>
         <Suspense fallback={<RouteFallback />}>
-          <Outlet />
+          <div className={cn(fill && 'lg:flex lg:min-h-0 lg:flex-1 lg:flex-col')}>
+            <Outlet />
+          </div>
         </Suspense>
       </ErrorBoundary>
     </div>
