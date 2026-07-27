@@ -69,6 +69,7 @@ func (delegateTool) Schema() map[string]any {
 		"toolset":      propEnum("Which tools the sub-agent may use. Overrides the role's toolset.", "minimal", "coding", "research", "default"),
 		"max_turns":    propDefault("integer", "Turn budget for the sub-agent.", 20),
 		"context_note": prop("string", "Optional background the sub-agent needs."),
+		"isolate":      propDefault("boolean", "Run the sub-agent in its own git worktree, so parallel sub-agents editing the same repository do not conflict. Only works in a git repository.", false),
 	}, "prompt")
 }
 
@@ -79,6 +80,7 @@ func (delegateTool) Execute(ctx context.Context, in Input) Result {
 		Toolset     string `json:"toolset"`
 		MaxTurns    int    `json:"max_turns"`
 		ContextNote string `json:"context_note"`
+		Isolate     bool   `json:"isolate"`
 	}
 	if err := in.Bind(&args); err != nil {
 		return Errorf("%v", err)
@@ -108,6 +110,7 @@ func (delegateTool) Execute(ctx context.Context, in Input) Result {
 		SystemExtra: args.ContextNote,
 		Role:        args.Role,
 		Toolset:     args.Toolset,
+		Isolate:     args.Isolate,
 		MaxTurns:    args.MaxTurns,
 		ParentID:    in.SessionID,
 		OnProgress: func(p Progress) {

@@ -36,7 +36,7 @@ func (a *Agent) resolveSession(ctx context.Context, req *Request) (*store.Sessio
 		UserID:    req.UserID,
 		Model:     firstNonEmpty(req.Model, a.cfg.Model.Default),
 		Provider:  a.cfg.Model.Provider,
-		Workspace: a.cfg.Agent.Workspace,
+		Workspace: firstNonEmpty(req.Workspace, a.cfg.Agent.Workspace),
 		Meta:      store.Meta{},
 	}
 	if req.Quiet {

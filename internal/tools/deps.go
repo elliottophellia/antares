@@ -45,7 +45,12 @@ type SubAgentRequest struct {
 	Model       string
 	// Role names a specialist to run this workstream as. It sets the prompt,
 	// toolset, and model unless those are given explicitly.
-	Role       string
+	Role string
+	// Isolate runs the sub-agent in its own git worktree, so parallel
+	// sub-agents editing the same repository do not conflict.
+	Isolate bool
+	// Workspace overrides the sub-agent's working directory.
+	Workspace  string
 	MaxTurns   int
 	ParentID   string
 	OnProgress func(Progress)

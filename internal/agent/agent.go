@@ -24,6 +24,7 @@ import (
 	"github.com/enowdev/antares/internal/skills"
 	"github.com/enowdev/antares/internal/store"
 	"github.com/enowdev/antares/internal/tools"
+	"github.com/enowdev/antares/internal/worktree"
 )
 
 // EventType enumerates what the agent streams to callers.
@@ -101,6 +102,9 @@ type Request struct {
 	Quiet bool
 	// Depth guards against unbounded delegation recursion.
 	Depth int
+	// Workspace overrides the working directory for this run, used by an
+	// isolated sub-agent running in its own worktree.
+	Workspace string
 }
 
 // Result summarises a completed run.
@@ -653,12 +657,29 @@ func (a *Agent) subAgentFor(parent Request) tools.SubAgent {
 		if maxDepth := a.cfg.Delegation.MaxDepth; maxDepth > 0 && depth > maxDepth {
 			return "", fmt.Errorf("maximum delegation depth (%d) reached", maxDepth)
 		}
+
+		// Isolation gives the sub-agent its own worktree so parallel workers on
+		// the same repository do not conflict. When it cannot be set up, the
+		// sub-agent shares the workspace rather than failing.
+		workspace := sub.Workspace
+		var wt *worktree.Worktree
+		if sub.Isolate {
+			base := firstNonEmpty(sub.Workspace, a.cfg.Agent.Workspace)
+			if w, err := worktree.Create(ctx, config.Expand(base), firstNonEmpty(sub.Role, "sub")); err == nil {
+				wt = w
+				workspace = w.Path
+			} else {
+				slog.Debug("worktree isolation unavailable", "error", err)
+			}
+		}
+
 		res, err := a.Run(ctx, Request{
 			Message:     sub.Prompt,
 			SystemExtra: sub.SystemExtra,
 			Toolset:     sub.Toolset,
 			Model:       sub.Model,
 			Role:        sub.Role,
+			Workspace:   workspace,
 			MaxTurns:    sub.MaxTurns,
 			Platform:    "subagent",
 			UserID:      parent.UserID,
@@ -675,13 +696,17 @@ func (a *Agent) subAgentFor(parent Request) tools.SubAgent {
 			}
 			return nil
 		})
+		note := ""
+		if wt != nil {
+			note = "\n\n" + wt.Cleanup(ctx)
+		}
 		if err != nil {
 			return "", err
 		}
 		if strings.TrimSpace(res.Reply) == "" {
-			return "(sub-agent finished without a final answer)", nil
+			return "(sub-agent finished without a final answer)" + note, nil
 		}
-		return res.Reply, nil
+		return res.Reply + note, nil
 	}
 }
 
