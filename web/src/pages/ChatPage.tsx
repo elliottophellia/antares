@@ -6,10 +6,12 @@ import {
   CaretDown,
   Check,
   Copy,
+  Paperclip,
   Plus,
   Stop,
   Terminal,
   Warning,
+  X,
 } from '@phosphor-icons/react'
 import { get, post, streamPost, type StreamEvent } from '@/lib/api'
 import { useStickyScroll } from '@/lib/hooks'
@@ -48,6 +50,7 @@ export interface ChatMessage {
   tokensIn?: number
   tokensOut?: number
   error?: string
+  images?: string[]
 }
 
 interface SessionDetail {
@@ -60,6 +63,7 @@ interface SessionDetail {
     tool_calls?: string
     tool_call_id?: string
     tool_name?: string
+    attachments?: string
     created_at: string
     tokens_in: number
     tokens_out: number
@@ -88,6 +92,22 @@ function hydrate(detail: SessionDetail): ChatMessage[] {
       createdAt: m.created_at,
       tokensIn: m.tokens_in,
       tokensOut: m.tokens_out,
+    }
+    // Images sent with the message are stored as the same parts the model saw.
+    if (m.attachments) {
+      try {
+        const parts = JSON.parse(m.attachments) as Array<{
+          mime_type?: string
+          data?: string
+          url?: string
+        }>
+        const srcs = parts
+          .map((p) => p.url || (p.data ? `data:${p.mime_type || 'image/png'};base64,${p.data}` : ''))
+          .filter(Boolean)
+        if (srcs.length > 0) msg.images = srcs
+      } catch {
+        /* ignore malformed history */
+      }
     }
     if (m.tool_calls) {
       try {
@@ -133,6 +153,8 @@ export default function ChatPage() {
   const [error, setError] = useState<string>()
   const [title, setTitle] = useState('')
   const [approvals, setApprovals] = useState<ApprovalView[]>([])
+  // Data URLs, which is what the API takes and what a preview needs.
+  const [images, setImages] = useState<string[]>([])
 
   const commands = useCommands()
   const matches = useMatches(input, commands)
@@ -252,11 +274,12 @@ export default function ChatPage() {
 
   const send = useCallback(() => {
     const text = input.trim()
-    if (!text || streaming) return
+    if ((!text && images.length === 0) || streaming) return
     if (text.startsWith('/') && text.length > 1) {
       void runCommand(text)
       return
     }
+    const attached = images
 
     const userMsg: ChatMessage = {
       id: `local_${Date.now()}`,
@@ -266,6 +289,7 @@ export default function ChatPage() {
     const assistantId = `local_${Date.now()}_a`
     setMessages((prev) => [...prev, userMsg, { id: assistantId, role: 'assistant', content: '' }])
     setInput('')
+    setImages([])
     setError(undefined)
     setStreaming(true)
 
@@ -274,7 +298,7 @@ export default function ChatPage() {
 
     abortRef.current = streamPost(
       '/chat',
-      { session_id: sessionId ?? '', message: text },
+      { session_id: sessionId ?? '', message: text, images: attached },
       (event: StreamEvent) => {
         switch (event.type) {
           case 'session':
@@ -362,13 +386,40 @@ export default function ChatPage() {
         abortRef.current = null
       },
     )
-  }, [input, streaming, sessionId, navigate, runCommand, t])
+  }, [input, images, streaming, sessionId, navigate, runCommand, t])
 
   const complete = (c: CommandSpec) => {
     // Commands that take arguments keep the composer open on a trailing space;
     // ones that do not are ready to send.
     setInput(`/${c.name}${c.args ? ' ' : ''}`)
     textareaRef.current?.focus()
+  }
+
+  /** Read files into data URLs, which is what both the preview and the API want. */
+  const attachFiles = useCallback(async (files: FileList | File[]) => {
+    const picked = Array.from(files).filter((f) => f.type.startsWith('image/'))
+    if (picked.length === 0) return
+    const read = await Promise.all(
+      picked.slice(0, 4).map(
+        (file) =>
+          new Promise<string>((resolve, reject) => {
+            const reader = new FileReader()
+            reader.onload = () => resolve(String(reader.result))
+            reader.onerror = () => reject(reader.error)
+            reader.readAsDataURL(file)
+          }),
+      ),
+    )
+    setImages((prev) => [...prev, ...read].slice(0, 4))
+  }, [])
+
+  // Pasting a screenshot is the fastest way to show the agent something.
+  const onPaste = (e: React.ClipboardEvent) => {
+    const files = Array.from(e.clipboardData.files)
+    if (files.length > 0) {
+      e.preventDefault()
+      void attachFiles(files)
+    }
   }
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -423,6 +474,10 @@ export default function ChatPage() {
       <Composer
         ref={textareaRef}
         value={input}
+        images={images}
+        onAttach={attachFiles}
+        onRemoveImage={(i) => setImages((prev) => prev.filter((_, x) => x !== i))}
+        onPaste={onPaste}
         onChange={setInput}
         onKeyDown={onKeyDown}
         onSend={send}
@@ -431,6 +486,7 @@ export default function ChatPage() {
         placeholder={t('chat.placeholder')}
         sendLabel={t('chat.send')}
         stopLabel={t('chat.stop')}
+        attachLabel={t('chat.attach')}
       />
     </>
   )
@@ -545,7 +601,11 @@ export default function ChatPage() {
 
 interface ComposerProps {
   value: string
+  images: string[]
   onChange: (v: string) => void
+  onAttach: (files: FileList | File[]) => void
+  onRemoveImage: (index: number) => void
+  onPaste: (e: React.ClipboardEvent) => void
   onKeyDown: (e: React.KeyboardEvent<HTMLTextAreaElement>) => void
   onSend: () => void
   onStop: () => void
@@ -553,13 +613,18 @@ interface ComposerProps {
   placeholder: string
   sendLabel: string
   stopLabel: string
+  attachLabel: string
 }
 
-/** Rounded single-surface composer with the action button inside the field. */
+/** Rounded single-surface composer with the actions inside the field. */
 const Composer = ({
   ref,
   value,
+  images,
   onChange,
+  onAttach,
+  onRemoveImage,
+  onPaste,
   onKeyDown,
   onSend,
   onStop,
@@ -567,40 +632,92 @@ const Composer = ({
   placeholder,
   sendLabel,
   stopLabel,
-}: ComposerProps & { ref: React.RefObject<HTMLTextAreaElement | null> }) => (
-  <div className="flex items-end gap-2 rounded-[var(--radius-xl)] border border-border bg-card p-2 shadow-sm transition-colors focus-within:border-ring">
-    <Textarea
-      ref={ref}
-      rows={1}
-      value={value}
-      onChange={(e) => onChange(e.target.value)}
-      onKeyDown={onKeyDown}
-      placeholder={placeholder}
-      className="max-h-50 min-h-9 resize-none border-0 bg-transparent px-2 py-1.5 shadow-none focus-visible:border-0"
-    />
-    {streaming ? (
-      <Button
-        size="icon"
-        variant="destructive"
-        onClick={onStop}
-        aria-label={stopLabel}
-        className="shrink-0 rounded-full"
-      >
-        <Stop weight="fill" />
-      </Button>
-    ) : (
-      <Button
-        size="icon"
-        onClick={onSend}
-        disabled={!value.trim()}
-        aria-label={sendLabel}
-        className="shrink-0 rounded-full"
-      >
-        <ArrowUp weight="bold" />
-      </Button>
-    )}
-  </div>
-)
+  attachLabel,
+}: ComposerProps & { ref: React.RefObject<HTMLTextAreaElement | null> }) => {
+  const fileRef = useRef<HTMLInputElement>(null)
+
+  return (
+    <div className="rounded-[var(--radius-xl)] border border-border bg-card p-2 shadow-sm transition-colors focus-within:border-ring">
+      {images.length > 0 ? (
+        <div className="mb-2 flex flex-wrap gap-2 px-1 pt-1">
+          {images.map((src, i) => (
+            <div key={i} className="group relative">
+              <img
+                src={src}
+                alt=""
+                className="size-16 rounded-[var(--radius-sm)] border border-border object-cover"
+              />
+              <button
+                onClick={() => onRemoveImage(i)}
+                aria-label="Remove"
+                className="absolute -right-1.5 -top-1.5 rounded-full bg-background p-0.5 text-muted-foreground shadow ring-1 ring-border transition-colors hover:text-destructive"
+              >
+                <X className="size-3.5" weight="bold" />
+              </button>
+            </div>
+          ))}
+        </div>
+      ) : null}
+
+      <div className="flex items-end gap-1.5">
+        <input
+          ref={fileRef}
+          type="file"
+          accept="image/*"
+          multiple
+          hidden
+          onChange={(e) => {
+            if (e.target.files) onAttach(e.target.files)
+            // Reset so picking the same file twice still fires.
+            e.target.value = ''
+          }}
+        />
+        <Button
+          size="icon"
+          variant="ghost"
+          onClick={() => fileRef.current?.click()}
+          aria-label={attachLabel}
+          className="shrink-0 rounded-full text-muted-foreground"
+        >
+          <Paperclip className="size-5" />
+        </Button>
+
+        <Textarea
+          ref={ref}
+          rows={1}
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          onKeyDown={onKeyDown}
+          onPaste={onPaste}
+          placeholder={placeholder}
+          className="max-h-50 min-h-9 resize-none border-0 bg-transparent px-1 py-1.5 shadow-none focus-visible:border-0"
+        />
+
+        {streaming ? (
+          <Button
+            size="icon"
+            variant="destructive"
+            onClick={onStop}
+            aria-label={stopLabel}
+            className="shrink-0 rounded-full"
+          >
+            <Stop weight="fill" />
+          </Button>
+        ) : (
+          <Button
+            size="icon"
+            onClick={onSend}
+            disabled={!value.trim() && images.length === 0}
+            aria-label={sendLabel}
+            className="shrink-0 rounded-full"
+          >
+            <ArrowUp weight="bold" />
+          </Button>
+        )}
+      </div>
+    </div>
+  )
+}
 
 function ErrorBanner({ message, className }: { message: string; className?: string }) {
   return (
@@ -641,8 +758,24 @@ function MessageBubble({ message }: { message: ChatMessage }) {
   if (message.role === 'user') {
     return (
       <div className="flex justify-end fade-up">
-        <div className="max-w-[85%] rounded-[var(--radius-lg)] rounded-br-sm bg-primary px-3.5 py-2.5 text-sm text-primary-foreground">
-          <p className="whitespace-pre-wrap break-words">{message.content}</p>
+        <div className="max-w-[85%] space-y-2">
+          {message.images?.length ? (
+            <div className="flex flex-wrap justify-end gap-2">
+              {message.images.map((src, i) => (
+                <img
+                  key={i}
+                  src={src}
+                  alt=""
+                  className="max-h-48 rounded-[var(--radius-md)] border border-border object-contain"
+                />
+              ))}
+            </div>
+          ) : null}
+          {message.content ? (
+            <div className="rounded-[var(--radius-lg)] rounded-br-sm bg-primary px-3.5 py-2.5 text-sm text-primary-foreground">
+              <p className="whitespace-pre-wrap break-words">{message.content}</p>
+            </div>
+          ) : null}
         </div>
       </div>
     )
