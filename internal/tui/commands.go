@@ -147,6 +147,7 @@ func (m *Model) cmdTheme(args string) (bool, tea.Cmd) {
 	}
 	m.themeName = args
 	m.st = newStyles(themeByName(args))
+	m.buildRenderer(m.vp.Width - 4)
 	m.cache = nil
 	if m.cfg != nil {
 		m.cfg.Display.Theme = args

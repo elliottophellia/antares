@@ -39,14 +39,22 @@ func (m *Model) layout() {
 	}
 	m.ta.SetWidth(innerW - 3)
 
+	m.buildRenderer(innerW - 4)
+	m.cache = map[string]string{} // width changed — drop cached renders
+}
+
+// buildRenderer (re)creates the Markdown renderer for the current theme + width.
+func (m *Model) buildRenderer(wrapAt int) {
+	if wrapAt < 8 {
+		wrapAt = 8
+	}
 	r, err := glamour.NewTermRenderer(
-		glamour.WithStandardStyle(glamourStyle()),
-		glamour.WithWordWrap(innerW-4),
+		glamour.WithStyles(glamourStyle(themeByName(m.themeName), lipgloss.HasDarkBackground())),
+		glamour.WithWordWrap(wrapAt),
 	)
 	if err == nil {
 		m.renderer = r
 	}
-	m.cache = map[string]string{} // width changed — drop cached renders
 }
 
 func (m *Model) sidebarWidth() int {
@@ -54,13 +62,6 @@ func (m *Model) sidebarWidth() int {
 		return 0
 	}
 	return 28
-}
-
-func glamourStyle() string {
-	if lipgloss.HasDarkBackground() {
-		return "dark"
-	}
-	return "light"
 }
 
 func (m *Model) View() string {
