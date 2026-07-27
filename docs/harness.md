@@ -141,6 +141,35 @@ A long autonomous run with all four:
 6. The judge agrees the goal is met and the run ends.
 7. `/learn` keeps the migration procedure for the next one.
 
+## A panel of models
+
+One model's blind spot is often another's strength. `/panel` asks several the
+same question independently and synthesises one answer.
+
+```yaml
+model:
+  panel:
+    - anthropic/claude-sonnet-4.5
+    - openai/gpt-5
+    - google/gemini-3-pro
+```
+
+```
+/panel is it safe to run this migration on a live database?
+```
+
+The value is in the disagreement. Where independent answers diverge is usually
+where the question was ambiguous or the problem is genuinely hard — exactly what
+a single sample hides.
+
+The synthesiser is told not to average: where the answers differ it says so and
+follows the one best supported by its own reasoning, rather than producing
+something none of them said. A model that fails to answer is named, so a quiet
+failure is not mistaken for a smaller panel.
+
+It costs one call per model plus one to synthesise, so it is a command rather
+than a mode.
+
 ## Undo
 
 Every write and edit copies what was there first, keyed by session.

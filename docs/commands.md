@@ -93,6 +93,7 @@ intercepted before the message reaches the model.
 | `/learn [focus]` | Turn this session into a reusable skill |
 | `/rollback` | List the files this session changed |
 | `/rollback all` \| `/rollback <path>` | Put them back |
+| `/panel <question>` | Ask several models and synthesise one answer |
 
 See [the harness](harness.md) for what these actually do.
 

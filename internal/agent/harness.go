@@ -505,3 +505,114 @@ func (a *Agent) notifyPlugins(ctx context.Context, p plugin.Payload) {
 	}
 	a.plugins.Dispatch(ctx, p)
 }
+
+// ---- multi-model panel -------------------------------------------------------
+
+// PanelAnswer is one model's response to a panel question.
+type PanelAnswer struct {
+	Model  string `json:"model"`
+	Answer string `json:"answer"`
+	Err    string `json:"error,omitempty"`
+}
+
+const synthesisPrompt = `Several assistants answered the same question independently. Write the
+answer the user should actually get.
+
+Where they agree, say it once and plainly. Where they disagree, say so and give
+the reading best supported by the reasoning — do not average them into
+something none of them said. If one of them is clearly right and the others
+missed something, follow that one and say why.
+
+Do not mention that there were several answers, and do not name them. Write the
+final answer as though it were the only one.`
+
+// Panel asks several models the same question and synthesises one answer.
+//
+// The value is in the disagreement: where independent answers diverge is
+// usually where the question was ambiguous or the problem is genuinely hard,
+// and that is exactly what a single sample hides.
+func (a *Agent) Panel(ctx context.Context, question string, models []string, emit Emit) (string, []PanelAnswer, error) {
+	question = strings.TrimSpace(question)
+	if question == "" {
+		return "", nil, errors.New("ask something")
+	}
+	if len(models) == 0 {
+		models = a.cfg.Model.Panel
+	}
+	if len(models) == 0 {
+		return "", nil, errors.New("no panel is configured — set model.panel to two or more model ids")
+	}
+	if len(models) > 5 {
+		// Past a handful the cost climbs and the answers stop diverging.
+		models = models[:5]
+	}
+	if emit == nil {
+		emit = func(Event) error { return nil }
+	}
+
+	answers := make([]PanelAnswer, len(models))
+	var wg sync.WaitGroup
+	for i, model := range models {
+		wg.Add(1)
+		go func(i int, model string) {
+			defer wg.Done()
+			answers[i] = PanelAnswer{Model: model}
+			// Quiet: these are internal runs, not conversations of their own.
+			res, err := a.Run(ctx, Request{
+				Message:  question,
+				Model:    model,
+				Toolset:  "minimal",
+				MaxTurns: 4,
+				Quiet:    true,
+				Depth:    1,
+			}, nil)
+			if err != nil {
+				answers[i].Err = err.Error()
+				return
+			}
+			answers[i].Answer = res.Reply
+		}(i, model)
+	}
+	wg.Wait()
+
+	var usable []PanelAnswer
+	for _, ans := range answers {
+		if ans.Err == "" && strings.TrimSpace(ans.Answer) != "" {
+			usable = append(usable, ans)
+			_ = emit(Event{Type: EventNotice, Message: ans.Model + " answered"})
+		} else if ans.Err != "" {
+			_ = emit(Event{Type: EventNotice, Message: ans.Model + " failed: " + ans.Err})
+		}
+	}
+	if len(usable) == 0 {
+		return "", answers, errors.New("no model in the panel answered")
+	}
+	// One usable answer is not a panel; synthesising it would only cost a call
+	// to paraphrase it.
+	if len(usable) == 1 {
+		return usable[0].Answer, answers, nil
+	}
+
+	client, model, _, err := a.newAuxClient()
+	if err != nil {
+		return usable[0].Answer, answers, nil
+	}
+
+	var b strings.Builder
+	fmt.Fprintf(&b, "QUESTION\n%s\n\n", truncate(question, 4000))
+	for i, ans := range usable {
+		fmt.Fprintf(&b, "ANSWER %d\n%s\n\n", i+1, truncate(ans.Answer, 6000))
+	}
+
+	resp, err := client.Chat(ctx, llm.Request{
+		Model:       model,
+		System:      synthesisPrompt,
+		Messages:    []llm.Message{{Role: llm.RoleUser, Content: b.String()}},
+		Temperature: 0.2,
+		MaxTokens:   4000,
+	})
+	if err != nil {
+		return usable[0].Answer, answers, nil
+	}
+	return strings.TrimSpace(resp.Content), answers, nil
+}

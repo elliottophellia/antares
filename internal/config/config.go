@@ -48,6 +48,9 @@ type Model struct {
 	ContextWindow    int     `yaml:"context_window" json:"context_window"`
 	ReasoningEffort  string  `yaml:"reasoning_effort" json:"reasoning_effort"`
 	ParallelToolCall bool    `yaml:"parallel_tool_calls" json:"parallel_tool_calls"`
+	// Panel is the set of models /panel asks. Two or more, or the command has
+	// nothing to compare.
+	Panel []string `yaml:"panel" json:"panel"`
 }
 
 // Provider is one configured LLM endpoint.

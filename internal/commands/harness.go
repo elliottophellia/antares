@@ -228,3 +228,41 @@ func cmdRollback(_ context.Context, d Deps, in Input) (Result, error) {
 	}
 	return Result{Output: strings.TrimSpace(b.String())}, nil
 }
+
+// cmdPanel asks several models the same question and returns one answer.
+func cmdPanel(ctx context.Context, d Deps, in Input) (Result, error) {
+	if d.Agent == nil {
+		return Result{}, errNoAgent
+	}
+	question := strings.TrimSpace(in.Args)
+	if question == "" {
+		models := d.config().Model.Panel
+		if len(models) == 0 {
+			return Result{Output: "No panel is configured. Set `model.panel` to two or more model ids, " +
+				"then ask with `/panel <question>`.\n\nThe point is the disagreement: where independent " +
+				"answers diverge is usually where the question was ambiguous or the problem is genuinely hard."}, nil
+		}
+		return Result{Output: fmt.Sprintf("The panel is %s.\n\nAsk it something with `/panel <question>`.",
+			"`"+strings.Join(models, "`, `")+"`")}, nil
+	}
+
+	answer, all, err := d.Agent.Panel(ctx, question, nil, nil)
+	if err != nil {
+		return Result{}, err
+	}
+
+	var b strings.Builder
+	b.WriteString(answer)
+	// Name who answered and who did not, so a quiet failure is not mistaken
+	// for a smaller panel.
+	var failed []string
+	for _, a := range all {
+		if a.Err != "" {
+			failed = append(failed, a.Model)
+		}
+	}
+	if len(failed) > 0 {
+		fmt.Fprintf(&b, "\n\n_%s did not answer._", strings.Join(failed, ", "))
+	}
+	return Result{Output: b.String()}, nil
+}
