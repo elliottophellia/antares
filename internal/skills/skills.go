@@ -29,6 +29,12 @@ type Skill struct {
 	Body        string    `json:"-"`
 	UpdatedAt   time.Time `json:"updated_at"`
 	UsageCount  int       `json:"usage_count"`
+	// Security-library metadata, used for filtered search and chaining. Empty
+	// for everyday skills.
+	TechStack  []string `json:"tech_stack,omitempty"`
+	CWEIDs     []string `json:"cwe_ids,omitempty"`
+	OWASPID    string   `json:"owasp_id,omitempty"`
+	ChainsWith []string `json:"chains_with,omitempty"`
 	// Pack marks a skill from the bundled security library: searchable and
 	// loadable, but kept out of the prompt catalogue so thousands of them do
 	// not bury the conversation.
@@ -44,6 +50,10 @@ type frontMatter struct {
 	Category    string   `yaml:"category"`
 	Tags        []string `yaml:"tags"`
 	Triggers    []string `yaml:"triggers"`
+	TechStack   []string `yaml:"tech_stack"`
+	CWEIDs      []string `yaml:"cwe_ids"`
+	OWASPID     string   `yaml:"owasp_id"`
+	ChainsWith  []string `yaml:"chains_with"`
 }
 
 // Manager loads and caches skills from the configured directories.
@@ -163,6 +173,8 @@ func parseFile(path string) (*Skill, error) {
 			s.Description = fm.Description
 			s.Tags, s.Triggers = fm.Tags, fm.Triggers
 			s.Category = fm.Category
+			s.TechStack, s.CWEIDs, s.ChainsWith = fm.TechStack, fm.CWEIDs, fm.ChainsWith
+			s.OWASPID = fm.OWASPID
 			if fm.Source != "" {
 				s.Source = fm.Source
 			}
@@ -347,25 +359,158 @@ func (m *Manager) PromptBlock(limit int) string {
 	return b.String()
 }
 
-// Search finds skills by keyword across name, description, and tags. This is how
-// the security library is used: not injected, but reached for on demand.
+// Filter narrows a skill search by security metadata. Empty fields are ignored.
+type Filter struct {
+	// CWE matches a CWE id, with or without the "CWE-" prefix (e.g. "89").
+	CWE string
+	// Tech matches a tech_stack entry (e.g. "web", "api", "cloud").
+	Tech string
+	// Category matches the skill category exactly.
+	Category string
+}
+
+// Search finds skills by keyword, ranked by relevance. It matches across the
+// name, description, tags, triggers, and — for the security library — the CWE
+// ids, tech stack, OWASP id, and category, so "CWE-89" or "graphql" find the
+// right skills even when the words are not in the prose.
 func (m *Manager) Search(query string, limit int) []Skill {
+	return m.SearchFiltered(query, Filter{}, limit)
+}
+
+// SearchFiltered is Search with an optional metadata filter applied first.
+func (m *Manager) SearchFiltered(query string, f Filter, limit int) []Skill {
 	q := strings.ToLower(strings.TrimSpace(query))
+	words := strings.Fields(q)
 	list := m.List()
 	if limit <= 0 {
 		limit = 30
 	}
-	var out []Skill
+
+	type scored struct {
+		s     Skill
+		score int
+	}
+	var hits []scored
 	for _, s := range list {
-		hay := strings.ToLower(s.Name + " " + s.Description + " " + strings.Join(s.Tags, " ") + " " + strings.Join(s.Triggers, " "))
-		if q == "" || matchesAll(hay, q) {
-			out = append(out, s)
-			if len(out) >= limit {
-				break
-			}
+		if !passesFilter(s, f) {
+			continue
+		}
+		hay := strings.ToLower(strings.Join([]string{
+			s.Name, s.Description, strings.Join(s.Tags, " "), strings.Join(s.Triggers, " "),
+			strings.Join(s.TechStack, " "), strings.Join(s.CWEIDs, " "), s.OWASPID, s.Category,
+		}, " "))
+		if q != "" && !matchesAll(hay, q) {
+			continue
+		}
+		hits = append(hits, scored{s: s, score: scoreSkill(s, words)})
+	}
+	sort.Slice(hits, func(i, j int) bool {
+		if hits[i].score != hits[j].score {
+			return hits[i].score > hits[j].score
+		}
+		if hits[i].s.UsageCount != hits[j].s.UsageCount {
+			return hits[i].s.UsageCount > hits[j].s.UsageCount
+		}
+		return hits[i].s.Name < hits[j].s.Name
+	})
+	out := make([]Skill, 0, limit)
+	for _, h := range hits {
+		out = append(out, h.s)
+		if len(out) >= limit {
+			break
 		}
 	}
 	return out
+}
+
+// passesFilter applies the metadata filter to one skill.
+func passesFilter(s Skill, f Filter) bool {
+	if f.Category != "" && !strings.EqualFold(s.Category, f.Category) {
+		return false
+	}
+	if f.Tech != "" && !containsFold(s.TechStack, f.Tech) {
+		return false
+	}
+	if cwe := strings.TrimSpace(f.CWE); cwe != "" {
+		want := "cwe-" + strings.TrimPrefix(strings.ToLower(cwe), "cwe-")
+		found := false
+		for _, id := range s.CWEIDs {
+			if strings.ToLower(id) == want {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return false
+		}
+	}
+	return true
+}
+
+// scoreSkill ranks a skill against the query words: a name hit outweighs a tag,
+// which outweighs metadata, which outweighs a description hit.
+func scoreSkill(s Skill, words []string) int {
+	if len(words) == 0 {
+		return s.UsageCount
+	}
+	name := strings.ToLower(s.Name)
+	desc := strings.ToLower(s.Description)
+	score := 0
+	for _, w := range words {
+		switch {
+		case name == w:
+			score += 100
+		case strings.Contains(name, w):
+			score += 10
+		}
+		if containsFold(s.Tags, w) {
+			score += 6
+		}
+		for _, tr := range s.Triggers {
+			if strings.Contains(strings.ToLower(tr), w) {
+				score += 5
+				break
+			}
+		}
+		if containsFold(s.CWEIDs, w) || strings.EqualFold(s.OWASPID, w) {
+			score += 12
+		}
+		if containsFold(s.TechStack, w) {
+			score += 6
+		}
+		if strings.Contains(strings.ToLower(s.Category), w) {
+			score += 4
+		}
+		if strings.Contains(desc, w) {
+			score += 2
+		}
+	}
+	return score
+}
+
+// Chains resolves a skill's chains_with entries to the skills that exist, so
+// the agent can see which follow-on techniques compound with this one.
+func (m *Manager) Chains(name string) []Skill {
+	s, ok := m.Get(name)
+	if !ok {
+		return nil
+	}
+	out := make([]Skill, 0, len(s.ChainsWith))
+	for _, next := range s.ChainsWith {
+		if ns, ok := m.Get(next); ok {
+			out = append(out, *ns)
+		}
+	}
+	return out
+}
+
+func containsFold(list []string, want string) bool {
+	for _, v := range list {
+		if strings.EqualFold(v, want) || strings.Contains(strings.ToLower(v), strings.ToLower(want)) {
+			return true
+		}
+	}
+	return false
 }
 
 // matchesAll reports whether every word of the query is in the haystack.

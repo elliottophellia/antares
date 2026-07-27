@@ -27,15 +27,15 @@ func (a skillAdapter) List() []tools.SkillInfo {
 }
 
 func (a skillAdapter) Search(query string, limit int) []tools.SkillInfo {
-	items := a.m.Search(query, limit)
-	out := make([]tools.SkillInfo, 0, len(items))
-	for _, s := range items {
-		out = append(out, tools.SkillInfo{
-			Name: s.Name, Description: s.Description,
-			Tags: s.Tags, Triggers: s.Triggers, Enabled: s.Enabled,
-		})
-	}
-	return out
+	return infos(a.m.Search(query, limit))
+}
+
+func (a skillAdapter) SearchFiltered(query, cwe, tech, category string, limit int) []tools.SkillInfo {
+	return infos(a.m.SearchFiltered(query, skills.Filter{CWE: cwe, Tech: tech, Category: category}, limit))
+}
+
+func (a skillAdapter) Chains(name string) []tools.SkillInfo {
+	return infos(a.m.Chains(name))
 }
 
 func (a skillAdapter) Read(name string) (tools.SkillInfo, string, bool) {
@@ -43,10 +43,25 @@ func (a skillAdapter) Read(name string) (tools.SkillInfo, string, bool) {
 	if !ok {
 		return tools.SkillInfo{}, "", false
 	}
+	return toInfo(*s), s.Body, true
+}
+
+// toInfo maps a skills.Skill to the narrow tools.SkillInfo, carrying the
+// security metadata through.
+func toInfo(s skills.Skill) tools.SkillInfo {
 	return tools.SkillInfo{
 		Name: s.Name, Description: s.Description,
 		Tags: s.Tags, Triggers: s.Triggers, Enabled: s.Enabled,
-	}, s.Body, true
+		CWEIDs: s.CWEIDs, TechStack: s.TechStack, OWASPID: s.OWASPID, ChainsWith: s.ChainsWith,
+	}
+}
+
+func infos(items []skills.Skill) []tools.SkillInfo {
+	out := make([]tools.SkillInfo, 0, len(items))
+	for _, s := range items {
+		out = append(out, toInfo(s))
+	}
+	return out
 }
 
 func (a skillAdapter) Write(name, description, body string, tags []string) error {

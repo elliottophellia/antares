@@ -60,6 +60,11 @@ type SubAgentRequest struct {
 type SkillLibrary interface {
 	List() []SkillInfo
 	Search(query string, limit int) []SkillInfo
+	// SearchFiltered ranks matches and narrows by security metadata; empty
+	// filter fields are ignored.
+	SearchFiltered(query, cwe, tech, category string, limit int) []SkillInfo
+	// Chains resolves a skill's follow-on techniques (chains_with).
+	Chains(name string) []SkillInfo
 	Read(name string) (SkillInfo, string, bool)
 	Write(name, description, body string, tags []string) error
 	MarkUsed(name string)
@@ -72,6 +77,11 @@ type SkillInfo struct {
 	Tags        []string `json:"tags"`
 	Triggers    []string `json:"triggers"`
 	Enabled     bool     `json:"enabled"`
+	// Security-library metadata, empty for everyday skills.
+	CWEIDs     []string `json:"cwe_ids,omitempty"`
+	TechStack  []string `json:"tech_stack,omitempty"`
+	OWASPID    string   `json:"owasp_id,omitempty"`
+	ChainsWith []string `json:"chains_with,omitempty"`
 }
 
 // Deps bundles the services tools may reach for.

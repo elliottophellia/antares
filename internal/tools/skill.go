@@ -14,13 +14,17 @@ func (skillTool) Name() string { return "skill" }
 func (skillTool) Description() string {
 	return "Work with your skill library. `list` shows your everyday skills, `search` finds one by keyword " +
 		"across the whole library including thousands of security testing procedures, `read` loads a procedure " +
-		"before following it, and `save` records a reusable procedure you just worked out. Search for the " +
-		"technique you need — 'jwt', 'ssrf', 'kerberos' — then read it."
+		"before following it, `chains` shows which follow-on techniques compound with a skill, and `save` records " +
+		"a reusable procedure you just worked out. Search for the technique you need — 'jwt', 'ssrf', 'kerberos' — " +
+		"or filter security skills by cwe (e.g. 'CWE-89') or tech ('web', 'api', 'cloud'), then read it."
 }
 func (skillTool) Schema() map[string]any {
 	return schema(map[string]any{
-		"action":      propEnum("What to do.", "list", "search", "read", "save"),
-		"name":        prop("string", "Skill name to read or save; or the keywords to search for."),
+		"action":      propEnum("What to do.", "list", "search", "read", "chains", "save"),
+		"name":        prop("string", "Skill name to read, chain, or save; or the keywords to search for."),
+		"cwe":         prop("string", "For search: filter to a CWE id, e.g. CWE-89 or 89."),
+		"tech":        prop("string", "For search: filter by tech stack, e.g. web, api, cloud, mobile."),
+		"category":    prop("string", "For search: filter by category, e.g. web-application."),
 		"description": prop("string", "For save: one line describing when this skill applies."),
 		"body":        prop("string", "For save: the procedure itself, in Markdown. Be concrete — exact commands, paths, and gotchas."),
 		"tags":        map[string]any{"type": "array", "description": "Optional tags.", "items": map[string]any{"type": "string"}},
@@ -33,6 +37,9 @@ func (skillTool) Execute(_ context.Context, in Input) Result {
 	var args struct {
 		Action      string   `json:"action"`
 		Name        string   `json:"name"`
+		CWE         string   `json:"cwe"`
+		Tech        string   `json:"tech"`
+		Category    string   `json:"category"`
 		Description string   `json:"description"`
 		Body        string   `json:"body"`
 		Tags        []string `json:"tags"`
@@ -67,16 +74,38 @@ func (skillTool) Execute(_ context.Context, in Input) Result {
 		if q == "" {
 			q = strings.TrimSpace(args.Description)
 		}
-		hits := lib.Search(q, 30)
+		cwe, tech, cat := strings.TrimSpace(args.CWE), strings.TrimSpace(args.Tech), strings.TrimSpace(args.Category)
+		hits := lib.SearchFiltered(q, cwe, tech, cat, 30)
 		if len(hits) == 0 {
-			return Text(fmt.Sprintf("No skills match %q.", q))
+			return Text(fmt.Sprintf("No skills match %q%s.", q, filterNote(cwe, tech, cat)))
 		}
 		var b strings.Builder
-		fmt.Fprintf(&b, "%d skill(s) matching %q:\n\n", len(hits), q)
+		fmt.Fprintf(&b, "%d skill(s) matching %q%s:\n\n", len(hits), q, filterNote(cwe, tech, cat))
+		for _, s := range hits {
+			meta := ""
+			if len(s.CWEIDs) > 0 {
+				meta = " [" + strings.Join(s.CWEIDs, ", ") + "]"
+			}
+			fmt.Fprintf(&b, "- %s%s: %s\n", s.Name, meta, s.Description)
+		}
+		b.WriteString("\nLoad one with action=read, or see follow-on techniques with action=chains.")
+		return Text(b.String())
+
+	case "chains":
+		name := strings.TrimSpace(args.Name)
+		if name == "" {
+			return Errorf("name is required to show a skill's chains")
+		}
+		hits := lib.Chains(name)
+		if len(hits) == 0 {
+			return Text(fmt.Sprintf("No follow-on techniques are recorded for %q.", name))
+		}
+		var b strings.Builder
+		fmt.Fprintf(&b, "Techniques that chain from %q:\n\n", name)
 		for _, s := range hits {
 			fmt.Fprintf(&b, "- %s: %s\n", s.Name, s.Description)
 		}
-		b.WriteString("\nLoad one with action=read.")
+		b.WriteString("\nRead one with action=read.")
 		return Text(b.String())
 
 	case "read", "get":
@@ -112,6 +141,24 @@ func (skillTool) Execute(_ context.Context, in Input) Result {
 		return Text(fmt.Sprintf("Saved skill %q. It will appear in your catalogue on the next turn.", name))
 
 	default:
-		return Errorf("unknown action %q (want list, read, or save)", args.Action)
+		return Errorf("unknown action %q (want list, search, read, chains, or save)", args.Action)
 	}
+}
+
+// filterNote renders the active search filters for a message, e.g. " (CWE-89, tech=web)".
+func filterNote(cwe, tech, cat string) string {
+	var parts []string
+	if cwe != "" {
+		parts = append(parts, cwe)
+	}
+	if tech != "" {
+		parts = append(parts, "tech="+tech)
+	}
+	if cat != "" {
+		parts = append(parts, "category="+cat)
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return " (" + strings.Join(parts, ", ") + ")"
 }
