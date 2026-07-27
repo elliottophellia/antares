@@ -176,6 +176,15 @@ func (a *Agent) methodologyBlock(sessionID string) string {
 		fmt.Fprintf(&b, "%s %s\n", mark, c.Area.Title)
 	}
 
+	// Dangerous combinations across the findings: report the real, compounded
+	// impact rather than a list of separate medium-severity issues.
+	if chains := engagement.DetectChains(evidence); len(chains) > 0 {
+		b.WriteString("\nPotential chains (verify and report the combined impact):\n")
+		for _, ch := range chains {
+			fmt.Fprintf(&b, "- %s — %s\n", ch.Name, ch.Impact)
+		}
+	}
+
 	if _, directive := engagement.NextStep(states); directive != "" {
 		b.WriteString("\nNext: " + directive + "\n")
 	}
