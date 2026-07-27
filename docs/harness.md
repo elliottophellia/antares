@@ -141,6 +141,23 @@ A long autonomous run with all four:
 6. The judge agrees the goal is met and the run ends.
 7. `/learn` keeps the migration procedure for the next one.
 
+## Undo
+
+Every write and edit copies what was there first, keyed by session.
+
+```
+/rollback              list what changed
+/rollback all          put all of it back
+/rollback <path>       put one file back
+```
+
+The first copy of a file wins, so rolling back returns it to how it was before
+the session started rather than before the most recent edit — undoing one step
+of five is rarely what "undo this" means. A file that did not exist before is
+deleted, because that is what restoring it means.
+
+Bare `/rollback` only lists. Undoing work takes a second word.
+
 ## Tuning
 
 | Setting | Default | What it controls |

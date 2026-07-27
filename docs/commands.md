@@ -76,6 +76,10 @@ intercepted before the message reaches the model.
 | `/retry` | Resend the last message |
 | `/stop` | Interrupt the turn in flight |
 | `/copy` | Copy the last reply |
+| `/title [name]` | Show or rename this conversation |
+| `/fork [name]` | Copy it, to try another direction without losing this one |
+| `/undo` | Remove the last exchange |
+| `/export [markdown\|json]` | Write it to a file |
 
 ### Long work
 
@@ -87,6 +91,8 @@ intercepted before the message reaches the model.
 | `/goal clear` | Drop it |
 | `/steer <instruction>` | Redirect a run that is already going |
 | `/learn [focus]` | Turn this session into a reusable skill |
+| `/rollback` | List the files this session changed |
+| `/rollback all` \| `/rollback <path>` | Put them back |
 
 See [the harness](harness.md) for what these actually do.
 
