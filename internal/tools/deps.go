@@ -128,6 +128,11 @@ type Deps struct {
 	Roles func() []RoleInfo
 	// Vision describes an image using a vision model. It may be nil.
 	Vision func(ctx context.Context, data []byte, mime, question string) (string, error)
+	// Speak synthesises speech from text, returning the audio and its extension.
+	// It may be nil.
+	Speak func(ctx context.Context, text, voice string) (audio []byte, ext string, err error)
+	// Transcribe turns speech audio into text. It may be nil.
+	Transcribe func(ctx context.Context, filename string, audio []byte) (string, error)
 	// Findings is the security engagement ledger. It may be nil.
 	Findings FindingStore
 	// Intel is the engagement's fact ledger and methodology. It may be nil.

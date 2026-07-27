@@ -26,6 +26,8 @@ func init() {
 		methodologyStatusTool{},
 		imageGenerateTool{},
 		visionTool{},
+		speakTool{},
+		transcribeTool{},
 		diagnosticsTool{},
 	} {
 		globalRegistry.Register(t)

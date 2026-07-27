@@ -45,6 +45,11 @@ type Model struct {
 	Auxiliary string `yaml:"auxiliary" json:"auxiliary"`
 	Vision    string `yaml:"vision" json:"vision"`
 	Embedding string `yaml:"embedding" json:"embedding"`
+	// TTS, STT, and Voice configure the voice tools. Empty uses sensible
+	// defaults (tts-1 / whisper-1 / alloy) against an OpenAI-compatible provider.
+	TTS   string `yaml:"tts" json:"tts"`
+	STT   string `yaml:"stt" json:"stt"`
+	Voice string `yaml:"voice" json:"voice"`
 
 	Temperature      float64 `yaml:"temperature" json:"temperature"`
 	TopP             float64 `yaml:"top_p" json:"top_p"`

@@ -584,6 +584,8 @@ func (a *Agent) executeTools(
 				Checkpoint: a.saveCheckpoint,
 				Roles:      a.roleInfos,
 				Vision:     a.describeImage,
+				Speak:      a.speak,
+				Transcribe: a.transcribe,
 				Findings:   a.findings,
 				Intel:      a.intel,
 			},

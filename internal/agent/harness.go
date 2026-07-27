@@ -774,3 +774,42 @@ func (a *Agent) describeImage(ctx context.Context, data []byte, mime, question s
 	}
 	return strings.TrimSpace(resp.Content), nil
 }
+
+// audioClient builds a raw (unwrapped) client that supports the audio endpoints.
+// Audio needs an OpenAI-compatible provider; anything else returns a clear error.
+func (a *Agent) audioClient() (llm.AudioClient, error) {
+	id, p := a.cfg.ResolveProvider(a.cfg.Model.Provider)
+	client, err := llm.New(llm.Options{
+		Kind: p.Kind, BaseURL: p.BaseURL, APIKey: p.APIKey,
+		Headers: p.Headers, ProviderID: id, Timeout: 2 * time.Minute,
+	})
+	if err != nil {
+		return nil, err
+	}
+	ac, ok := client.(llm.AudioClient)
+	if !ok {
+		return nil, fmt.Errorf("the %s provider has no audio support — set an OpenAI-compatible provider for voice", id)
+	}
+	return ac, nil
+}
+
+// speak synthesises speech from text.
+func (a *Agent) speak(ctx context.Context, text, voice string) ([]byte, string, error) {
+	ac, err := a.audioClient()
+	if err != nil {
+		return nil, "", err
+	}
+	if voice == "" {
+		voice = firstNonEmpty(a.cfg.Model.Voice, "alloy")
+	}
+	return ac.Speak(ctx, a.cfg.Model.TTS, voice, "mp3", text)
+}
+
+// transcribe turns speech audio into text.
+func (a *Agent) transcribe(ctx context.Context, filename string, audio []byte) (string, error) {
+	ac, err := a.audioClient()
+	if err != nil {
+		return "", err
+	}
+	return ac.Transcribe(ctx, a.cfg.Model.STT, filename, audio)
+}

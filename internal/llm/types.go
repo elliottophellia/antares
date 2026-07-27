@@ -147,3 +147,13 @@ type Client interface {
 	// Embed produces embedding vectors, or ErrUnsupported.
 	Embed(ctx context.Context, model string, inputs []string) ([][]float32, error)
 }
+
+// AudioClient is an optional capability: text-to-speech and speech-to-text.
+// Adapters that support it (the OpenAI family) implement it; callers type-assert.
+type AudioClient interface {
+	// Speak synthesises speech from text, returning the audio bytes and the file
+	// extension for them (e.g. "mp3").
+	Speak(ctx context.Context, model, voice, format, text string) ([]byte, string, error)
+	// Transcribe turns speech audio into text.
+	Transcribe(ctx context.Context, model, filename string, audio []byte) (string, error)
+}
