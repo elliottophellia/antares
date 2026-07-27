@@ -6,9 +6,10 @@
 
 <p align="center">A self-hosted AI agent. Go backend, React dashboard, one binary.</p>
 
-Antares reads and writes files, runs shell commands, searches the web, remembers
-what matters across sessions, retrieves from a semantic index, schedules its own
-work, and answers from Telegram and Discord — all from a single process you run
+Antares reads and writes files, runs shell commands, drives a real browser,
+searches the web, remembers what matters across sessions, retrieves from a
+semantic index, schedules its own work, keeps working towards a goal across
+turns, and answers from Telegram and Discord — all from a single process you run
 on your own machine.
 
 ```
@@ -103,6 +104,8 @@ antares config path
 | `tools.toolset` | Which tools the model gets: `minimal`, `coding`, `research`, `default`, `all` |
 | `rag.provider` | `builtin` (internal vector store) or `enowx` (enowx-rag daemon) |
 | `gateway.telegram` / `gateway.discord` | Messaging bots |
+| `tools.browser` | The real-browser tool: executable, viewport, headed mode |
+| `agent.verify_replies` | Check a finished answer against the request before showing it |
 
 ### Providers
 
@@ -140,9 +143,36 @@ created automatically on first run.
 ## What it can do
 
 **Tools.** File read/write/edit, directory listing, glob, regex search, a
-persistent shell (working directory and environment survive between calls), web
-search and fetch, long-term memory, cross-session search, semantic retrieval,
-task lists, skill authoring, and sub-agent delegation.
+persistent shell (working directory and environment survive between calls), a
+real browser, web search and fetch, long-term memory, cross-session search,
+semantic retrieval, task lists, skill authoring, and sub-agent delegation.
+
+**A real browser.** Antares drives an actual Chromium over the DevTools
+protocol — no driver binary and no Node. Pages are described rather than
+screenshotted: a snapshot lists what a person could act on, each with a
+reference the model names to click or type into. The page persists between
+tool calls, so a login holds while the agent keeps working. See
+[docs/browser.md](docs/browser.md).
+
+**Slash commands.** `/status`, `/model`, `/skills`, `/goal`, and two dozen more
+work identically in the terminal, in the web chat, and in a Telegram or Discord
+thread, because all three dispatch through one definition. The web composer
+completes them as you type. See [docs/commands.md](docs/commands.md).
+
+**A hub.** Skills and MCP servers have a browsable catalogue with one-click
+install. Eight skills ship inside the binary; beyond those, a skill can come
+from any public GitHub repository or any URL serving a `SKILL.md`. Installed
+skills are scanned first — a skill is prompt text the model follows, so one that
+pipes a download into a shell is refused rather than quietly obeyed. See
+[docs/hub.md](docs/hub.md).
+
+**A harness that survives long work.** A repetition guard catches a model
+calling the same thing with the same arguments and tells it to change approach.
+Steering delivers an instruction typed while a run is already going. Optional
+verification runs a second model over a finished answer to catch work that was
+described but not done. Standing goals outlive a turn: a judge decides whether
+the goal is really met and, if not, names the next step. See
+[docs/harness.md](docs/harness.md).
 
 **Memory.** The agent decides what is worth keeping and writes it to durable
 storage. Memories are injected into the system prompt on every turn, bounded by
@@ -197,6 +227,9 @@ internal/
   cron/               schedule parser and runner
   gateway/            Telegram and Discord adapters
   mcp/                Model Context Protocol client
+  browser/            Chrome DevTools Protocol client and page control
+  hub/                skill and MCP catalogue, and the installers
+  commands/           slash commands, shared by every surface
   tui/                the terminal interface
   server/             HTTP API and dashboard hosting
   wsutil/             minimal RFC 6455 client
@@ -229,6 +262,29 @@ catches that class of failure; nothing static does.
 
 `antares doctor` checks the config file, workspace, database, provider
 credentials, and RAG backend in one pass.
+
+---
+
+## Documentation
+
+| Guide | What it covers |
+|---|---|
+| [Getting started](docs/getting-started.md) | Install, first run, connecting a provider |
+| [Configuration](docs/configuration.md) | Every setting, and where it can be set |
+| [Tools](docs/tools.md) | The tool surface and the toolsets |
+| [Browser](docs/browser.md) | Driving a real browser |
+| [Skills](docs/skills.md) | Writing, installing, and learning skills |
+| [Hub](docs/hub.md) | The skill and MCP catalogue |
+| [Commands](docs/commands.md) | Every slash command |
+| [Harness](docs/harness.md) | Goals, steering, verification, repetition guard |
+| [Memory and RAG](docs/memory-and-rag.md) | What is remembered, and retrieval |
+| [Channels](docs/channels.md) | Telegram and Discord |
+| [Scheduling](docs/scheduling.md) | Cron jobs and delivery |
+| [MCP](docs/mcp.md) | External Model Context Protocol servers |
+| [HTTP API](docs/api.md) | Every endpoint |
+| [Deployment](docs/deployment.md) | Running it as a service |
+| [Architecture](docs/architecture.md) | How the pieces fit |
+| [Development](docs/development.md) | Building and testing |
 
 ---
 
