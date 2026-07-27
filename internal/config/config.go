@@ -149,6 +149,7 @@ type Tools struct {
 	WebSearch      WebSearch         `yaml:"web_search" json:"web_search"`
 	Browser        Browser           `yaml:"browser" json:"browser"`
 	HTTP           HTTP              `yaml:"http" json:"http"`
+	ComputerUse    bool              `yaml:"computer_use" json:"computer_use"`
 	Platform       map[string]string `yaml:"platform_toolsets" json:"platform_toolsets"`
 }
 
