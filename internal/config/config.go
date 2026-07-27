@@ -54,6 +54,10 @@ type Model struct {
 	// MaxRetries is how many times a transient provider failure (429, 5xx,
 	// dropped connection) is retried with backoff. Zero uses a safe default.
 	MaxRetries int `yaml:"max_retries" json:"max_retries"`
+	// Fallback lists models to try, in order, when the primary fails after its
+	// retries — each a bare model id or "provider/model". A whole provider
+	// outage or a decommissioned model then degrades instead of erroring.
+	Fallback []string `yaml:"fallback" json:"fallback"`
 	// Panel is the set of models /panel asks. Two or more, or the command has
 	// nothing to compare.
 	Panel []string `yaml:"panel" json:"panel"`

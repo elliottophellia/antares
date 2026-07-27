@@ -6,15 +6,49 @@ import (
 	"strings"
 	"time"
 
+	"log/slog"
+
 	"github.com/enowdev/antares/internal/llm"
 )
 
 // newClient builds the provider adapter for a model. When the model name is
-// qualified as "provider/model", the prefix selects the provider.
+// qualified as "provider/model", the prefix selects the provider. When fallback
+// models are configured, the returned client tries each in turn on a hard
+// failure.
 func (a *Agent) newClient(modelOverride string) (client llm.Client, model, provider string, err error) {
+	primary, model, provider, err := a.resolveClient(modelOverride)
+	if err != nil {
+		return nil, "", "", err
+	}
+
+	// Only the default path (no explicit override) uses the fallback chain, so
+	// a deliberately chosen model is honoured exactly.
+	entries := []llm.FallbackEntry{{Client: primary, Model: model}}
+	if modelOverride == "" {
+		for _, spec := range a.cfg.Model.Fallback {
+			spec = strings.TrimSpace(spec)
+			if spec == "" {
+				continue
+			}
+			fc, fm, _, ferr := a.resolveClient(spec)
+			if ferr != nil {
+				slog.Debug("fallback model unavailable", "spec", spec, "error", ferr)
+				continue
+			}
+			entries = append(entries, llm.FallbackEntry{Client: fc, Model: fm})
+		}
+	}
+	return llm.NewFallback(entries), model, provider, nil
+}
+
+// resolveClient builds one provider adapter for a model spec.
+func (a *Agent) resolveClient(modelOverride string) (client llm.Client, model, provider string, err error) {
 	cfg := a.cfg
 	model = firstNonEmpty(modelOverride, cfg.Model.Default)
 	provider = cfg.Model.Provider
+	if modelOverride != "" {
+		provider = "" // a spec resolves its own provider from a prefix
+	}
 
 	if model == "" {
 		return nil, "", "", fmt.Errorf("no model selected — set model.default in Settings or pick one on the Models page")
