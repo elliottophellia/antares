@@ -147,8 +147,134 @@ func (m *Manager) Register(reg *tools.Registry) []string {
 			registered = append(registered, t.name)
 		}
 	}
+	// One manager-level tool surfaces resources across every server. The
+	// mcp__ prefix means the toolset resolver includes it opt-out, like the
+	// remote tools.
+	if len(m.clients) > 0 {
+		reg.Register(&resourceTool{m: m})
+		registered = append(registered, "mcp__resource")
+	}
 	sort.Strings(registered)
 	return registered
+}
+
+// resourceTool exposes MCP resources (list/read) across all connected servers.
+type resourceTool struct{ m *Manager }
+
+func (t *resourceTool) Name() string { return "mcp__resource" }
+func (t *resourceTool) Description() string {
+	return "List and read resources exposed by connected MCP servers. " +
+		"`list` shows every available resource and its uri; `read` fetches one by uri."
+}
+func (t *resourceTool) RequiresApproval() bool { return false }
+func (t *resourceTool) Schema() map[string]any {
+	return map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"action": map[string]any{"type": "string", "enum": []string{"list", "read"}, "description": "What to do."},
+			"uri":    map[string]any{"type": "string", "description": "For read: the resource uri from list."},
+		},
+		"required": []string{"action"},
+	}
+}
+
+func (t *resourceTool) Execute(ctx context.Context, in tools.Input) tools.Result {
+	var args struct {
+		Action string `json:"action"`
+		URI    string `json:"uri"`
+	}
+	if len(in.Args) > 0 {
+		if err := json.Unmarshal(in.Args, &args); err != nil {
+			return tools.Errorf("invalid arguments: %v", err)
+		}
+	}
+	switch strings.ToLower(strings.TrimSpace(args.Action)) {
+	case "list", "":
+		res := t.m.ListResources(ctx)
+		if len(res) == 0 {
+			return tools.Text("No MCP resources are available.")
+		}
+		var b strings.Builder
+		fmt.Fprintf(&b, "%d MCP resource(s):\n\n", len(res))
+		for _, r := range res {
+			name := r.Name
+			if name == "" {
+				name = r.URI
+			}
+			fmt.Fprintf(&b, "- %s (%s): %s\n", name, r.URI, r.Description)
+		}
+		b.WriteString("\nRead one with action=read and its uri.")
+		return tools.Text(b.String())
+	case "read":
+		if strings.TrimSpace(args.URI) == "" {
+			return tools.Errorf("uri is required to read a resource")
+		}
+		text, err := t.m.ReadResource(ctx, args.URI)
+		if err != nil {
+			return tools.Errorf("%v", err)
+		}
+		return tools.Text(text)
+	default:
+		return tools.Errorf("unknown action %q (want list or read)", args.Action)
+	}
+}
+
+// ListResources aggregates resources from every connected server, prefixing
+// each with its server so the same-named resource on two servers stays distinct.
+func (m *Manager) ListResources(ctx context.Context) []ResourceView {
+	m.mu.RLock()
+	clients := make(map[string]*Client, len(m.clients))
+	for k, v := range m.clients {
+		clients[k] = v
+	}
+	m.mu.RUnlock()
+
+	var out []ResourceView
+	for server, client := range clients {
+		res, err := client.ListResources(ctx)
+		if err != nil {
+			continue // server does not implement resources
+		}
+		for _, r := range res {
+			out = append(out, ResourceView{
+				Server: server, URI: r.URI, Name: r.Name, Description: r.Description, MimeType: r.MimeType,
+			})
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].URI < out[j].URI })
+	return out
+}
+
+// ReadResource reads a resource by URI from whichever server exposes it.
+func (m *Manager) ReadResource(ctx context.Context, uri string) (string, error) {
+	m.mu.RLock()
+	clients := make([]*Client, 0, len(m.clients))
+	for _, v := range m.clients {
+		clients = append(clients, v)
+	}
+	m.mu.RUnlock()
+
+	var lastErr error
+	for _, client := range clients {
+		text, err := client.ReadResource(ctx, uri)
+		if err == nil {
+			return text, nil
+		}
+		lastErr = err
+	}
+	if lastErr != nil {
+		return "", lastErr
+	}
+	return "", fmt.Errorf("no MCP server has a resource with uri %q", uri)
+}
+
+// ResourceView is one resource with the server that hosts it.
+type ResourceView struct {
+	Server      string
+	URI         string
+	Name        string
+	Description string
+	MimeType    string
 }
 
 // remoteTool adapts one MCP tool to the local tool interface.

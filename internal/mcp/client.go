@@ -254,6 +254,78 @@ func (c *Client) Call(ctx context.Context, tool string, args map[string]any) (*C
 	return &CallResult{Text: text, IsError: out.IsError}, nil
 }
 
+// ResourceDef describes an MCP resource a server exposes.
+type ResourceDef struct {
+	URI         string `json:"uri"`
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	MimeType    string `json:"mimeType"`
+}
+
+// ListResources returns the resources a server offers. A server that does not
+// implement resources answers with an error, which is reported as none.
+func (c *Client) ListResources(ctx context.Context) ([]ResourceDef, error) {
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	resp, err := c.transport.send(ctx, rpcRequest{
+		JSONRPC: "2.0", ID: c.nextID(), Method: "resources/list",
+	})
+	if err != nil {
+		return nil, err
+	}
+	if resp.Error != nil {
+		return nil, resp.Error
+	}
+	var out struct {
+		Resources []ResourceDef `json:"resources"`
+	}
+	if err := json.Unmarshal(resp.Result, &out); err != nil {
+		return nil, err
+	}
+	return out.Resources, nil
+}
+
+// ReadResource fetches one resource's contents by URI and flattens them to text.
+func (c *Client) ReadResource(ctx context.Context, uri string) (string, error) {
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	resp, err := c.transport.send(ctx, rpcRequest{
+		JSONRPC: "2.0", ID: c.nextID(), Method: "resources/read",
+		Params: map[string]any{"uri": uri},
+	})
+	if err != nil {
+		return "", err
+	}
+	if resp.Error != nil {
+		return "", resp.Error
+	}
+	var out struct {
+		Contents []struct {
+			URI      string `json:"uri"`
+			MimeType string `json:"mimeType"`
+			Text     string `json:"text"`
+			Blob     string `json:"blob"`
+		} `json:"contents"`
+	}
+	if err := json.Unmarshal(resp.Result, &out); err != nil {
+		return "", err
+	}
+	var b strings.Builder
+	for _, part := range out.Contents {
+		if part.Text != "" {
+			b.WriteString(part.Text)
+			b.WriteString("\n")
+		} else if part.Blob != "" {
+			fmt.Fprintf(&b, "[binary resource: %s, %d bytes base64]\n", part.MimeType, len(part.Blob))
+		}
+	}
+	text := strings.TrimSpace(b.String())
+	if text == "" {
+		text = "(resource is empty)"
+	}
+	return text, nil
+}
+
 // Close shuts down the connection.
 func (c *Client) Close() error { return c.transport.Close() }
 
