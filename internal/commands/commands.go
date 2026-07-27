@@ -138,6 +138,9 @@ func init() {
 	register(Spec{Name: "steer", Args: "<instruction>", Summary: "Redirect the run that is already going", Surfaces: anywhere}, cmdSteer)
 	register(Spec{Name: "learn", Args: "[focus]", Summary: "Turn this session into a reusable skill", Surfaces: anywhere}, cmdLearn)
 	register(Spec{Name: "panel", Args: "[question]", Summary: "Ask several models and synthesise one answer", Surfaces: anywhere}, cmdPanel)
+	register(Spec{Name: "roles", Summary: "List the specialist roles available", Surfaces: anywhere}, cmdRoles)
+	register(Spec{Name: "role", Args: "[name]", Summary: "Run this conversation as a specialist role", Surfaces: anywhere}, cmdRole)
+	register(Spec{Name: "scope", Args: "[add|remove|list|check] [target]", Summary: "Manage the authorized security-testing scope", Surfaces: anywhere}, cmdScope)
 	register(Spec{Name: "rollback", Args: "[all|path]", Summary: "Undo the file changes made in this session", Surfaces: anywhere}, cmdRollback)
 }
 

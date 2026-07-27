@@ -25,6 +25,7 @@ import (
 	"github.com/enowdev/antares/internal/mcp"
 	"github.com/enowdev/antares/internal/plugin"
 	"github.com/enowdev/antares/internal/rag"
+	"github.com/enowdev/antares/internal/roles"
 	"github.com/enowdev/antares/internal/server"
 	"github.com/enowdev/antares/internal/skills"
 	"github.com/enowdev/antares/internal/store"
@@ -209,6 +210,10 @@ func bootstrap(ctx context.Context) (*runtimeServices, error) {
 		ag.SetPlugins(pluginMgr)
 	}
 
+	roleReg := roles.NewRegistry(expandAll(cfg.Roles.Dirs))
+	_ = roleReg.Reload()
+	ag.SetRoles(roleReg)
+
 	rt := &runtimeServices{cfg: cfg, db: db, shell: shell, agent: ag, skills: skillMgr}
 
 	// MCP servers are optional; a failing one is recorded, never fatal.
@@ -383,6 +388,10 @@ func (rt *runtimeServices) reload() error {
 	} else {
 		rt.agent.SetPlugins(nil)
 	}
+
+	roleReg := roles.NewRegistry(expandAll(cfg.Roles.Dirs))
+	_ = roleReg.Reload()
+	rt.agent.SetRoles(roleReg)
 
 	// The gateway holds its own pointer; without this it would keep reconciling
 	// against the configuration it was constructed with.

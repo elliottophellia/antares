@@ -41,9 +41,12 @@ type SubAgentRequest struct {
 	SystemExtra string
 	Toolset     string
 	Model       string
-	MaxTurns    int
-	ParentID    string
-	OnProgress  func(Progress)
+	// Role names a specialist to run this workstream as. It sets the prompt,
+	// toolset, and model unless those are given explicitly.
+	Role       string
+	MaxTurns   int
+	ParentID   string
+	OnProgress func(Progress)
 }
 
 // SkillLibrary is the subset of the skills manager that tools need.
@@ -75,4 +78,14 @@ type Deps struct {
 	// Checkpoint saves a copy of a file about to be changed. It may be nil,
 	// in which case nothing is kept and an edit cannot be undone.
 	Checkpoint func(sessionID, path, tool string)
+	// Roles lists the specialist roles available for delegation. It may be nil.
+	Roles func() []RoleInfo
+}
+
+// RoleInfo is the subset of a role the tools need.
+type RoleInfo struct {
+	Name     string
+	Summary  string
+	Category string
+	Danger   bool
 }

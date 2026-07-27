@@ -15,7 +15,9 @@ import (
 	"github.com/enowdev/antares/internal/checkpoint"
 	"github.com/enowdev/antares/internal/llm"
 	"github.com/enowdev/antares/internal/plugin"
+	"github.com/enowdev/antares/internal/roles"
 	"github.com/enowdev/antares/internal/store"
+	"github.com/enowdev/antares/internal/tools"
 )
 
 // The harness is everything around the model call that makes a long run
@@ -615,4 +617,53 @@ func (a *Agent) Panel(ctx context.Context, question string, models []string, emi
 		return usable[0].Answer, answers, nil
 	}
 	return strings.TrimSpace(resp.Content), answers, nil
+}
+
+// ---- roles -------------------------------------------------------------------
+
+// SetRoles attaches the role registry.
+func (a *Agent) SetRoles(r *roles.Registry) { a.roles = r }
+
+// Roles exposes the registry.
+func (a *Agent) Roles() *roles.Registry { return a.roles }
+
+// applyRole folds a named role's prompt, toolset, and model into the request.
+// The role's values fill only what the request left blank, so an explicit
+// override on the request wins.
+func (a *Agent) applyRole(req *Request) {
+	if a.roles == nil || strings.TrimSpace(req.Role) == "" {
+		return
+	}
+	role, ok := a.roles.Get(req.Role)
+	if !ok {
+		return
+	}
+	if role.Prompt != "" {
+		if req.SystemExtra != "" {
+			req.SystemExtra = role.Prompt + "\n\n" + req.SystemExtra
+		} else {
+			req.SystemExtra = role.Prompt
+		}
+	}
+	if req.Toolset == "" && role.Toolset != "" {
+		req.Toolset = role.Toolset
+	}
+	if req.Model == "" && role.Model != "" {
+		req.Model = role.Model
+	}
+}
+
+// roleInfos exposes the roles to the tools layer.
+func (a *Agent) roleInfos() []tools.RoleInfo {
+	if a.roles == nil {
+		return nil
+	}
+	list := a.roles.List()
+	out := make([]tools.RoleInfo, 0, len(list))
+	for _, r := range list {
+		out = append(out, tools.RoleInfo{
+			Name: r.Name, Summary: r.Summary, Category: r.Category, Danger: r.Danger,
+		})
+	}
+	return out
 }

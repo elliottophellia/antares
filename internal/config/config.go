@@ -17,6 +17,8 @@ type Config struct {
 	RAG           RAG                 `yaml:"rag" json:"rag"`
 	Skills        Skills              `yaml:"skills" json:"skills"`
 	Plugins       Plugins             `yaml:"plugins" json:"plugins"`
+	Roles         Roles               `yaml:"roles" json:"roles"`
+	Security      Security            `yaml:"security" json:"security"`
 	Cron          Cron                `yaml:"cron" json:"cron"`
 	Gateway       Gateway             `yaml:"gateway" json:"gateway"`
 	Delegation    Delegation          `yaml:"delegation" json:"delegation"`
@@ -222,6 +224,22 @@ type RAG struct {
 	EnowxProject  string `yaml:"enowx_project" json:"enowx_project"`
 	EnowxRerank   bool   `yaml:"enowx_rerank" json:"enowx_rerank"`
 	EnowxCompress bool   `yaml:"enowx_compress" json:"enowx_compress"`
+}
+
+// Security holds settings for the authorized-security roles.
+type Security struct {
+	// Scope is the list of targets security roles may test: exact hosts,
+	// wildcard domains (*.example.com), or CIDR ranges. Empty authorizes
+	// nothing — the tools fail closed.
+	Scope []string `yaml:"scope" json:"scope"`
+	// RequireScope, when true, makes the scope_check tool refuse rather than
+	// warn on an out-of-scope target.
+	RequireScope bool `yaml:"require_scope" json:"require_scope"`
+}
+
+// Roles configures the specialist agent roles.
+type Roles struct {
+	Dirs []string `yaml:"dirs" json:"dirs"`
 }
 
 // Plugins configures external programs that hook into the agent.

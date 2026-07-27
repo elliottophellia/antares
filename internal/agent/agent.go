@@ -18,6 +18,7 @@ import (
 	"github.com/enowdev/antares/internal/config"
 	"github.com/enowdev/antares/internal/llm"
 	"github.com/enowdev/antares/internal/plugin"
+	"github.com/enowdev/antares/internal/roles"
 	"github.com/enowdev/antares/internal/skills"
 	"github.com/enowdev/antares/internal/store"
 	"github.com/enowdev/antares/internal/tools"
@@ -91,6 +92,9 @@ type Request struct {
 	MaxTurns int
 	// SystemExtra is appended to the system prompt (used by sub-agents).
 	SystemExtra string
+	// Role names a specialist whose prompt, toolset, and model are applied
+	// before the run. Empty is the general assistant.
+	Role string
 	// Quiet suppresses persistence, used for one-shot internal runs.
 	Quiet bool
 	// Depth guards against unbounded delegation recursion.
@@ -115,6 +119,7 @@ type Agent struct {
 	skills  *skills.Manager
 	checks  *checkpoint.Store
 	plugins *plugin.Manager
+	roles   *roles.Registry
 
 	mu     sync.Mutex
 	active map[string]context.CancelFunc
@@ -125,6 +130,7 @@ func New(cfg *config.Config, db store.Store, reg *tools.Registry, shell *tools.S
 	return &Agent{
 		cfg: cfg, db: db, reg: reg, shell: shell, rag: ragProvider,
 		checks: checkpoint.NewStore(config.Path("checkpoints")),
+		roles:  roles.NewRegistry(nil),
 		active: map[string]context.CancelFunc{},
 	}
 }
@@ -188,6 +194,16 @@ func (a *Agent) Run(ctx context.Context, req Request, emit Emit) (*Result, error
 	if err != nil {
 		return nil, err
 	}
+
+	// A role folds its prompt, toolset, and model into the request. When the
+	// request names none, the session's stored role applies — set once with
+	// /role and remembered across turns. An explicit request value wins.
+	if strings.TrimSpace(req.Role) == "" && a.db != nil {
+		if stored, err := a.db.GetKV(ctx, "role:"+sess.ID); err == nil {
+			req.Role = stored
+		}
+	}
+	a.applyRole(&req)
 	if !req.Quiet {
 		if err := emit(Event{Type: EventSession, ID: sess.ID, Title: sess.Title}); err != nil {
 			return nil, err
@@ -545,6 +561,7 @@ func (a *Agent) executeTools(
 				Config: a.cfg, Store: a.db, RAG: a.rag, Shell: a.shell,
 				Sub: a.subAgentFor(req), Skills: a.skillLibrary(),
 				Checkpoint: a.saveCheckpoint,
+				Roles:      a.roleInfos,
 			},
 		}
 
@@ -632,6 +649,8 @@ func (a *Agent) subAgentFor(parent Request) tools.SubAgent {
 			Message:     sub.Prompt,
 			SystemExtra: sub.SystemExtra,
 			Toolset:     sub.Toolset,
+			Model:       sub.Model,
+			Role:        sub.Role,
 			MaxTurns:    sub.MaxTurns,
 			Platform:    "subagent",
 			UserID:      parent.UserID,

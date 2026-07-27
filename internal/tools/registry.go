@@ -181,17 +181,17 @@ var Toolsets = map[string][]string{
 	"minimal": {"read_file", "list_files", "grep", "todo"},
 	"coding": {
 		"read_file", "write_file", "edit_file", "list_files", "glob", "grep",
-		"terminal", "todo", "skill", "delegate_task",
+		"terminal", "todo", "skill", "delegate_task", "list_roles",
 	},
 	"research": {
 		"read_file", "web_search", "web_fetch", "browser", "grep", "todo", "memory",
-		"session_search", "rag_search", "skill",
+		"session_search", "rag_search", "skill", "scope_check",
 	},
-	"browser": {"browser", "web_search", "web_fetch", "read_file", "write_file", "todo"},
+	"browser": {"browser", "web_search", "web_fetch", "read_file", "write_file", "todo", "scope_check"},
 	"default": {
 		"read_file", "write_file", "edit_file", "list_files", "glob", "grep",
 		"terminal", "web_search", "web_fetch", "browser", "todo", "memory",
-		"session_search", "rag_search", "rag_index", "skill", "delegate_task",
+		"session_search", "rag_search", "rag_index", "skill", "delegate_task", "list_roles",
 	},
 	"all": nil, // resolved dynamically to every registered tool
 }

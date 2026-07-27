@@ -99,6 +99,7 @@ func Default() *Config {
 		Plugins: Plugins{
 			Enabled: true, Dirs: []string{"~/.antares/plugins"},
 		},
+		Roles: Roles{Dirs: []string{"~/.antares/roles"}},
 		Skills: Skills{
 			Enabled: true, Dirs: []string{"~/.antares/skills"},
 			CreationNudgeInterval: 25, AutoCreate: true,
