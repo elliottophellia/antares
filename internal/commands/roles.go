@@ -48,7 +48,10 @@ func cmdRoles(_ context.Context, d Deps, in Input) (Result, error) {
 	var b strings.Builder
 	fmt.Fprintf(&b, "**%d role(s)**\n", len(list))
 	for _, g := range groups {
-		fmt.Fprintf(&b, "\n_%s_\n", humanCategory(g.name))
+		// A bold header with blank lines around it: emphasis (_x_) renders as an
+		// underline in many clients, and a list needs a blank line before it to
+		// render as bullets rather than one run-on paragraph.
+		fmt.Fprintf(&b, "\n**%s**\n\n", humanCategory(g.name))
 		b.WriteString(strings.Join(g.lines, "\n"))
 		b.WriteString("\n")
 	}
