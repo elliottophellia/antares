@@ -13,7 +13,7 @@ import {
   Warning,
   X,
 } from '@phosphor-icons/react'
-import { get, post, streamPost, type StreamEvent } from '@/lib/api'
+import { get, post, streamGet, streamPost, type StreamEvent } from '@/lib/api'
 import { useStickyScroll } from '@/lib/hooks'
 import { useI18n, useTimeAgo, type MessageKey } from '@/lib/i18n'
 import { cn } from '@/lib/utils'
@@ -263,6 +263,145 @@ export default function ChatPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionId])
 
+  useEffect(() => setPaletteSel(0), [input])
+
+  // Leaving the page closes our stream connection, but the turn runs detached on
+  // the server, so it keeps going and we reattach to it on return.
+  useEffect(() => () => abortRef.current?.(), [])
+
+  // Grow the composer with its content, up to ~8 rows.
+  useEffect(() => {
+    const el = textareaRef.current
+    if (!el) return
+    el.style.height = 'auto'
+    el.style.height = `${Math.min(el.scrollHeight, 200)}px`
+  }, [input])
+
+  const stop = useCallback(() => {
+    abortRef.current?.()
+    abortRef.current = null
+    setStreaming(false)
+  }, [])
+
+  // Apply one stream event to the named assistant message. Shared by a fresh
+  // send and a reattach, so both render a turn identically. Session handling
+  // differs between the two (navigate vs. title-only), so it is delegated.
+  const applyEvent = useCallback(
+    (
+      assistantId: string,
+      event: StreamEvent,
+      onSession?: (id: string, title?: string) => void,
+    ) => {
+      const patchAssistant = (fn: (m: ChatMessage) => ChatMessage) =>
+        setMessages((prev) => prev.map((m) => (m.id === assistantId ? fn(m) : m)))
+      switch (event.type) {
+        case 'session':
+          onSession?.(
+            typeof event.id === 'string' ? event.id : '',
+            typeof event.title === 'string' ? event.title : undefined,
+          )
+          break
+        case 'text':
+          patchAssistant((m) => appendSeg(m, 'text', String(event.delta ?? '')))
+          break
+        case 'reasoning':
+          patchAssistant((m) => appendSeg(m, 'reasoning', String(event.delta ?? '')))
+          break
+        case 'tool_call':
+          setLive((s) => ({ turn: s.turn + 1, tool: String(event.name ?? '') }))
+          patchAssistant((m) =>
+            pushToolSeg(m, {
+              id: String(event.id ?? ''),
+              name: String(event.name ?? ''),
+              args: String(event.arguments ?? ''),
+              running: true,
+            }),
+          )
+          break
+        case 'tool_progress':
+          patchAssistant((m) =>
+            updateToolSeg(m, String(event.id ?? ''), (c) => ({
+              ...c,
+              progress: (c.progress ?? '') + String(event.chunk ?? event.message ?? ''),
+            })),
+          )
+          break
+        case 'tool_result':
+          setLive((s) => ({ ...s, tool: undefined }))
+          patchAssistant((m) =>
+            updateToolSeg(m, String(event.id ?? ''), (c) => ({
+              ...c,
+              result: String(event.content ?? ''),
+              isError: !!event.is_error,
+              running: false,
+            })),
+          )
+          break
+        case 'usage':
+          patchAssistant((m) => ({
+            ...m,
+            tokensIn: Number(event.input_tokens ?? m.tokensIn ?? 0),
+            tokensOut: Number(event.output_tokens ?? m.tokensOut ?? 0),
+          }))
+          break
+        case 'error':
+          patchAssistant((m) => ({
+            ...m,
+            error: String(event.error ?? t('chat.somethingWrong')),
+          }))
+          break
+      }
+    },
+    [t],
+  )
+
+  // Reconnect to a turn still running for this session (after navigating away
+  // and back). Replays from the start, so no tokens are missed, and builds the
+  // assistant message lazily — if nothing is live, the server says done at once
+  // and no empty bubble appears. Returns a closer.
+  const attachLive = useCallback(
+    (sid: string) => {
+      let assistantId: string | null = null
+      let close: (() => void) | undefined
+      const ensure = () => {
+        if (assistantId) return assistantId
+        assistantId = `live_${Date.now()}_a`
+        setMessages((prev) => [
+          ...prev,
+          { id: assistantId as string, role: 'assistant', content: '' },
+        ])
+        setStreaming(true)
+        setLive({ turn: 1 })
+        return assistantId
+      }
+      close = streamGet(
+        `/chat/attach?session_id=${encodeURIComponent(sid)}&cursor=0`,
+        (event) => {
+          if (event.type === 'done') {
+            setStreaming(false)
+            close?.() // stop EventSource from auto-reconnecting
+            if (assistantId) {
+              // Swap our live-built turn for the canonical persisted one.
+              get<SessionDetail>(`/sessions/${sid}`)
+                .then((d) => setMessages(hydrate(d)))
+                .catch(() => {})
+            }
+            return
+          }
+          applyEvent(ensure(), event, (_id, evtTitle) => {
+            if (evtTitle) setTitle(evtTitle)
+          })
+        },
+        () => {
+          setStreaming(false)
+          close?.()
+        },
+      )
+      return close
+    },
+    [applyEvent],
+  )
+
   useEffect(() => {
     if (!sessionId) {
       setMessages([])
@@ -278,11 +417,17 @@ export default function ChatPage() {
       return
     }
     setLoading(true)
+    let cancelled = false
+    let closeAttach: (() => void) | undefined
     get<SessionDetail>(`/sessions/${sessionId}`)
       .then((d) => {
+        if (cancelled) return
         setMessages(hydrate(d))
         setTitle(d.session.title || t('chat.conversation'))
         setError(undefined)
+        // Once the persisted history is on screen, reconnect to any turn still
+        // in flight for this session so streaming continues where it left off.
+        closeAttach = attachLive(sessionId)
       })
     get<{ role?: string }>(`/sessions/${sessionId}/role`)
       .then((r) => setRole(r.role ?? ''))
@@ -290,23 +435,11 @@ export default function ChatPage() {
       .catch((e: Error) => setError(e.message))
       .finally(() => setLoading(false))
     // t is stable per language; refetching on language change is harmless.
-  }, [sessionId, t])
-
-  useEffect(() => setPaletteSel(0), [input])
-
-  // Grow the composer with its content, up to ~8 rows.
-  useEffect(() => {
-    const el = textareaRef.current
-    if (!el) return
-    el.style.height = 'auto'
-    el.style.height = `${Math.min(el.scrollHeight, 200)}px`
-  }, [input])
-
-  const stop = useCallback(() => {
-    abortRef.current?.()
-    abortRef.current = null
-    setStreaming(false)
-  }, [])
+    return () => {
+      cancelled = true
+      closeAttach?.()
+    }
+  }, [sessionId, t, attachLive])
 
   /** Append a locally-produced message without touching the server. */
   const pushSystem = useCallback((content: string) => {
@@ -404,79 +537,24 @@ export default function ChatPage() {
     setStreaming(true)
     setLive({ turn: 1 })
 
-    const patchAssistant = (fn: (m: ChatMessage) => ChatMessage) =>
-      setMessages((prev) => prev.map((m) => (m.id === assistantId ? fn(m) : m)))
-
     abortRef.current = streamPost(
       '/chat',
       { session_id: sessionIdRef.current ?? '', message: text, images: attached, role },
       (event: StreamEvent) => {
-        switch (event.type) {
-          case 'session':
-            if (typeof event.id === 'string' && event.id) {
-              // Adopt the real session id at once, so the next message posts to
-              // it rather than opening another session.
-              sessionIdRef.current = event.id
+        applyEvent(assistantId, event, (id, evtTitle) => {
+          if (id) {
+            // Adopt the real session id at once, so the next message posts to it
+            // rather than opening another session.
+            sessionIdRef.current = id
+            if (!sessionId) {
+              // Remember this id so the hydrate the navigation triggers does not
+              // overwrite the messages we are streaming right now.
+              localSessionRef.current = id
+              navigate(`/c/${id}`, { replace: true })
             }
-            if (!sessionId && typeof event.id === 'string') {
-              // Remember this id so the hydrate effect the navigation triggers
-              // does not overwrite the messages we are streaming right now.
-              localSessionRef.current = event.id
-              navigate(`/c/${event.id}`, { replace: true })
-            }
-            if (typeof event.title === 'string' && event.title) setTitle(event.title)
-            break
-          case 'text':
-            patchAssistant((m) => appendSeg(m, 'text', String(event.delta ?? '')))
-            break
-          case 'reasoning':
-            patchAssistant((m) => appendSeg(m, 'reasoning', String(event.delta ?? '')))
-            break
-          case 'tool_call':
-            setLive((s) => ({ turn: s.turn + 1, tool: String(event.name ?? '') }))
-            patchAssistant((m) =>
-              pushToolSeg(m, {
-                id: String(event.id ?? ''),
-                name: String(event.name ?? ''),
-                args: String(event.arguments ?? ''),
-                running: true,
-              }),
-            )
-            break
-          case 'tool_progress':
-            patchAssistant((m) =>
-              updateToolSeg(m, String(event.id ?? ''), (c) => ({
-                ...c,
-                progress: (c.progress ?? '') + String(event.chunk ?? event.message ?? ''),
-              })),
-            )
-            break
-          case 'tool_result':
-            // The tool finished; back to thinking until the next call or text.
-            setLive((s) => ({ ...s, tool: undefined }))
-            patchAssistant((m) =>
-              updateToolSeg(m, String(event.id ?? ''), (c) => ({
-                ...c,
-                result: String(event.content ?? ''),
-                isError: !!event.is_error,
-                running: false,
-              })),
-            )
-            break
-          case 'usage':
-            patchAssistant((m) => ({
-              ...m,
-              tokensIn: Number(event.input_tokens ?? m.tokensIn ?? 0),
-              tokensOut: Number(event.output_tokens ?? m.tokensOut ?? 0),
-            }))
-            break
-          case 'error':
-            patchAssistant((m) => ({
-              ...m,
-              error: String(event.error ?? t('chat.somethingWrong')),
-            }))
-            break
-        }
+          }
+          if (evtTitle) setTitle(evtTitle)
+        })
       },
       (err) => {
         setError(err.message)
@@ -491,7 +569,7 @@ export default function ChatPage() {
         localSessionRef.current = null
       },
     )
-  }, [input, images, role, streaming, sessionId, navigate, runCommand, t])
+  }, [input, images, role, streaming, sessionId, navigate, runCommand, applyEvent, t])
 
   const complete = (c: CommandSpec) => {
     // Commands that take arguments keep the composer open on a trailing space;

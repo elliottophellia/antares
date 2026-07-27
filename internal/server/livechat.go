@@ -1,0 +1,109 @@
+package server
+
+import (
+	"context"
+	"sync"
+
+	"github.com/enowdev/antares/internal/agent"
+)
+
+// liveRun is an append-only log of one turn's events that any number of SSE
+// clients can replay and then follow. It lets a turn outlive the HTTP request
+// that started it: the run is driven on a background context and publishes here,
+// so a client that navigates away and comes back can reattach and keep watching
+// instead of losing the turn.
+type liveRun struct {
+	mu      sync.Mutex
+	events  []agent.Event
+	done    bool
+	updated chan struct{} // closed on every change; replaced under the lock
+}
+
+func newLiveRun() *liveRun { return &liveRun{updated: make(chan struct{})} }
+
+func (lr *liveRun) signal() {
+	close(lr.updated)
+	lr.updated = make(chan struct{})
+}
+
+// publish appends an event and wakes every follower.
+func (lr *liveRun) publish(e agent.Event) {
+	lr.mu.Lock()
+	lr.events = append(lr.events, e)
+	lr.signal()
+	lr.mu.Unlock()
+}
+
+// finish marks the run complete so followers return once caught up.
+func (lr *liveRun) finish() {
+	lr.mu.Lock()
+	if !lr.done {
+		lr.done = true
+		lr.signal()
+	}
+	lr.mu.Unlock()
+}
+
+// follow replays events from cursor, then blocks for new ones until the run
+// finishes or ctx is cancelled (the client disconnected). send stops the follow
+// early by returning an error.
+func (lr *liveRun) follow(ctx context.Context, cursor int, send func(agent.Event) error) error {
+	i := cursor
+	for {
+		lr.mu.Lock()
+		for i < len(lr.events) {
+			e := lr.events[i]
+			i++
+			lr.mu.Unlock()
+			if err := send(e); err != nil {
+				return err
+			}
+			lr.mu.Lock()
+		}
+		if lr.done {
+			lr.mu.Unlock()
+			return nil
+		}
+		wait := lr.updated
+		lr.mu.Unlock()
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-wait:
+		}
+	}
+}
+
+// liveHub tracks the in-flight run per session so a reconnecting client can find
+// it. A run is registered while it streams and removed once it completes (by
+// then its result is persisted, so a returning client hydrates it instead).
+type liveHub struct {
+	mu   sync.Mutex
+	runs map[string]*liveRun
+}
+
+func newLiveHub() *liveHub { return &liveHub{runs: make(map[string]*liveRun)} }
+
+func (h *liveHub) put(session string, lr *liveRun) {
+	if session == "" {
+		return
+	}
+	h.mu.Lock()
+	h.runs[session] = lr
+	h.mu.Unlock()
+}
+
+func (h *liveHub) get(session string) *liveRun {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.runs[session]
+}
+
+func (h *liveHub) remove(session string, lr *liveRun) {
+	h.mu.Lock()
+	// Only remove if it is still the same run (a newer turn may have replaced it).
+	if h.runs[session] == lr {
+		delete(h.runs, session)
+	}
+	h.mu.Unlock()
+}

@@ -38,6 +38,7 @@ type Server struct {
 	gateway *gateway.Manager
 	mcp     *mcp.Manager
 	mux     *http.ServeMux
+	hub     *liveHub
 	started time.Time
 
 	// distFS holds the embedded dashboard build, when present.
@@ -76,6 +77,7 @@ func New(o Options) *Server {
 		gateway:  o.Gateway,
 		mcp:      o.MCP,
 		mux:      http.NewServeMux(),
+		hub:      newLiveHub(),
 		started:  time.Now(),
 		distFS:   o.Dist,
 		reloadFn: o.Reload,

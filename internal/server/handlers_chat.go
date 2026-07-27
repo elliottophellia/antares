@@ -1,11 +1,13 @@
 package server
 
 import (
+	"context"
 	"encoding/base64"
 	"errors"
 	"log/slog"
 	"net/http"
 	"runtime"
+	"strconv"
 	"strings"
 	"time"
 
@@ -157,20 +159,82 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		Toolset:   req.Toolset,
 	}
 
-	// Run streams its own error and done events, so nothing is re-sent here.
-	// A brand-new conversation gets its session id here; store the picked role
-	// against it so a reload reflects it.
+	// The turn is driven on a background context so it survives this request:
+	// navigating away no longer cancels the model, and a returning client can
+	// reattach through /chat/attach. Events flow into a liveRun; this request is
+	// just the first follower. Interrupt still stops it (agent.Interrupt keys off
+	// the session id), and the run persists its own messages as it goes.
+	lr := newLiveRun()
+	s.hub.put(req.SessionID, lr) // existing session: findable immediately
+	sessionKey := req.SessionID
+
 	emit := func(e agent.Event) error {
-		if e.Type == agent.EventSession && e.ID != "" && req.SessionID == "" && s.db != nil {
-			if strings.TrimSpace(req.Role) != "" {
-				_ = s.db.SetKV(ctx, "role:"+e.ID, req.Role)
+		if e.Type == agent.EventSession && e.ID != "" && sessionKey == "" {
+			// Brand-new conversation: register the run under its real id so a
+			// reattach can find it, and remember the picked role.
+			sessionKey = e.ID
+			s.hub.put(e.ID, lr)
+			if strings.TrimSpace(req.Role) != "" && s.db != nil {
+				_ = s.db.SetKV(context.Background(), "role:"+e.ID, req.Role)
 			}
 		}
-		return sse.send(e)
+		lr.publish(e)
+		return nil // a follower leaving must never fail the run
 	}
-	if _, err := s.agent.Run(ctx, agentReq, emit); err != nil && ctx.Err() == nil {
-		slog.Debug("chat turn failed", "error", err)
+
+	go func() {
+		defer func() {
+			lr.finish()
+			s.hub.remove(sessionKey, lr)
+		}()
+		if _, err := s.agent.Run(context.Background(), agentReq, emit); err != nil {
+			slog.Debug("chat turn failed", "error", err)
+		}
+	}()
+
+	// Follow the run until it finishes or this client disconnects.
+	_ = lr.follow(ctx, 0, func(e agent.Event) error { return sse.send(e) })
+}
+
+// handleChatAttach reconnects a client to a turn already in flight for a session
+// (e.g. after navigating away and back), replaying from the given cursor. If no
+// run is live, it reports done at once so the client falls back to the persisted
+// history it already hydrated.
+func (s *Server) handleChatAttach(w http.ResponseWriter, r *http.Request) {
+	session := r.URL.Query().Get("session_id")
+	cursor, _ := strconv.Atoi(r.URL.Query().Get("cursor"))
+
+	sse, err := newSSE(w)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
 	}
+
+	lr := s.hub.get(session)
+	if lr == nil {
+		_ = sse.send(agent.Event{Type: agent.EventDone})
+		return
+	}
+
+	ctx := r.Context()
+	stopPing := make(chan struct{})
+	defer close(stopPing)
+	go func() {
+		t := time.NewTicker(20 * time.Second)
+		defer t.Stop()
+		for {
+			select {
+			case <-stopPing:
+				return
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				sse.comment("keepalive")
+			}
+		}
+	}()
+
+	_ = lr.follow(ctx, cursor, func(e agent.Event) error { return sse.send(e) })
 }
 
 // decodeImages accepts data URLs and bare base64 payloads.
