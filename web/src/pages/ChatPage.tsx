@@ -13,7 +13,7 @@ import {
   Warning,
   X,
 } from '@phosphor-icons/react'
-import { get, post, streamGet, streamPost, type StreamEvent } from '@/lib/api'
+import { ApiError, get, post, streamGet, streamPost, type StreamEvent } from '@/lib/api'
 import { copyText } from '@/lib/clipboard'
 import { useStickyScroll } from '@/lib/hooks'
 import { useI18n, useTimeAgo, type MessageKey } from '@/lib/i18n'
@@ -357,9 +357,18 @@ export default function ChatPage() {
   )
 
   // Reconnect to a turn still running for this session (after navigating away
-  // and back). Replays from the start, so no tokens are missed, and builds the
-  // assistant message lazily — if nothing is live, the server says done at once
-  // and no empty bubble appears. Returns a closer.
+  // and back). Replays from the given cursor, so no tokens are missed, and
+  // builds the assistant message lazily — if nothing is live, the server says
+  // done at once and no empty bubble appears. Returns a closer.
+  //
+  // The done handler ALWAYS re-hydrates the persisted session, regardless of
+  // whether any event arrived. That covers the race where the turn finished
+  // between the user navigating away and back: the initial hydrate in the
+  // outer useEffect ran against a stale DB snapshot (the assistant message
+  // is persisted at end-of-turn), and the attach's `done` is the earliest
+  // moment we know the canonical state is available. Skipping the re-fetch
+  // when no event came (the previous behaviour) left the chat showing the
+  // pre-turn state — the symptom that looked like "session disappeared".
   const attachLive = useCallback(
     (sid: string) => {
       let assistantId: string | null = null
@@ -381,12 +390,18 @@ export default function ChatPage() {
           if (event.type === 'done') {
             setStreaming(false)
             close?.() // stop EventSource from auto-reconnecting
-            if (assistantId) {
-              // Swap our live-built turn for the canonical persisted one.
-              get<SessionDetail>(`/sessions/${sid}`)
-                .then((d) => setMessages(hydrate(d)))
-                .catch(() => {})
-            }
+            // Always swap whatever we have for the canonical persisted turn.
+            // If we built an assistant bubble live, this replaces it with the
+            // final form. If nothing ever streamed (turn already finished
+            // server-side), the initial hydrate in the outer useEffect may
+            // have raced with end-of-turn persistence — this fetch is the
+            // correction.
+            get<SessionDetail>(`/sessions/${sid}`)
+              .then((d) => {
+                setMessages(hydrate(d))
+                setTitle(d.session.title || t('chat.conversation'))
+              })
+              .catch(() => {})
             return
           }
           applyEvent(ensure(), event, (_id, evtTitle) => {
@@ -400,7 +415,7 @@ export default function ChatPage() {
       )
       return close
     },
-    [applyEvent],
+    [applyEvent, t],
   )
 
   useEffect(() => {
@@ -430,10 +445,26 @@ export default function ChatPage() {
         // in flight for this session so streaming continues where it left off.
         closeAttach = attachLive(sessionId)
       })
+      .catch((e: unknown) => {
+        if (cancelled) return
+        // The session does not exist (e.g. a stale "last conversation" pointer
+        // to a session that was deleted). Forget it and drop to a fresh chat
+        // instead of getting stuck on a blank, dead url.
+        if (e instanceof ApiError && e.status === 404) {
+          if (localStorage.getItem('antares:last-session') === sessionId) {
+            localStorage.removeItem('antares:last-session')
+          }
+          setMessages([])
+          setTitle('')
+          setError(undefined)
+          navigate('/', { replace: true, state: { fresh: true } })
+          return
+        }
+        setError(e instanceof Error ? e.message : String(e))
+      })
     get<{ role?: string }>(`/sessions/${sessionId}/role`)
       .then((r) => setRole(r.role ?? ''))
       .catch(() => {})
-      .catch((e: Error) => setError(e.message))
       .finally(() => setLoading(false))
     // t is stable per language; refetching on language change is harmless.
     return () => {
@@ -547,10 +578,13 @@ export default function ChatPage() {
             // Adopt the real session id at once, so the next message posts to it
             // rather than opening another session.
             sessionIdRef.current = id
-            if (!sessionId) {
-              // Remember this id so the hydrate the navigation triggers does not
-              // overwrite the messages we are streaming right now.
+            if (id !== sessionId) {
+              // The server assigned this id — either a brand-new chat, or the
+              // one in the url was stale/missing so a fresh session was created.
+              // Point the url at the real session (and remember it so the hydrate
+              // the navigation triggers does not overwrite the live messages).
               localSessionRef.current = id
+              localStorage.setItem('antares:last-session', id)
               navigate(`/c/${id}`, { replace: true })
             }
           }
