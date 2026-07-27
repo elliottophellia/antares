@@ -890,20 +890,36 @@ func ensureToolResults(msgs []llm.Message) []llm.Message {
 	out := make([]llm.Message, 0, len(msgs))
 	for i := 0; i < len(msgs); i++ {
 		m := msgs[i]
+		// A tool message is only valid immediately after an assistant message
+		// carrying tool_calls; those are consumed in the inner loop below. Any
+		// tool message that reaches here is an orphan — its assistant tool_calls
+		// was dropped (e.g. by compaction), and providers reject a tool message
+		// that does not answer a preceding tool_calls. Drop it.
+		if m.Role == llm.RoleTool {
+			continue
+		}
 		out = append(out, m)
 		if m.Role != llm.RoleAssistant || len(m.ToolCalls) == 0 {
 			continue
 		}
-		// Emit the tool results already present contiguously after this turn,
-		// recording which call ids they cover.
+		ids := make(map[string]bool, len(m.ToolCalls))
+		for _, tc := range m.ToolCalls {
+			ids[tc.ID] = true
+		}
+		// Emit the tool results that follow and match one of this turn's call
+		// ids, recording which ids are covered; unknown or duplicate tool
+		// results are dropped.
 		covered := make(map[string]bool, len(m.ToolCalls))
 		j := i + 1
 		for j < len(msgs) && msgs[j].Role == llm.RoleTool {
-			covered[msgs[j].ToolCallID] = true
-			out = append(out, msgs[j])
+			t := msgs[j]
+			if ids[t.ToolCallID] && !covered[t.ToolCallID] {
+				covered[t.ToolCallID] = true
+				out = append(out, t)
+			}
 			j++
 		}
-		// Stub any call that never produced a result.
+		// Stub any call that never produced a matching result.
 		for _, tc := range m.ToolCalls {
 			if !covered[tc.ID] {
 				out = append(out, llm.Message{
@@ -914,7 +930,7 @@ func ensureToolResults(msgs []llm.Message) []llm.Message {
 				})
 			}
 		}
-		i = j - 1 // skip the tool messages already appended
+		i = j - 1 // skip the tool messages we just processed
 	}
 	return out
 }

@@ -127,7 +127,7 @@ func (s *Session) Start(ctx context.Context) error {
 
 	// Chrome opens its debug port a moment after the process starts.
 	var info versionInfo
-	deadline := time.Now().Add(20 * time.Second)
+	deadline := time.Now().Add(45 * time.Second)
 	for {
 		var err error
 		info, err = fetchVersion(ctx, base)
