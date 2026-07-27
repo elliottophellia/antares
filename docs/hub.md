@@ -34,7 +34,9 @@ POST /api/hub/mcp/install      {"id": "github"}
 
 ### What ships
 
-Eight skills are written into `~/.antares/skills` the first time Antares runs:
+Fourteen skills are written into `~/.antares/skills` the first time Antares
+runs — eight general, and six security methodology procedures for the security
+roles (authorized testing only):
 
 | Skill | For |
 |---|---|
@@ -46,6 +48,12 @@ Eight skills are written into `~/.antares/skills` the first time Antares runs:
 | `browser-automation` | Driving a website reliably |
 | `shell-safely` | Commands that delete or overwrite |
 | `git-workflow` | Branching, committing, and pull requests |
+| `pentest-recon` | Mapping an authorized target's attack surface |
+| `owasp-access-control` | Testing for broken access control |
+| `owasp-injection` | Testing for injection flaws |
+| `owasp-authentication` | Testing authentication and sessions |
+| `owasp-ssrf` | Testing for server-side request forgery |
+| `pentest-reporting` | Writing an assessment report |
 
 Seeding happens once. A `.seeded` marker records that it did, so a skill you
 delete on purpose stays deleted. Delete the marker to have them restored.
