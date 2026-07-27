@@ -41,17 +41,62 @@ export interface ToolCallView {
   running?: boolean
 }
 
+/** One part of an assistant turn, in the order it happened. */
+export type Segment =
+  | { kind: 'text'; text: string }
+  | { kind: 'reasoning'; text: string }
+  | { kind: 'tool'; call: ToolCallView }
+
 export interface ChatMessage {
   id: string
   role: 'user' | 'assistant' | 'tool' | 'system'
   content: string
   reasoning?: string
   toolCalls?: ToolCallView[]
+  // segments is the timeline: text, reasoning, and tool calls interleaved as
+  // they arrived, so the transcript reads in the order the model worked.
+  segments?: Segment[]
   createdAt?: string
   tokensIn?: number
   tokensOut?: number
   error?: string
   images?: string[]
+}
+
+/** Append a text or reasoning delta, extending the last segment when it is the
+ *  same kind so a streamed sentence stays one block. */
+function appendSeg(m: ChatMessage, kind: 'text' | 'reasoning', delta: string): ChatMessage {
+  const segs = m.segments ? [...m.segments] : []
+  const last = segs[segs.length - 1]
+  if (last && last.kind === kind) {
+    segs[segs.length - 1] = { kind, text: last.text + delta }
+  } else {
+    segs.push({ kind, text: delta })
+  }
+  return {
+    ...m,
+    segments: segs,
+    content: kind === 'text' ? m.content + delta : m.content,
+    reasoning: kind === 'reasoning' ? (m.reasoning ?? '') + delta : m.reasoning,
+  }
+}
+
+function pushToolSeg(m: ChatMessage, call: ToolCallView): ChatMessage {
+  return {
+    ...m,
+    segments: [...(m.segments ?? []), { kind: 'tool', call }],
+    toolCalls: [...(m.toolCalls ?? []), call],
+  }
+}
+
+function updateToolSeg(m: ChatMessage, id: string, fn: (c: ToolCallView) => ToolCallView): ChatMessage {
+  return {
+    ...m,
+    segments: (m.segments ?? []).map((seg) =>
+      seg.kind === 'tool' && seg.call.id === id ? { kind: 'tool', call: fn(seg.call) } : seg,
+    ),
+    toolCalls: (m.toolCalls ?? []).map((c) => (c.id === id ? fn(c) : c)),
+  }
 }
 
 interface SessionDetail {
@@ -110,6 +155,9 @@ function hydrate(detail: SessionDetail): ChatMessage[] {
         /* ignore malformed history */
       }
     }
+    const segments: Segment[] = []
+    if (msg.reasoning) segments.push({ kind: 'reasoning', text: msg.reasoning })
+    if (msg.content) segments.push({ kind: 'text', text: msg.content })
     if (m.tool_calls) {
       try {
         const parsed = JSON.parse(m.tool_calls) as Array<{
@@ -118,18 +166,16 @@ function hydrate(detail: SessionDetail): ChatMessage[] {
           arguments: string
         }>
         msg.toolCalls = parsed.map((c) => {
-          const view: ToolCallView = {
-            id: c.id,
-            name: c.name,
-            args: c.arguments,
-          }
+          const view: ToolCallView = { id: c.id, name: c.name, args: c.arguments }
           pending.set(c.id, view)
+          segments.push({ kind: 'tool', call: view })
           return view
         })
       } catch {
         /* ignore malformed history */
       }
     }
+    if (msg.role === 'assistant' && segments.length > 0) msg.segments = segments
     out.push(msg)
   }
   return out
@@ -333,58 +379,38 @@ export default function ChatPage() {
             if (typeof event.title === 'string' && event.title) setTitle(event.title)
             break
           case 'text':
-            patchAssistant((m) => ({
-              ...m,
-              content: m.content + String(event.delta ?? ''),
-            }))
+            patchAssistant((m) => appendSeg(m, 'text', String(event.delta ?? '')))
             break
           case 'reasoning':
-            patchAssistant((m) => ({
-              ...m,
-              reasoning: (m.reasoning ?? '') + String(event.delta ?? ''),
-            }))
+            patchAssistant((m) => appendSeg(m, 'reasoning', String(event.delta ?? '')))
             break
           case 'tool_call':
-            patchAssistant((m) => ({
-              ...m,
-              toolCalls: [
-                ...(m.toolCalls ?? []),
-                {
-                  id: String(event.id ?? ''),
-                  name: String(event.name ?? ''),
-                  args: String(event.arguments ?? ''),
-                  running: true,
-                },
-              ],
-            }))
+            patchAssistant((m) =>
+              pushToolSeg(m, {
+                id: String(event.id ?? ''),
+                name: String(event.name ?? ''),
+                args: String(event.arguments ?? ''),
+                running: true,
+              }),
+            )
             break
           case 'tool_progress':
-            patchAssistant((m) => ({
-              ...m,
-              toolCalls: (m.toolCalls ?? []).map((c) =>
-                c.id === event.id
-                  ? {
-                      ...c,
-                      progress: (c.progress ?? '') + String(event.chunk ?? event.message ?? ''),
-                    }
-                  : c,
-              ),
-            }))
+            patchAssistant((m) =>
+              updateToolSeg(m, String(event.id ?? ''), (c) => ({
+                ...c,
+                progress: (c.progress ?? '') + String(event.chunk ?? event.message ?? ''),
+              })),
+            )
             break
           case 'tool_result':
-            patchAssistant((m) => ({
-              ...m,
-              toolCalls: (m.toolCalls ?? []).map((c) =>
-                c.id === event.id
-                  ? {
-                      ...c,
-                      result: String(event.content ?? ''),
-                      isError: !!event.is_error,
-                      running: false,
-                    }
-                  : c,
-              ),
-            }))
+            patchAssistant((m) =>
+              updateToolSeg(m, String(event.id ?? ''), (c) => ({
+                ...c,
+                result: String(event.content ?? ''),
+                isError: !!event.is_error,
+                running: false,
+              })),
+            )
             break
           case 'usage':
             patchAssistant((m) => ({
@@ -777,11 +803,30 @@ function StreamingIndicator() {
   )
 }
 
+function ReasoningBlock({ text }: { text: string }) {
+  const { t } = useI18n()
+  const [open, setOpen] = useState(false)
+  return (
+    <div className="rounded-[var(--radius-sm)] border border-border bg-muted/40">
+      <button
+        onClick={() => setOpen((v) => !v)}
+        className="flex w-full items-center gap-1.5 px-3 py-2 text-[11px] font-medium text-muted-foreground"
+      >
+        <Brain className="size-3.5" />
+        {t('chat.reasoning')}
+        <CaretDown className={cn('ml-auto size-3 transition-transform', open && 'rotate-180')} />
+      </button>
+      {open ? (
+        <p className="whitespace-pre-wrap break-words px-3 pb-3 text-xs text-muted-foreground">{text}</p>
+      ) : null}
+    </div>
+  )
+}
+
 function MessageBubble({ message }: { message: ChatMessage }) {
   const { t } = useI18n()
   const timeAgo = useTimeAgo()
   const [copied, setCopied] = useState(false)
-  const [showReasoning, setShowReasoning] = useState(false)
 
   const copy = async () => {
     await navigator.clipboard.writeText(message.content)
@@ -833,35 +878,32 @@ function MessageBubble({ message }: { message: ChatMessage }) {
 
   return (
     <div className="group space-y-2 fade-up">
-      {message.reasoning ? (
-        <div className="rounded-[var(--radius-sm)] border border-border bg-muted/40">
-          <button
-            onClick={() => setShowReasoning((v) => !v)}
-            className="flex w-full items-center gap-1.5 px-3 py-2 text-[11px] font-medium text-muted-foreground"
-          >
-            <Brain className="size-3.5" />
-            {t('chat.reasoning')}
-            <CaretDown
-              className={cn('ml-auto size-3 transition-transform', showReasoning && 'rotate-180')}
-            />
-          </button>
-          {showReasoning ? (
-            <p className="whitespace-pre-wrap break-words px-3 pb-3 text-xs text-muted-foreground">
-              {message.reasoning}
-            </p>
-          ) : null}
-        </div>
-      ) : null}
-
-      {message.toolCalls?.map((call) => (
-        <ToolCallCard key={call.id} call={call} />
-      ))}
-
-      {message.content ? (
-        <div className="text-sm leading-relaxed">
-          <Markdown content={message.content} />
-        </div>
-      ) : null}
+      {message.segments && message.segments.length > 0
+        ? message.segments.map((seg, i) => {
+            if (seg.kind === 'reasoning') {
+              return <ReasoningBlock key={`r${i}`} text={seg.text} />
+            }
+            if (seg.kind === 'tool') {
+              return <ToolCallCard key={seg.call.id} call={seg.call} />
+            }
+            return (
+              <div key={`t${i}`} className="text-sm leading-relaxed">
+                <Markdown content={seg.text} />
+              </div>
+            )
+          })
+        : // Fallback for any message that predates the timeline model.
+          <>
+            {message.reasoning ? <ReasoningBlock text={message.reasoning} /> : null}
+            {message.toolCalls?.map((call) => (
+              <ToolCallCard key={call.id} call={call} />
+            ))}
+            {message.content ? (
+              <div className="text-sm leading-relaxed">
+                <Markdown content={message.content} />
+              </div>
+            ) : null}
+          </>}
 
       {message.error ? <ErrorBanner message={message.error} /> : null}
 
