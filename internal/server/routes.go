@@ -133,6 +133,9 @@ func (s *Server) routes() {
 	m.HandleFunc("POST /api/autopilot", s.handleAutopilotAdd)
 	m.HandleFunc("POST /api/autopilot/run", s.handleAutopilotRun)
 	m.HandleFunc("DELETE /api/autopilot/{id}", s.handleAutopilotRemove)
+
+	m.HandleFunc("GET /api/engagement/sessions", s.handleEngagementSessions)
+	m.HandleFunc("GET /api/engagement", s.handleEngagement)
 	m.HandleFunc("POST /api/pairing/approve", s.handleApprovePairing)
 	m.HandleFunc("POST /api/pairing/revoke", s.handleRevokePairing)
 
