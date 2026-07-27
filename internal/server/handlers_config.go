@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/enowdev/antares/internal/config"
+	"github.com/enowdev/antares/internal/llm"
 	"github.com/enowdev/antares/internal/tools"
 )
 
@@ -137,15 +138,19 @@ func (s *Server) handleModelOptions(w http.ResponseWriter, r *http.Request) {
 		Kind    string `json:"kind"`
 		Enabled bool   `json:"enabled"`
 		HasKey  bool   `json:"has_key"`
+		// Local endpoints need no credential, but that is not the same as being
+		// ready: nothing may be listening. The UI marks them differently.
+		Local   bool   `json:"local"`
 		BaseURL string `json:"base_url"`
 		Active  bool   `json:"active"`
 	}
 	providers := make([]providerInfo, 0, len(names))
 	for _, name := range names {
 		p := cfg.Providers[name]
+		local := isLocalEndpoint(p.BaseURL)
 		providers = append(providers, providerInfo{
 			ID: name, Label: firstNonEmpty(p.Label, name), Kind: p.Kind, Enabled: p.Enabled,
-			HasKey: p.APIKey != "" || isLocalEndpoint(p.BaseURL), BaseURL: p.BaseURL,
+			HasKey: p.APIKey != "", Local: local, BaseURL: p.BaseURL,
 			Active: name == cfg.Model.Provider,
 		})
 	}
@@ -171,8 +176,16 @@ func (s *Server) handleModelList(w http.ResponseWriter, r *http.Request) {
 
 	models, err := s.agent.Models(r.Context(), provider)
 	if err != nil {
-		// Report as a soft error so the page can still render the provider tab.
-		writeJSON(w, http.StatusOK, map[string]any{"models": []any{}, "error": err.Error()})
+		// Soft errors so the page can still render the tab. "Nothing is running
+		// there" is a different situation from "the provider said no", and the
+		// UI advises differently on each.
+		out := map[string]any{"models": []any{}, "error": err.Error(), "provider": id}
+		if llm.IsUnreachable(err) {
+			out["unreachable"] = true
+			out["base_url"] = p.BaseURL
+			out["local"] = isLocalEndpoint(p.BaseURL)
+		}
+		writeJSON(w, http.StatusOK, out)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"models": models})

@@ -1,13 +1,16 @@
 import { useEffect, useMemo, useState } from 'react'
 import {
+  ArrowClockwise,
   ArrowSquareOut,
   CheckCircle,
   Cpu,
+  Desktop,
   Eye,
   EyeSlash,
   Key,
   Lightning,
   MagnifyingGlass,
+  PlugsConnected,
   Warning,
   Wrench,
 } from '@phosphor-icons/react'
@@ -53,6 +56,7 @@ interface ProviderInfo {
   kind: string
   enabled: boolean
   has_key: boolean
+  local: boolean
   base_url: string
   active: boolean
 }
@@ -66,6 +70,18 @@ interface ModelListResponse {
   models: ModelInfo[]
   error?: string
   needs_key?: boolean
+  unreachable?: boolean
+  local?: boolean
+  base_url?: string
+}
+
+/**
+ * Older configs stored labels like "Ollama (local)". The tab now marks a local
+ * endpoint with an icon, so drop the suffix rather than reading it aloud in a
+ * sentence like "Ollama (local) is not running".
+ */
+function providerName(label: string): string {
+  return label.replace(/\s*\((local|lokal)\)\s*$/i, '').trim()
 }
 
 /** Where to get a key, per provider. Saves a search when one is missing. */
@@ -139,9 +155,11 @@ export default function ModelsPage() {
             <TabsList className="w-full justify-start overflow-x-auto">
               {data.providers.map((p) => (
                 <TabsTrigger key={p.id} value={p.id} className="gap-1.5">
-                  {p.label}
+                  {providerName(p.label)}
                   {p.has_key ? (
                     <CheckCircle className="size-3 text-[var(--success)]" weight="fill" />
+                  ) : p.local ? (
+                    <Desktop className="size-3 text-muted-foreground" />
                   ) : null}
                 </TabsTrigger>
               ))}
@@ -149,7 +167,15 @@ export default function ModelsPage() {
 
             {data.providers.map((p) => (
               <TabsContent key={p.id} value={p.id} className="space-y-3">
-                {modelsState.data?.needs_key ? (
+                {modelsState.data?.unreachable ? (
+                  <ProviderUnreachable
+                    provider={p}
+                    baseURL={modelsState.data.base_url ?? p.base_url}
+                    local={!!modelsState.data.local}
+                    onRetry={() => modelsState.reload()}
+                    retrying={modelsState.loading}
+                  />
+                ) : modelsState.data?.needs_key ? (
                   // No credential: connecting here beats sending the user to
                   // hunt for the field in Settings.
                   <ConnectProvider
@@ -306,7 +332,7 @@ function ConnectProvider({
       <CardHeader>
         <CardTitle className="flex items-center gap-2">
           <Key className="size-4 text-primary" weight="fill" />
-          {t('models.connectTitle', { provider: provider.label })}
+          {t('models.connectTitle', { provider: providerName(provider.label) })}
         </CardTitle>
         <CardDescription>{t('models.connectDesc')}</CardDescription>
       </CardHeader>
@@ -349,7 +375,7 @@ function ConnectProvider({
               rel="noreferrer noopener"
               className="inline-flex items-center gap-1.5 text-xs text-primary underline underline-offset-2"
             >
-              {t('setup.getKey', { provider: provider.label })}
+              {t('setup.getKey', { provider: providerName(provider.label) })}
               <ArrowSquareOut className="size-3.5" />
             </a>
           ) : null}
@@ -357,6 +383,50 @@ function ConnectProvider({
 
         <p className="text-[11px] leading-relaxed text-muted-foreground">
           {t('models.connectEnvHint', { provider: provider.id.toUpperCase() })}
+        </p>
+      </CardContent>
+    </Card>
+  )
+}
+
+/**
+ * Shown when the endpoint refuses the connection. For a local runtime that
+ * almost always means it simply is not running, which is advice, not an error.
+ */
+function ProviderUnreachable({
+  provider,
+  baseURL,
+  local,
+  onRetry,
+  retrying,
+}: {
+  provider: ProviderInfo
+  baseURL: string
+  local: boolean
+  onRetry: () => void
+  retrying: boolean
+}) {
+  const { t } = useI18n()
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2">
+          <PlugsConnected className="size-4 text-muted-foreground" />
+          {t('models.unreachableTitle', { provider: providerName(provider.label) })}
+        </CardTitle>
+        <CardDescription>
+          {local
+            ? t('models.unreachableLocal', { provider: providerName(provider.label), url: baseURL })
+            : t('models.unreachableRemote', { url: baseURL })}
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="flex flex-wrap items-center gap-3">
+        <Button size="sm" variant="outline" onClick={onRetry} loading={retrying} className="gap-1.5">
+          <ArrowClockwise className="size-4" />
+          {t('models.retry')}
+        </Button>
+        <p className="text-[11px] text-muted-foreground">
+          {t('models.unreachableHint', { provider: provider.id })}
         </p>
       </CardContent>
     </Card>

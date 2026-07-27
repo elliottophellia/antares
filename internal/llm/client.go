@@ -4,12 +4,17 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"net/url"
+	"os"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/enowdev/antares/internal/version"
@@ -200,7 +205,7 @@ func (o Options) do(ctx context.Context, method, url string, body any, headers m
 
 	resp, err := o.HTTPClient.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, describeTransport(err, url)
 	}
 	if resp.StatusCode >= 400 {
 		data, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<16))
@@ -208,6 +213,68 @@ func (o Options) do(ctx context.Context, method, url string, body any, headers m
 		return nil, &apiError{Status: resp.StatusCode, Body: string(data), URL: url}
 	}
 	return resp, nil
+}
+
+// TransportError is a connection failure, as opposed to a response the
+// provider actually sent. Callers use it to tell "your key is wrong" apart
+// from "nothing is listening there".
+type TransportError struct {
+	Host string
+	Kind string // refused|dns|timeout|tls|network
+	err  error
+}
+
+func (e *TransportError) Error() string {
+	switch e.Kind {
+	case "refused":
+		return fmt.Sprintf("nothing is listening at %s", e.Host)
+	case "dns":
+		return fmt.Sprintf("cannot resolve %s", e.Host)
+	case "timeout":
+		return fmt.Sprintf("%s did not respond in time", e.Host)
+	case "tls":
+		return fmt.Sprintf("the TLS handshake with %s failed", e.Host)
+	default:
+		return fmt.Sprintf("cannot reach %s", e.Host)
+	}
+}
+
+func (e *TransportError) Unwrap() error { return e.err }
+
+// IsUnreachable reports whether err is a connection failure rather than a
+// response from the provider.
+func IsUnreachable(err error) bool {
+	var te *TransportError
+	return errors.As(err, &te)
+}
+
+// describeTransport turns Go's layered network errors into one plain sentence.
+// The raw form — `Get "http://127.0.0.1:1234/v1/models": dial tcp ...:
+// connect: connection refused` — repeats the URL twice and buries the point.
+func describeTransport(err error, rawURL string) error {
+	host := rawURL
+	if u, perr := url.Parse(rawURL); perr == nil && u.Host != "" {
+		host = u.Scheme + "://" + u.Host
+	}
+
+	te := &TransportError{Host: host, Kind: "network", err: err}
+	switch {
+	case errors.Is(err, syscall.ECONNREFUSED):
+		te.Kind = "refused"
+	case errors.Is(err, context.DeadlineExceeded), os.IsTimeout(err):
+		te.Kind = "timeout"
+	}
+
+	var dnsErr *net.DNSError
+	if errors.As(err, &dnsErr) {
+		te.Kind = "dns"
+		te.Host = dnsErr.Name
+	}
+	var tlsErr *tls.CertificateVerificationError
+	if errors.As(err, &tlsErr) {
+		te.Kind = "tls"
+	}
+	return te
 }
 
 // sseLines walks an SSE body, calling fn with each `data:` payload.

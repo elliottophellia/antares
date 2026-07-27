@@ -34,11 +34,11 @@ func Default() *Config {
 				BaseURL: "https://generativelanguage.googleapis.com/v1beta", APIKeyEnv: "GEMINI_API_KEY", TimeoutSecs: 300,
 			},
 			"ollama": {
-				Kind: "openai-compatible", Label: "Ollama (local)", Enabled: false,
+				Kind: "openai-compatible", Label: "Ollama", Enabled: false,
 				BaseURL: "http://127.0.0.1:11434/v1", TimeoutSecs: 600,
 			},
 			"lmstudio": {
-				Kind: "openai-compatible", Label: "LM Studio (local)", Enabled: false,
+				Kind: "openai-compatible", Label: "LM Studio", Enabled: false,
 				BaseURL: "http://127.0.0.1:1234/v1", TimeoutSecs: 600,
 			},
 			"custom": {
