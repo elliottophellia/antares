@@ -106,11 +106,11 @@ func init() {
 
 	register(Spec{Name: "tools", Summary: "List the tools available this turn", Surfaces: anywhere}, cmdTools)
 	register(Spec{Name: "toolset", Args: "[name]", Summary: "Switch the active toolset", Surfaces: anywhere}, cmdToolset)
-	register(Spec{Name: "skills", Args: "[query]", Summary: "List stored skills", Surfaces: anywhere}, cmdSkills)
+	register(Spec{Name: "skills", Args: "[search|install] [id]", Summary: "List, search, or install skills", Surfaces: anywhere}, cmdSkills)
 	register(Spec{Name: "memory", Args: "[query]", Summary: "Search or list long-term memory", Surfaces: anywhere}, cmdMemory)
 	register(Spec{Name: "remember", Args: "<text>", Summary: "Save something to long-term memory", Surfaces: anywhere}, cmdRemember)
 	register(Spec{Name: "forget", Args: "<key>", Summary: "Delete a memory by key", Surfaces: anywhere}, cmdForget)
-	register(Spec{Name: "mcp", Summary: "Show MCP servers", Surfaces: anywhere}, cmdMCP)
+	register(Spec{Name: "mcp", Args: "[search|install] [id]", Summary: "Show, search, or install MCP servers", Surfaces: anywhere}, cmdMCP)
 	register(Spec{Name: "config", Args: "[path] [value]", Summary: "Read or set a config value", Surfaces: anywhere}, cmdConfig)
 	register(Spec{Name: "sessions", Summary: "List recent sessions", Surfaces: anywhere}, cmdSessions)
 	register(Spec{Name: "usage", Args: "[days]", Summary: "Token and cost summary", Surfaces: anywhere}, cmdUsage)

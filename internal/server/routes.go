@@ -98,6 +98,12 @@ func (s *Server) routes() {
 	// MCP
 	m.HandleFunc("GET /api/mcp", s.handleMCPStatus)
 
+	// Hub: browse and install skills and MCP servers.
+	m.HandleFunc("GET /api/hub/skills", s.handleHubSkills)
+	m.HandleFunc("POST /api/hub/skills/install", s.handleHubInstallSkill)
+	m.HandleFunc("GET /api/hub/mcp", s.handleHubMCP)
+	m.HandleFunc("POST /api/hub/mcp/install", s.handleHubInstallMCP)
+
 	// Slash commands, shared with the TUI and the messaging gateways.
 	m.HandleFunc("GET /api/commands", s.handleCommandList)
 	m.HandleFunc("POST /api/commands/run", s.handleCommandRun)

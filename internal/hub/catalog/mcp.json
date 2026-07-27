@@ -1,0 +1,190 @@
+[
+  {
+    "id": "filesystem",
+    "name": "Filesystem",
+    "summary": "Read and write files under directories you choose. Scoped to the paths you pass, nothing else.",
+    "tags": ["files", "official"],
+    "homepage": "https://github.com/modelcontextprotocol/servers/tree/main/src/filesystem",
+    "author": "Model Context Protocol",
+    "command": "npx",
+    "args": ["-y", "@modelcontextprotocol/server-filesystem", "${HOME}"],
+    "setup": "Edit the last argument to the directory you want exposed. Node is required."
+  },
+  {
+    "id": "fetch",
+    "name": "Fetch",
+    "summary": "Fetch a URL and convert it to markdown, with redirect and robots handling.",
+    "tags": ["web", "official"],
+    "homepage": "https://github.com/modelcontextprotocol/servers/tree/main/src/fetch",
+    "author": "Model Context Protocol",
+    "command": "uvx",
+    "args": ["mcp-server-fetch"],
+    "setup": "Needs uv (https://docs.astral.sh/uv/)."
+  },
+  {
+    "id": "git",
+    "name": "Git",
+    "summary": "Read a repository's history, diffs, and branches, and stage or commit changes.",
+    "tags": ["git", "official"],
+    "homepage": "https://github.com/modelcontextprotocol/servers/tree/main/src/git",
+    "author": "Model Context Protocol",
+    "command": "uvx",
+    "args": ["mcp-server-git", "--repository", "."],
+    "setup": "Point --repository at the checkout you want. Needs uv."
+  },
+  {
+    "id": "github",
+    "name": "GitHub",
+    "summary": "Issues, pull requests, code search, and repository management on GitHub.",
+    "tags": ["git", "github", "official"],
+    "homepage": "https://github.com/github/github-mcp-server",
+    "author": "GitHub",
+    "command": "npx",
+    "args": ["-y", "@modelcontextprotocol/server-github"],
+    "env": { "GITHUB_PERSONAL_ACCESS_TOKEN": "" },
+    "needs_keys": ["GITHUB_PERSONAL_ACCESS_TOKEN"],
+    "setup": "Create a personal access token with repo scope at https://github.com/settings/tokens."
+  },
+  {
+    "id": "postgres",
+    "name": "PostgreSQL",
+    "summary": "Inspect schemas and run read-only queries against a Postgres database.",
+    "tags": ["database", "official"],
+    "homepage": "https://github.com/modelcontextprotocol/servers/tree/main/src/postgres",
+    "author": "Model Context Protocol",
+    "command": "npx",
+    "args": ["-y", "@modelcontextprotocol/server-postgres", "postgresql://localhost/mydb"],
+    "setup": "Replace the connection string with your own."
+  },
+  {
+    "id": "sqlite",
+    "name": "SQLite",
+    "summary": "Query and modify a SQLite database file, with schema introspection.",
+    "tags": ["database"],
+    "homepage": "https://github.com/modelcontextprotocol/servers/tree/main/src/sqlite",
+    "author": "Model Context Protocol",
+    "command": "uvx",
+    "args": ["mcp-server-sqlite", "--db-path", "./data.db"],
+    "setup": "Point --db-path at your database. Needs uv."
+  },
+  {
+    "id": "memory",
+    "name": "Knowledge graph memory",
+    "summary": "A persistent knowledge graph of entities and relations the agent can add to and query.",
+    "tags": ["memory", "official"],
+    "homepage": "https://github.com/modelcontextprotocol/servers/tree/main/src/memory",
+    "author": "Model Context Protocol",
+    "command": "npx",
+    "args": ["-y", "@modelcontextprotocol/server-memory"]
+  },
+  {
+    "id": "sequential-thinking",
+    "name": "Sequential thinking",
+    "summary": "A scratchpad for step-by-step reasoning that can branch and revise earlier steps.",
+    "tags": ["reasoning", "official"],
+    "homepage": "https://github.com/modelcontextprotocol/servers/tree/main/src/sequentialthinking",
+    "author": "Model Context Protocol",
+    "command": "npx",
+    "args": ["-y", "@modelcontextprotocol/server-sequential-thinking"]
+  },
+  {
+    "id": "time",
+    "name": "Time and timezones",
+    "summary": "Current time anywhere, and conversion between timezones.",
+    "tags": ["utility", "official"],
+    "homepage": "https://github.com/modelcontextprotocol/servers/tree/main/src/time",
+    "author": "Model Context Protocol",
+    "command": "uvx",
+    "args": ["mcp-server-time"],
+    "setup": "Needs uv."
+  },
+  {
+    "id": "slack",
+    "name": "Slack",
+    "summary": "Read channels and threads, and post messages to a Slack workspace.",
+    "tags": ["chat", "official"],
+    "homepage": "https://github.com/modelcontextprotocol/servers/tree/main/src/slack",
+    "author": "Model Context Protocol",
+    "command": "npx",
+    "args": ["-y", "@modelcontextprotocol/server-slack"],
+    "env": { "SLACK_BOT_TOKEN": "", "SLACK_TEAM_ID": "" },
+    "needs_keys": ["SLACK_BOT_TOKEN", "SLACK_TEAM_ID"],
+    "setup": "Create a Slack app, add bot scopes, and install it to the workspace."
+  },
+  {
+    "id": "brave-search",
+    "name": "Brave Search",
+    "summary": "Web and local search through the Brave Search API.",
+    "tags": ["search", "web"],
+    "homepage": "https://github.com/modelcontextprotocol/servers/tree/main/src/brave-search",
+    "author": "Model Context Protocol",
+    "command": "npx",
+    "args": ["-y", "@modelcontextprotocol/server-brave-search"],
+    "env": { "BRAVE_API_KEY": "" },
+    "needs_keys": ["BRAVE_API_KEY"],
+    "setup": "Free tier keys at https://brave.com/search/api/."
+  },
+  {
+    "id": "puppeteer",
+    "name": "Puppeteer",
+    "summary": "Browser automation through Puppeteer. Antares has its own browser tool; use this when you want the Puppeteer API instead.",
+    "tags": ["browser", "web"],
+    "homepage": "https://github.com/modelcontextprotocol/servers/tree/main/src/puppeteer",
+    "author": "Model Context Protocol",
+    "command": "npx",
+    "args": ["-y", "@modelcontextprotocol/server-puppeteer"]
+  },
+  {
+    "id": "notion",
+    "name": "Notion",
+    "summary": "Search, read, and update Notion pages and databases.",
+    "tags": ["notes", "productivity"],
+    "homepage": "https://github.com/makenotion/notion-mcp-server",
+    "author": "Notion",
+    "command": "npx",
+    "args": ["-y", "@notionhq/notion-mcp-server"],
+    "env": { "NOTION_TOKEN": "" },
+    "needs_keys": ["NOTION_TOKEN"],
+    "setup": "Create an internal integration at https://www.notion.so/my-integrations and share the pages with it."
+  },
+  {
+    "id": "linear",
+    "name": "Linear",
+    "summary": "Issues, projects, and cycles in Linear.",
+    "tags": ["issues", "productivity"],
+    "homepage": "https://linear.app/docs/mcp",
+    "author": "Linear",
+    "url": "https://mcp.linear.app/sse",
+    "setup": "A hosted server — it will ask you to authorise on first use."
+  },
+  {
+    "id": "sentry",
+    "name": "Sentry",
+    "summary": "Look up issues and stack traces from Sentry.",
+    "tags": ["observability"],
+    "homepage": "https://docs.sentry.io/product/sentry-mcp/",
+    "author": "Sentry",
+    "url": "https://mcp.sentry.dev/sse",
+    "setup": "A hosted server — it will ask you to authorise on first use."
+  },
+  {
+    "id": "playwright",
+    "name": "Playwright",
+    "summary": "Accessibility-tree browser automation from the Playwright team.",
+    "tags": ["browser", "web", "testing"],
+    "homepage": "https://github.com/microsoft/playwright-mcp",
+    "author": "Microsoft",
+    "command": "npx",
+    "args": ["-y", "@playwright/mcp@latest"]
+  },
+  {
+    "id": "everything",
+    "name": "Everything (reference server)",
+    "summary": "Exercises every part of the protocol — tools, prompts, resources, and sampling. Useful for checking that MCP works at all.",
+    "tags": ["testing", "official"],
+    "homepage": "https://github.com/modelcontextprotocol/servers/tree/main/src/everything",
+    "author": "Model Context Protocol",
+    "command": "npx",
+    "args": ["-y", "@modelcontextprotocol/server-everything"]
+  }
+]

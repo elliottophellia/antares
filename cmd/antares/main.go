@@ -20,6 +20,7 @@ import (
 	"github.com/enowdev/antares/internal/config"
 	"github.com/enowdev/antares/internal/cron"
 	"github.com/enowdev/antares/internal/gateway"
+	"github.com/enowdev/antares/internal/hub"
 	"github.com/enowdev/antares/internal/logx"
 	"github.com/enowdev/antares/internal/mcp"
 	"github.com/enowdev/antares/internal/rag"
@@ -169,6 +170,15 @@ func bootstrap(ctx context.Context) (*runtimeServices, error) {
 	if err != nil {
 		slog.Warn("RAG disabled", "error", err)
 		ragProvider = nil
+	}
+
+	// A fresh install starts with the bundled skills already in place.
+	if len(cfg.Skills.Dirs) > 0 {
+		if n, err := hub.Seed(config.Expand(cfg.Skills.Dirs[0])); err != nil {
+			slog.Warn("could not write the bundled skills", "error", err)
+		} else if n > 0 {
+			slog.Info("installed the bundled skills", "count", n)
+		}
 	}
 
 	skillMgr := skills.NewManager(cfg.Skills.Dirs)

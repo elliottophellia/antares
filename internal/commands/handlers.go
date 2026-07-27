@@ -224,10 +224,18 @@ func cmdToolset(_ context.Context, d Deps, in Input) (Result, error) {
 	}, nil
 }
 
-func cmdSkills(_ context.Context, d Deps, in Input) (Result, error) {
+func cmdSkills(ctx context.Context, d Deps, in Input) (Result, error) {
 	if d.Skills == nil {
 		return Result{}, errNoSkills
 	}
+	// "/skills search foo" and "/skills install id" reach the hub; anything
+	// else lists what is already installed.
+	if verb, rest, _ := strings.Cut(in.Args, " "); verb == "search" || verb == "browse" {
+		return hubSkillSearch(ctx, d, strings.TrimSpace(rest))
+	} else if verb == "install" || verb == "add" {
+		return hubSkillInstall(ctx, d, strings.TrimSpace(rest))
+	}
+
 	list := d.Skills.List()
 	q := strings.ToLower(in.Args)
 	var b strings.Builder
@@ -246,6 +254,7 @@ func cmdSkills(_ context.Context, d Deps, in Input) (Result, error) {
 	if shown == 0 {
 		return Result{Output: "No skills match."}, nil
 	}
+	b.WriteString("\nFind more with `/skills search <words>`.")
 	return Result{Output: fmt.Sprintf("**%d skill(s)**\n\n", shown) + b.String()}, nil
 }
 
@@ -321,7 +330,12 @@ func cmdForget(ctx context.Context, d Deps, in Input) (Result, error) {
 	return Result{}, fmt.Errorf("no memory keyed %q", in.Args)
 }
 
-func cmdMCP(_ context.Context, d Deps, _ Input) (Result, error) {
+func cmdMCP(ctx context.Context, d Deps, in Input) (Result, error) {
+	if verb, rest, _ := strings.Cut(in.Args, " "); verb == "search" || verb == "browse" {
+		return hubMCPSearch(ctx, d, strings.TrimSpace(rest))
+	} else if verb == "install" || verb == "add" {
+		return hubMCPInstall(ctx, d, strings.TrimSpace(rest))
+	}
 	if d.MCP == nil {
 		return Result{}, errNoMCP
 	}
