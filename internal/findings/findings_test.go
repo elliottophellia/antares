@@ -155,3 +155,48 @@ func TestPersistsAcrossStores(t *testing.T) {
 		t.Fatalf("did not persist: %+v", list)
 	}
 }
+
+func TestDedupFlagsDuplicate(t *testing.T) {
+	s := NewStore(t.TempDir())
+	_, _ = s.Add("sess", Finding{Title: "SQL injection", Target: "example.com", Severity: High})
+	dup, err := s.Add("sess", Finding{Title: "sql  injection", Target: "EXAMPLE.COM", Severity: High})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if dup.Status != StatusDuplicate || dup.DuplicateOf != "F-001" {
+		t.Fatalf("expected duplicate of F-001, got status=%s dup=%s", dup.Status, dup.DuplicateOf)
+	}
+	// A different target is not a duplicate.
+	other, _ := s.Add("sess", Finding{Title: "SQL injection", Target: "other.com", Severity: High})
+	if other.Status == StatusDuplicate {
+		t.Fatal("a different target should not be a duplicate")
+	}
+}
+
+func TestTriageChangesStatus(t *testing.T) {
+	s := NewStore(t.TempDir())
+	f, _ := s.Add("sess", Finding{Title: "XSS", Target: "example.com", Severity: Medium})
+	got, ok, err := s.Triage("sess", f.ID, StatusConfirmed, "")
+	if err != nil || !ok || got.Status != StatusConfirmed {
+		t.Fatalf("expected confirmed, got ok=%v status=%s err=%v", ok, got.Status, err)
+	}
+	if _, ok, _ := s.Triage("sess", "F-999", StatusConfirmed, ""); ok {
+		t.Fatal("triaging an unknown id should report not found")
+	}
+}
+
+func TestReportExcludesDuplicates(t *testing.T) {
+	s := NewStore(t.TempDir())
+	_, _ = s.Add("sess", Finding{Title: "SQLi", Target: "a.com", Severity: High, Description: "real one"})
+	_, _ = s.Add("sess", Finding{Title: "SQLi", Target: "a.com", Severity: High, Description: "dupe"})
+	report, err := s.Report("sess", "Test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(report, "F-001") {
+		t.Fatal("the real finding should be in the report")
+	}
+	if !strings.Contains(report, "Not reported") || !strings.Contains(report, "duplicate of F-001") {
+		t.Fatalf("the duplicate should be listed under Not reported:\n%s", report)
+	}
+}

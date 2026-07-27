@@ -142,6 +142,7 @@ type RoleInfo struct {
 // FindingStore is the subset of the findings store the tools need.
 type FindingStore interface {
 	Add(sessionID string, f findings.Finding) (findings.Finding, error)
+	Triage(sessionID, id string, status findings.Status, duplicateOf string) (findings.Finding, bool, error)
 }
 
 // IntelStore is the subset of the engagement store the tools need.

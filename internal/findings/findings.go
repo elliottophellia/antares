@@ -73,8 +73,43 @@ type Finding struct {
 	// Remediation is the concrete fix.
 	Remediation string `json:"remediation,omitempty"`
 	// CWE is an optional classification, e.g. "CWE-89".
-	CWE       string    `json:"cwe,omitempty"`
-	CreatedAt time.Time `json:"created_at"`
+	CWE string `json:"cwe,omitempty"`
+	// Endpoint is the specific URL/parameter/API route, finer than Target.
+	Endpoint string `json:"endpoint,omitempty"`
+	// AttackVector is how it is reached, e.g. "network", "authenticated user".
+	AttackVector string `json:"attack_vector,omitempty"`
+	// PoC is a proof-of-concept: a request, payload, or snippet that shows it.
+	PoC string `json:"poc,omitempty"`
+	// Status tracks triage: new, confirmed, duplicate, or wontfix.
+	Status Status `json:"status,omitempty"`
+	// DuplicateOf points at the earlier finding this one repeats, when Status
+	// is duplicate.
+	DuplicateOf string    `json:"duplicate_of,omitempty"`
+	CreatedAt   time.Time `json:"created_at"`
+}
+
+// Status is where a finding sits in triage.
+type Status string
+
+const (
+	StatusNew       Status = "new"
+	StatusConfirmed Status = "confirmed"
+	StatusDuplicate Status = "duplicate"
+	StatusWontfix   Status = "wontfix"
+)
+
+// NormalizeStatus maps free text onto a known status, defaulting to new.
+func NormalizeStatus(s string) Status {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "confirmed", "confirm", "valid", "approved":
+		return StatusConfirmed
+	case "duplicate", "dup":
+		return StatusDuplicate
+	case "wontfix", "won't fix", "ignore", "rejected":
+		return StatusWontfix
+	default:
+		return StatusNew
+	}
 }
 
 // Store persists findings per session as one JSON file each.
@@ -113,8 +148,60 @@ func (s *Store) Add(sessionID string, f Finding) (Finding, error) {
 	if f.Severity == "" {
 		f.Severity = Info
 	}
+	if f.Status == "" {
+		f.Status = StatusNew
+	}
+	// A finding is never dropped, but one that repeats an earlier one is flagged
+	// so the report is not padded with the same issue twice.
+	if dup := findSimilar(list, f); dup != "" {
+		f.Status = StatusDuplicate
+		f.DuplicateOf = dup
+	}
 	list = append(list, f)
 	return f, s.save(sessionID, list)
+}
+
+// findSimilar returns the id of an existing finding that looks like the same
+// issue — same normalised title on the same target — or "".
+func findSimilar(list []Finding, f Finding) string {
+	nt, tg := normaliseTitle(f.Title), strings.ToLower(strings.TrimSpace(f.Target))
+	for _, e := range list {
+		if e.Status == StatusDuplicate {
+			continue
+		}
+		if normaliseTitle(e.Title) == nt && strings.ToLower(strings.TrimSpace(e.Target)) == tg {
+			return e.ID
+		}
+	}
+	return ""
+}
+
+func normaliseTitle(s string) string {
+	return strings.Join(strings.Fields(strings.ToLower(s)), " ")
+}
+
+// Triage sets a finding's status. Marking one confirmed clears any duplicate
+// link; marking it duplicate needs the id it duplicates.
+func (s *Store) Triage(sessionID, id string, status Status, duplicateOf string) (Finding, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	list, err := s.load(sessionID)
+	if err != nil {
+		return Finding{}, false, err
+	}
+	for i := range list {
+		if list[i].ID != id {
+			continue
+		}
+		list[i].Status = status
+		if status == StatusDuplicate {
+			list[i].DuplicateOf = duplicateOf
+		} else {
+			list[i].DuplicateOf = ""
+		}
+		return list[i], true, s.save(sessionID, list)
+	}
+	return Finding{}, false, nil
 }
 
 // List returns a session's findings, worst first.
@@ -224,12 +311,23 @@ func (s *Store) Report(sessionID, title string) (string, error) {
 	b.WriteString("\n## Findings\n")
 
 	for _, f := range list {
+		// Duplicates and won't-fixes are listed compactly at the end, not given
+		// a full write-up that repeats an issue already covered.
+		if f.Status == StatusDuplicate || f.Status == StatusWontfix {
+			continue
+		}
 		fmt.Fprintf(&b, "\n### %s — %s (%s)\n\n", f.ID, f.Title, titleCase(string(f.Severity)))
 		if f.Target != "" {
 			fmt.Fprintf(&b, "**Target:** `%s`  \n", f.Target)
 		}
+		if f.Endpoint != "" {
+			fmt.Fprintf(&b, "**Endpoint:** `%s`  \n", f.Endpoint)
+		}
 		if f.CWE != "" {
 			fmt.Fprintf(&b, "**Classification:** %s  \n", f.CWE)
+		}
+		if f.AttackVector != "" {
+			fmt.Fprintf(&b, "**Attack vector:** %s  \n", f.AttackVector)
 		}
 		if f.Description != "" {
 			fmt.Fprintf(&b, "\n%s\n", f.Description)
@@ -237,11 +335,32 @@ func (s *Store) Report(sessionID, title string) (string, error) {
 		if f.Reproduce != "" {
 			fmt.Fprintf(&b, "\n**Steps to reproduce**\n\n%s\n", f.Reproduce)
 		}
+		if f.PoC != "" {
+			fmt.Fprintf(&b, "\n**Proof of concept**\n\n```\n%s\n```\n", f.PoC)
+		}
 		if f.Impact != "" {
 			fmt.Fprintf(&b, "\n**Impact:** %s\n", f.Impact)
 		}
 		if f.Remediation != "" {
 			fmt.Fprintf(&b, "\n**Remediation:** %s\n", f.Remediation)
+		}
+	}
+
+	// A short trailer records what was set aside, so nothing looks lost.
+	var deferred []Finding
+	for _, f := range list {
+		if f.Status == StatusDuplicate || f.Status == StatusWontfix {
+			deferred = append(deferred, f)
+		}
+	}
+	if len(deferred) > 0 {
+		b.WriteString("\n## Not reported\n\n")
+		for _, f := range deferred {
+			note := string(f.Status)
+			if f.Status == StatusDuplicate && f.DuplicateOf != "" {
+				note = "duplicate of " + f.DuplicateOf
+			}
+			fmt.Fprintf(&b, "- %s — %s (%s)\n", f.ID, f.Title, note)
 		}
 	}
 	return b.String(), nil

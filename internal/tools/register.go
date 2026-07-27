@@ -21,6 +21,7 @@ func init() {
 		listRolesTool{},
 		scopeCheckTool{},
 		reportFindingTool{},
+		triageFindingTool{},
 		addIntelTool{},
 		methodologyStatusTool{},
 		imageGenerateTool{},

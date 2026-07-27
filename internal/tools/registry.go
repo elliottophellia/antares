@@ -192,7 +192,7 @@ var Toolsets = map[string][]string{
 	"security": {
 		"read_file", "write_file", "list_files", "glob", "grep", "terminal",
 		"web_search", "web_fetch", "http_request", "browser", "todo", "skill",
-		"scope_check", "report_finding", "add_intel", "methodology_status",
+		"scope_check", "report_finding", "triage_finding", "add_intel", "methodology_status",
 		"delegate_task", "task", "list_roles", "diagnostics",
 	},
 	"default": {
