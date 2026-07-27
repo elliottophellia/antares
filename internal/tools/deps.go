@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/enowdev/antares/internal/board"
 	"github.com/enowdev/antares/internal/config"
 	"github.com/enowdev/antares/internal/engagement"
 	"github.com/enowdev/antares/internal/findings"
@@ -133,6 +134,8 @@ type Deps struct {
 	Speak func(ctx context.Context, text, voice string) (audio []byte, ext string, err error)
 	// Transcribe turns speech audio into text. It may be nil.
 	Transcribe func(ctx context.Context, filename string, audio []byte) (string, error)
+	// Board is the Kanban board store. It may be nil.
+	Board *board.Board
 	// Findings is the security engagement ledger. It may be nil.
 	Findings FindingStore
 	// Intel is the engagement's fact ledger and methodology. It may be nil.

@@ -17,6 +17,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/enowdev/antares/internal/board"
 	"github.com/enowdev/antares/internal/checkpoint"
 	"github.com/enowdev/antares/internal/config"
 	"github.com/enowdev/antares/internal/engagement"
@@ -135,6 +136,7 @@ type Agent struct {
 	findings *findings.Store
 	intel    *engagement.Store
 	roleperf *roleperf.Tracker
+	board    *board.Board
 
 	bg *bgManager
 
@@ -151,6 +153,7 @@ func New(cfg *config.Config, db store.Store, reg *tools.Registry, shell *tools.S
 		findings: findings.NewStore(config.Path("findings")),
 		intel:    engagement.NewStore(config.Path("intel")),
 		roleperf: roleperf.NewTracker(config.Path("role-performance.json")),
+		board:    board.New(config.Path("boards")),
 		bg:       newBGManager(),
 		active:   map[string]context.CancelFunc{},
 	}
@@ -585,6 +588,7 @@ func (a *Agent) executeTools(
 				Roles:      a.roleInfos,
 				Vision:     a.describeImage,
 				Speak:      a.speak,
+				Board:      a.board,
 				Transcribe: a.transcribe,
 				Findings:   a.findings,
 				Intel:      a.intel,

@@ -28,6 +28,7 @@ func init() {
 		visionTool{},
 		speakTool{},
 		transcribeTool{},
+		boardTool{},
 		diagnosticsTool{},
 	} {
 		globalRegistry.Register(t)
