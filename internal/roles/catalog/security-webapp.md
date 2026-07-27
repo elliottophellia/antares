@@ -3,7 +3,7 @@ name: security-webapp
 title: Web Application Tester
 summary: Tests an authorized web application against the OWASP categories.
 category: security
-toolset: browser
+toolset: security
 danger: true
 tags: [security, web, owasp, pentest]
 ---

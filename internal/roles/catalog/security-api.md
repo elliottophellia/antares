@@ -3,7 +3,7 @@ name: security-api
 title: API Tester
 summary: Tests authorized APIs for authorization, input handling, and logic flaws.
 category: security
-toolset: research
+toolset: security
 danger: true
 tags: [security, api, pentest]
 ---

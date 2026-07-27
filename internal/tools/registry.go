@@ -189,6 +189,12 @@ var Toolsets = map[string][]string{
 		"delegate_task", "task", "list_roles",
 	},
 	"browser": {"browser", "web_search", "web_fetch", "http_request", "read_file", "write_file", "todo", "scope_check", "report_finding", "add_intel", "methodology_status"},
+	"security": {
+		"read_file", "write_file", "list_files", "glob", "grep", "terminal",
+		"web_search", "web_fetch", "http_request", "browser", "todo", "skill",
+		"scope_check", "report_finding", "add_intel", "methodology_status",
+		"delegate_task", "task", "list_roles", "diagnostics",
+	},
 	"default": {
 		"read_file", "write_file", "edit_file", "list_files", "glob", "grep",
 		"terminal", "web_search", "web_fetch", "http_request", "browser", "todo", "memory",
