@@ -4,7 +4,7 @@ root = "."
 tmp_dir = ".air"
 
 [build]
-  cmd = "go build -o ./.air/tuidemo ./cmd/tuidemo"
+  cmd = "GOTOOLCHAIN=local $HOME/.local/sdk/go/bin/go build -o ./.air/tuidemo ./cmd/tuidemo"
   bin = "./.air/tuidemo"
   full_bin = "./.air/tuidemo"
   include_ext = ["go"]
