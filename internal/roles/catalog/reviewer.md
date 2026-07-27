@@ -4,6 +4,7 @@ title: Code Reviewer
 summary: Reads a change for defects that matter. Does not write, only reads and reports.
 category: engineering
 toolset: research
+effort: high
 tags: [review, code, quality]
 ---
 

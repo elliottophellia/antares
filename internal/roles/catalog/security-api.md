@@ -4,6 +4,7 @@ title: API Tester
 summary: Tests authorized APIs for authorization, input handling, and logic flaws.
 category: security
 toolset: security
+effort: high
 danger: true
 tags: [security, api, pentest]
 ---

@@ -43,6 +43,11 @@ type Role struct {
 	// security testing against a target you do not own. The UI warns; the
 	// prompt insists on scope.
 	Danger bool `json:"danger,omitempty"`
+	// Effort overrides the reasoning effort for this role (low|medium|high|…).
+	// Empty inherits. A reviewer can think hard; a formatter need not.
+	Effort string `json:"effort,omitempty"`
+	// MaxTurns caps a delegated run of this role. Zero inherits the default.
+	MaxTurns int `json:"max_turns,omitempty"`
 	// Prompt is the role's standing instructions, appended to the system
 	// prompt when the role is active.
 	Prompt string `json:"-"`
@@ -58,6 +63,8 @@ type frontMatter struct {
 	Category string   `yaml:"category"`
 	Toolset  string   `yaml:"toolset"`
 	Model    string   `yaml:"model"`
+	Effort   string   `yaml:"effort"`
+	MaxTurns int      `yaml:"max_turns"`
 	Tags     []string `yaml:"tags"`
 	Danger   bool     `yaml:"danger"`
 }
@@ -164,6 +171,8 @@ func parse(text, source string) (Role, bool) {
 		Category: cat,
 		Toolset:  fm.Toolset,
 		Model:    fm.Model,
+		Effort:   fm.Effort,
+		MaxTurns: fm.MaxTurns,
 		Tags:     fm.Tags,
 		Danger:   fm.Danger,
 		Prompt:   body,

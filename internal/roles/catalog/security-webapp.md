@@ -4,6 +4,7 @@ title: Web Application Tester
 summary: Tests an authorized web application against the OWASP categories.
 category: security
 toolset: security
+effort: high
 danger: true
 tags: [security, web, owasp, pentest]
 ---

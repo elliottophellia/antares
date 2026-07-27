@@ -92,6 +92,8 @@ type Request struct {
 	Toolset string
 	// Model overrides the configured model for this run.
 	Model string
+	// ReasoningEffort overrides the configured reasoning effort for this run.
+	ReasoningEffort string
 	// MaxTurns overrides the configured turn budget.
 	MaxTurns int
 	// SystemExtra is appended to the system prompt (used by sub-agents).
@@ -321,7 +323,7 @@ func (a *Agent) Run(ctx context.Context, req Request, emit Emit) (*Result, error
 			TopP:              cfg.Model.TopP,
 			MaxTokens:         cfg.Model.MaxTokens,
 			StopSequences:     cfg.Agent.StopSequences,
-			ReasoningEffort:   firstNonEmpty(cfg.Agent.ReasoningEffort, cfg.Model.ReasoningEffort),
+			ReasoningEffort:   firstNonEmpty(req.ReasoningEffort, cfg.Agent.ReasoningEffort, cfg.Model.ReasoningEffort),
 			ParallelToolCalls: cfg.Model.ParallelToolCall,
 			PromptCache:       cfg.PromptCaching.Enabled,
 		}
