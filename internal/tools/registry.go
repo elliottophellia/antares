@@ -181,7 +181,7 @@ var Toolsets = map[string][]string{
 	"minimal": {"read_file", "list_files", "grep", "todo"},
 	"coding": {
 		"read_file", "write_file", "edit_file", "list_files", "glob", "grep",
-		"terminal", "todo", "board", "skill", "delegate_task", "task", "list_roles", "diagnostics", "http_request", "ask_user",
+		"terminal", "todo", "board", "skill", "delegate_task", "task", "list_roles", "diagnostics", "http_request", "ask_user", "schedule",
 	},
 	"research": {
 		"read_file", "web_search", "web_fetch", "http_request", "browser", "grep", "todo", "memory",
@@ -198,7 +198,7 @@ var Toolsets = map[string][]string{
 	"default": {
 		"read_file", "write_file", "edit_file", "list_files", "glob", "grep",
 		"terminal", "web_search", "web_fetch", "http_request", "browser", "todo", "board", "memory",
-		"session_search", "rag_search", "rag_index", "skill", "delegate_task", "task", "list_roles", "image_generate", "view_image", "speak", "transcribe", "computer", "diagnostics", "ask_user",
+		"session_search", "rag_search", "rag_index", "skill", "delegate_task", "task", "list_roles", "image_generate", "view_image", "speak", "transcribe", "computer", "diagnostics", "ask_user", "schedule",
 	},
 	"all": nil, // resolved dynamically to every registered tool
 }

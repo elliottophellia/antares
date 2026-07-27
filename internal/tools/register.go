@@ -31,6 +31,7 @@ func init() {
 		boardTool{},
 		computerTool{},
 		askUserTool{},
+		scheduleTool{},
 		diagnosticsTool{},
 	} {
 		globalRegistry.Register(t)
