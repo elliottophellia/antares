@@ -24,6 +24,17 @@ func (s *Server) routes() {
 	m.HandleFunc("GET /api/chat/attach", s.handleChatAttach)
 	m.HandleFunc("POST /api/chat/interrupt", s.handleInterrupt)
 
+	// Intercept proxy
+	m.HandleFunc("GET /api/intercept/status", s.handleInterceptStatus)
+	m.HandleFunc("POST /api/intercept/start", s.handleInterceptStart)
+	m.HandleFunc("POST /api/intercept/stop", s.handleInterceptStop)
+	m.HandleFunc("GET /api/intercept/exchanges", s.handleInterceptExchanges)
+	m.HandleFunc("POST /api/intercept/clear", s.handleInterceptClear)
+	m.HandleFunc("GET /api/intercept/ca", s.handleInterceptCA)
+	m.HandleFunc("GET /api/intercept/rules", s.handleInterceptRules)
+	m.HandleFunc("POST /api/intercept/rules", s.handleInterceptRules)
+	m.HandleFunc("DELETE /api/intercept/rules/{id}", s.handleInterceptRuleDelete)
+
 	// Sessions
 	m.HandleFunc("GET /api/sessions", s.handleListSessions)
 	m.HandleFunc("GET /api/sessions/search", s.handleSearchSessions)
