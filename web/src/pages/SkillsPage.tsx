@@ -50,9 +50,16 @@ export default function SkillsPage() {
   const timeAgo = useTimeAgo()
   const [filter, setFilter] = useState('')
   const [query, setQuery] = useState('')
+  const [cwe, setCwe] = useState('')
+  const [tech, setTech] = useState('')
+  const params = new URLSearchParams()
+  if (query) params.set('q', query)
+  if (cwe.trim()) params.set('cwe', cwe.trim())
+  if (tech.trim()) params.set('tech', tech.trim())
+  const endpoint = params.toString() ? `/skills?${params.toString()}` : '/skills'
   const { data, loading, reload } = useApi<{ skills: Skill[]; library?: number; searching?: boolean }>(
-    query ? `/skills?q=${encodeURIComponent(query)}` : '/skills',
-    [query],
+    endpoint,
+    [endpoint],
   )
   const [busy, setBusy] = useState('')
   const [composing, setComposing] = useState(false)
@@ -141,7 +148,23 @@ export default function SkillsPage() {
           onChange={(e) => setFilter(e.target.value)}
           placeholder={library > 0 ? t('skills.searchLibrary', { n: library }) : t('skills.searchPlaceholder')}
         />
-        {library > 0 && !query ? (
+        {library > 0 ? (
+          <div className="flex gap-2">
+            <Input
+              value={cwe}
+              onChange={(e) => setCwe(e.target.value)}
+              placeholder={t('skills.filterCwe')}
+              className="h-8 text-xs"
+            />
+            <Input
+              value={tech}
+              onChange={(e) => setTech(e.target.value)}
+              placeholder={t('skills.filterTech')}
+              className="h-8 text-xs"
+            />
+          </div>
+        ) : null}
+        {library > 0 && !query && !cwe && !tech ? (
           <p className="text-[11px] text-muted-foreground">{t('skills.libraryHint', { n: library })}</p>
         ) : null}
         {data?.searching ? (

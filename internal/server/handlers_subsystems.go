@@ -8,6 +8,7 @@ import (
 
 	"github.com/enowdev/antares/internal/config"
 	"github.com/enowdev/antares/internal/cron"
+	"github.com/enowdev/antares/internal/skills"
 	"github.com/enowdev/antares/internal/store"
 )
 
@@ -27,9 +28,13 @@ func (s *Server) handleListSkills(w http.ResponseWriter, r *http.Request) {
 	// the bundled security pack — capped, so a broad query does not ship all of
 	// them. No query returns just the everyday skills, which keeps the page from
 	// trying to render seven thousand cards.
-	if q := strings.TrimSpace(r.URL.Query().Get("q")); q != "" {
+	q := strings.TrimSpace(r.URL.Query().Get("q"))
+	cwe := strings.TrimSpace(r.URL.Query().Get("cwe"))
+	tech := strings.TrimSpace(r.URL.Query().Get("tech"))
+	category := strings.TrimSpace(r.URL.Query().Get("category"))
+	if q != "" || cwe != "" || tech != "" || category != "" {
 		writeJSON(w, http.StatusOK, map[string]any{
-			"skills":    s.skills.Search(q, 100),
+			"skills":    s.skills.SearchFiltered(q, skills.Filter{CWE: cwe, Tech: tech, Category: category}, 100),
 			"searching": true,
 			"library":   s.skills.PackCount(),
 		})

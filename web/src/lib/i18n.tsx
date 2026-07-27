@@ -248,6 +248,8 @@ const en = {
   'skills.title': 'Skills',
   'skills.desc': 'Procedures Antares learned from experience, stored as Markdown files.',
   'skills.searchPlaceholder': 'Search skills…',
+  'skills.filterCwe': 'Filter by CWE, e.g. CWE-89',
+  'skills.filterTech': 'Filter by tech, e.g. web, api, cloud',
   'skills.searchLibrary': 'Search skills, including {n} in the security library…',
   'skills.libraryHint': 'Plus {n} security testing procedures in the library — search to find one.',
   'skills.searchingLibrary': 'Searching the full library.',
