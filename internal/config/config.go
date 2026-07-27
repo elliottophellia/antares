@@ -329,6 +329,32 @@ type Gateway struct {
 	Enabled  bool     `yaml:"enabled" json:"enabled"`
 	Telegram Telegram `yaml:"telegram" json:"telegram"`
 	Discord  Discord  `yaml:"discord" json:"discord"`
+	Slack    Slack    `yaml:"slack" json:"slack"`
+	Matrix   Matrix   `yaml:"matrix" json:"matrix"`
+}
+
+// Slack bot settings. Uses Socket Mode, so no public URL is needed: an
+// app-level token (xapp-…) opens the socket and a bot token (xoxb-…) sends.
+type Slack struct {
+	Enabled         bool     `yaml:"enabled" json:"enabled"`
+	AppToken        string   `yaml:"app_token" json:"app_token"`
+	BotToken        string   `yaml:"bot_token" json:"bot_token"`
+	AllowedUsers    []string `yaml:"allowed_users" json:"allowed_users"`
+	AllowedChannels []string `yaml:"allowed_channels" json:"allowed_channels"`
+	RequirePairing  bool     `yaml:"require_pairing" json:"require_pairing"`
+	StreamEdits     bool     `yaml:"stream_edits" json:"stream_edits"`
+}
+
+// Matrix bot settings. Connects to a homeserver with an access token and
+// long-polls /sync.
+type Matrix struct {
+	Enabled        bool     `yaml:"enabled" json:"enabled"`
+	Homeserver     string   `yaml:"homeserver" json:"homeserver"` // https://matrix.org
+	AccessToken    string   `yaml:"access_token" json:"access_token"`
+	UserID         string   `yaml:"user_id" json:"user_id"` // @bot:matrix.org
+	AllowedUsers   []string `yaml:"allowed_users" json:"allowed_users"`
+	AllowedRooms   []string `yaml:"allowed_rooms" json:"allowed_rooms"`
+	RequirePairing bool     `yaml:"require_pairing" json:"require_pairing"`
 }
 
 // Telegram bot settings.

@@ -111,6 +111,12 @@ func (m *Manager) Start(ctx context.Context) {
 	if dc := cfg.Gateway.Discord; dc.Enabled && dc.BotToken != "" {
 		m.startAdapter(ctx, NewDiscord(dc, m))
 	}
+	if sl := cfg.Gateway.Slack; sl.Enabled && sl.AppToken != "" && sl.BotToken != "" {
+		m.startAdapter(ctx, NewSlack(sl, m))
+	}
+	if mx := cfg.Gateway.Matrix; mx.Enabled && mx.Homeserver != "" && mx.AccessToken != "" {
+		m.startAdapter(ctx, NewMatrix(mx, m))
+	}
 }
 
 // startAdapter runs one adapter with restart-on-failure backoff.
@@ -178,6 +184,14 @@ func (m *Manager) Sync(platform string) error {
 	case "discord":
 		if dc := cfg.Gateway.Discord; dc.Enabled && dc.BotToken != "" {
 			m.startAdapter(base, NewDiscord(dc, m))
+		}
+	case "slack":
+		if sl := cfg.Gateway.Slack; sl.Enabled && sl.AppToken != "" && sl.BotToken != "" {
+			m.startAdapter(base, NewSlack(sl, m))
+		}
+	case "matrix":
+		if mx := cfg.Gateway.Matrix; mx.Enabled && mx.Homeserver != "" && mx.AccessToken != "" {
+			m.startAdapter(base, NewMatrix(mx, m))
 		}
 	default:
 		return fmt.Errorf("unknown platform %q", platform)

@@ -36,8 +36,8 @@ func TestSyncUnknownPlatform(t *testing.T) {
 	m := NewManager(cfg, nil, nil)
 	m.Start(context.Background())
 
-	err := m.Sync("matrix")
-	if err == nil || !strings.Contains(err.Error(), "matrix") {
+	err := m.Sync("carrier-pigeon")
+	if err == nil || !strings.Contains(err.Error(), "carrier-pigeon") {
 		t.Fatalf("expected the platform name in the error, got %v", err)
 	}
 }
