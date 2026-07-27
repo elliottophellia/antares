@@ -183,6 +183,10 @@ func (browserTool) Execute(ctx context.Context, in Input) Result {
 		if err := s.Navigate(ctx, args.URL); err != nil {
 			return Errorf("could not open %s: %v", args.URL, err)
 		}
+		// Automatic anti-bot handling: if the page is a Cloudflare/Turnstile/
+		// captcha interstitial, wait for the stealth browser to clear it so the
+		// agent gets the real content instead of the challenge page.
+		autoClearChallenge(ctx, s, in.Emit)
 		return browserPageSummary(ctx, s, "Opened")
 
 	case "snapshot":
@@ -382,4 +386,48 @@ func truncateTool(s string, max int) string {
 		return s
 	}
 	return s[:max] + fmt.Sprintf("\n\n… truncated, %d characters total", len(s))
+}
+
+// challengeDetectJS reports the kind of bot-challenge on the current page, or ""
+// if the page looks like normal content.
+const challengeDetectJS = `(() => {
+  const t = (document.title||'').toLowerCase();
+  if (t.includes('just a moment') || t.includes('attention required') || t.includes('verifying you are human') || t.includes('checking your browser')) return 'cloudflare';
+  if (document.querySelector('.cf-turnstile, [name="cf-turnstile-response"]')) return 'turnstile';
+  if (document.querySelector('.g-recaptcha, iframe[src*="recaptcha"]')) return 'recaptcha';
+  if (document.querySelector('.h-captcha, iframe[src*="hcaptcha"]')) return 'hcaptcha';
+  return '';
+})()`
+
+// autoClearChallenge waits for an anti-bot interstitial to pass. The stealth
+// browser clears many challenges on its own; this polls until the challenge
+// markers are gone or a short budget elapses, so normal browsing "just works"
+// against bot-protected pages without a separate solve step.
+func autoClearChallenge(ctx context.Context, s *browser.Session, emit func(Progress)) {
+	kind := strings.Trim(strings.TrimSpace(evalStr(ctx, s)), `"`)
+	if kind == "" {
+		return
+	}
+	emit(Progress{Tool: "browser", Message: "bot challenge detected (" + kind + "), waiting for it to clear…"})
+	deadline := time.Now().Add(25 * time.Second)
+	for time.Now().Before(deadline) {
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(2 * time.Second):
+		}
+		if strings.Trim(strings.TrimSpace(evalStr(ctx, s)), `"`) == "" {
+			emit(Progress{Tool: "browser", Message: "challenge cleared"})
+			return
+		}
+	}
+	emit(Progress{Tool: "browser", Message: "challenge still present after waiting — the page may need an interactive solve"})
+}
+
+func evalStr(ctx context.Context, s *browser.Session) string {
+	v, err := s.EvalString(ctx, challengeDetectJS)
+	if err != nil {
+		return ""
+	}
+	return v
 }
