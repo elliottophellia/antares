@@ -98,6 +98,11 @@ func (s *Server) routes() {
 	// MCP
 	m.HandleFunc("GET /api/mcp", s.handleMCPStatus)
 
+	// Plugins
+	m.HandleFunc("GET /api/plugins", s.handlePlugins)
+	m.HandleFunc("POST /api/plugins/{name}/toggle", s.handleTogglePlugin)
+	m.HandleFunc("POST /api/plugins/reload", s.handleReloadPlugins)
+
 	// Approvals for tools that change something.
 	m.HandleFunc("GET /api/approvals", s.handleApprovals)
 	m.HandleFunc("POST /api/approvals/{id}", s.handleResolveApproval)

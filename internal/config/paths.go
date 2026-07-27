@@ -73,6 +73,14 @@ func SetActiveProfile(name string) error {
 }
 
 func expand(p string) string {
+	// A default like "~/.antares/skills" has to follow ANTARES_HOME, or moving
+	// the state directory would move everything except the parts that matter.
+	// An explicit path elsewhere still means what it says.
+	for _, prefix := range []string{"~/.antares/", "~/.antares"} {
+		if strings.HasPrefix(p, prefix) {
+			return filepath.Join(Home(), strings.TrimPrefix(strings.TrimPrefix(p, prefix), "/"))
+		}
+	}
 	if strings.HasPrefix(p, "~") {
 		if h, err := os.UserHomeDir(); err == nil {
 			return filepath.Join(h, strings.TrimPrefix(p, "~"))

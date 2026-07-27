@@ -9,6 +9,7 @@ import {
   Gear,
   Plugs,
   PlugsConnected,
+  PuzzlePiece,
   Robot,
   Sparkle,
   Terminal,
@@ -113,6 +114,13 @@ export const ROUTES: RouteDef[] = [
     descKey: 'mcp.desc',
     icon: PlugsConnected,
     component: lazy(() => import('@/pages/McpPage')),
+  },
+  {
+    path: '/plugins',
+    titleKey: 'plugins.title',
+    descKey: 'plugins.desc',
+    icon: PuzzlePiece,
+    component: lazy(() => import('@/pages/PluginsPage')),
   },
   {
     path: '/analytics',
