@@ -35,10 +35,6 @@ func (s *Server) routes() {
 	m.HandleFunc("POST /api/intercept/rules", s.handleInterceptRules)
 	m.HandleFunc("DELETE /api/intercept/rules/{id}", s.handleInterceptRuleDelete)
 
-	// OSINT service API keys
-	m.HandleFunc("GET /api/osint/keys", s.handleOsintKeys)
-	m.HandleFunc("POST /api/osint/keys", s.handleSetOsintKey)
-
 	// Sessions
 	m.HandleFunc("GET /api/sessions", s.handleListSessions)
 	m.HandleFunc("GET /api/sessions/search", s.handleSearchSessions)

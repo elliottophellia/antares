@@ -2,7 +2,6 @@ package tools
 
 import (
 	"context"
-	"encoding/base64"
 	"fmt"
 	"io"
 	"net"
@@ -276,123 +275,6 @@ func (osintPasteTool) Execute(ctx context.Context, in Input) Result {
 			break
 		}
 		fmt.Fprintf(&b, "- https://psbdmp.ws/%s (%s) %s\n", p.ID, p.Time, p.Tags)
-	}
-	return Text(b.String())
-}
-
-// ---- osint_censys -----------------------------------------------------------
-
-type osintCensysTool struct{}
-
-func (osintCensysTool) Name() string { return "osint_censys" }
-func (osintCensysTool) Description() string {
-	return "Look up an IP on Censys: open services, protocols, and location. Requires Censys API credentials " +
-		"stored as osint:censys in the form \"id:secret\"."
-}
-func (osintCensysTool) Schema() map[string]any {
-	return schema(map[string]any{"ip": prop("string", "The IP address to look up.")}, "ip")
-}
-func (osintCensysTool) RequiresApproval() bool { return false }
-
-func (osintCensysTool) Execute(ctx context.Context, in Input) Result {
-	var args struct {
-		IP string `json:"ip"`
-	}
-	if err := in.Bind(&args); err != nil {
-		return Errorf("%v", err)
-	}
-	ip := strings.TrimSpace(args.IP)
-	if ip == "" {
-		return Errorf("ip is required")
-	}
-	cred := osintKey(ctx, in, "censys", "CENSYS_CREDS")
-	if cred == "" || !strings.Contains(cred, ":") {
-		return Errorf("no Censys credentials — add them on the API Keys page in Settings (as id:secret), then retry.")
-	}
-	auth := "Basic " + base64.StdEncoding.EncodeToString([]byte(cred))
-	var d struct {
-		Result struct {
-			Services []struct {
-				Port              int    `json:"port"`
-				ServiceName       string `json:"service_name"`
-				TransportProtocol string `json:"transport_protocol"`
-			} `json:"services"`
-			Location struct {
-				Country string `json:"country"`
-				City    string `json:"city"`
-			} `json:"location"`
-			AutonomousSystem struct {
-				Name string `json:"name"`
-			} `json:"autonomous_system"`
-		} `json:"result"`
-	}
-	status, err := osintJSON(ctx, "GET", "https://search.censys.io/api/v2/hosts/"+ip,
-		map[string]string{"Authorization": auth}, &d)
-	if err != nil {
-		return Errorf("Censys lookup failed: %v", err)
-	}
-	if status == 404 {
-		return Text(fmt.Sprintf("Censys has no record for %s.", ip))
-	}
-	if status != 200 {
-		return Errorf("Censys returned HTTP %d", status)
-	}
-	var b strings.Builder
-	fmt.Fprintf(&b, "Censys for %s\n\n", ip)
-	fmt.Fprintf(&b, "Location: %s, %s\nAS: %s\n\nServices:\n", d.Result.Location.City, d.Result.Location.Country, d.Result.AutonomousSystem.Name)
-	for _, s := range d.Result.Services {
-		fmt.Fprintf(&b, "- %d/%s %s\n", s.Port, s.TransportProtocol, s.ServiceName)
-	}
-	return Text(b.String())
-}
-
-// ---- osint_ip2location ------------------------------------------------------
-
-type osintIP2LocationTool struct{}
-
-func (osintIP2LocationTool) Name() string { return "osint_ip2location" }
-func (osintIP2LocationTool) Description() string {
-	return "Enrich an IP via IP2Location.io: geolocation, ISP, domain, usage type, and proxy/VPN flags. " +
-		"Requires an IP2Location key (osint:ip2location)."
-}
-func (osintIP2LocationTool) Schema() map[string]any {
-	return schema(map[string]any{"ip": prop("string", "The IP address to enrich.")}, "ip")
-}
-func (osintIP2LocationTool) RequiresApproval() bool { return false }
-
-func (osintIP2LocationTool) Execute(ctx context.Context, in Input) Result {
-	var args struct {
-		IP string `json:"ip"`
-	}
-	if err := in.Bind(&args); err != nil {
-		return Errorf("%v", err)
-	}
-	ip := strings.TrimSpace(args.IP)
-	if ip == "" {
-		return Errorf("ip is required")
-	}
-	key := osintKey(ctx, in, "ip2location", "IP2LOCATION_API_KEY")
-	if key == "" {
-		return Errorf("no IP2Location key — add it on the API Keys page in Settings, then retry.")
-	}
-	var d struct {
-		CountryName, RegionName, CityName, ISP, Domain, UsageType, ASN, As string
-		IsProxy                                                            bool `json:"is_proxy"`
-	}
-	status, err := osintJSON(ctx, "GET", "https://api.ip2location.io/?key="+key+"&ip="+ip, nil, &d)
-	if err != nil {
-		return Errorf("IP2Location lookup failed: %v", err)
-	}
-	if status != 200 {
-		return Errorf("IP2Location returned HTTP %d", status)
-	}
-	var b strings.Builder
-	fmt.Fprintf(&b, "IP2Location for %s\n\n", ip)
-	fmt.Fprintf(&b, "Location: %s, %s, %s\n", d.CityName, d.RegionName, d.CountryName)
-	fmt.Fprintf(&b, "ISP: %s | Domain: %s | Usage: %s\n", d.ISP, d.Domain, d.UsageType)
-	writeIf(&b, "AS", firstNonBlank(d.As, d.ASN))
-	if d.IsProxy {
-		b.WriteString("Proxy/VPN: yes\n")
 	}
 	return Text(b.String())
 }

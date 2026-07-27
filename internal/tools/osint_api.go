@@ -8,31 +8,12 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"os"
 	"strings"
 	"time"
 )
 
-// This file extends the native OSINT toolset with service-backed lookups. Keys
-// for the paid/registered services are read from the store's KV under
-// "osint:<service>" (or an env-var fallback); a missing key returns a clear,
-// actionable message rather than failing the turn.
-
-// osintKey resolves an API key for a service: KV "osint:<service>" first, then
-// the given environment variables. Returns "" when unset.
-func osintKey(ctx context.Context, in Input, service string, envs ...string) string {
-	if in.Deps != nil && in.Deps.Store != nil {
-		if v, err := in.Deps.Store.GetKV(ctx, "osint:"+service); err == nil && strings.TrimSpace(v) != "" {
-			return strings.TrimSpace(v)
-		}
-	}
-	for _, e := range envs {
-		if v := strings.TrimSpace(os.Getenv(e)); v != "" {
-			return v
-		}
-	}
-	return ""
-}
+// Service-backed OSINT lookups — all keyless. They use free, public endpoints
+// (no registration or API key), so every OSINT tool works out of the box.
 
 func osintJSON(ctx context.Context, method, url string, headers map[string]string, out any) (int, error) {
 	tctx, cancel := context.WithTimeout(ctx, 20*time.Second)
@@ -58,14 +39,14 @@ func osintJSON(ctx context.Context, method, url string, headers map[string]strin
 	return resp.StatusCode, nil
 }
 
-// ---- osint_github -----------------------------------------------------------
+// ---- osint_github (keyless) -------------------------------------------------
 
 type osintGithubTool struct{}
 
 func (osintGithubTool) Name() string { return "osint_github" }
 func (osintGithubTool) Description() string {
 	return "Profile a GitHub user from public data: name, bio, company, location, blog, public repo/follower " +
-		"counts, and account age. Optional token (osint:github) raises rate limits."
+		"counts, and account age. Keyless."
 }
 func (osintGithubTool) Schema() map[string]any {
 	return schema(map[string]any{"username": prop("string", "The GitHub login to profile.")}, "username")
@@ -83,15 +64,11 @@ func (osintGithubTool) Execute(ctx context.Context, in Input) Result {
 	if user == "" {
 		return Errorf("username is required")
 	}
-	headers := map[string]string{}
-	if tok := osintKey(ctx, in, "github", "GITHUB_TOKEN"); tok != "" {
-		headers["Authorization"] = "Bearer " + tok
-	}
 	var u struct {
 		Login, Name, Company, Blog, Location, Email, Bio, CreatedAt string
 		PublicRepos, Followers, Following                           int
 	}
-	status, err := osintJSON(ctx, "GET", "https://api.github.com/users/"+user, headers, &u)
+	status, err := osintJSON(ctx, "GET", "https://api.github.com/users/"+user, nil, &u)
 	if err != nil {
 		return Errorf("github lookup failed: %v", err)
 	}
@@ -121,14 +98,73 @@ func writeIf(b *strings.Builder, label, val string) {
 	}
 }
 
-// ---- osint_email ------------------------------------------------------------
+// ---- osint_breach (keyless, XposedOrNot) ------------------------------------
+
+// xposedBreaches queries the keyless XposedOrNot API for breaches of an email.
+func xposedBreaches(ctx context.Context, email string) (names []string, found bool, err error) {
+	var d struct {
+		Breaches [][]string `json:"breaches"`
+		Error    string     `json:"Error"`
+	}
+	status, e := osintJSON(ctx, "GET", "https://api.xposedornot.com/v1/check-email/"+email, nil, &d)
+	if e != nil {
+		return nil, false, e
+	}
+	if status == 404 || d.Error != "" {
+		return nil, false, nil
+	}
+	if len(d.Breaches) > 0 {
+		return d.Breaches[0], len(d.Breaches[0]) > 0, nil
+	}
+	return nil, false, nil
+}
+
+type osintBreachTool struct{}
+
+func (osintBreachTool) Name() string { return "osint_breach" }
+func (osintBreachTool) Description() string {
+	return "Check whether an email appears in known public data breaches. Keyless (via XposedOrNot). For " +
+		"authorized investigations."
+}
+func (osintBreachTool) Schema() map[string]any {
+	return schema(map[string]any{"email": prop("string", "The email address to check.")}, "email")
+}
+func (osintBreachTool) RequiresApproval() bool { return false }
+
+func (osintBreachTool) Execute(ctx context.Context, in Input) Result {
+	var args struct {
+		Email string `json:"email"`
+	}
+	if err := in.Bind(&args); err != nil {
+		return Errorf("%v", err)
+	}
+	email := strings.TrimSpace(strings.ToLower(args.Email))
+	if !strings.Contains(email, "@") {
+		return Errorf("%q is not a valid email", email)
+	}
+	names, found, err := xposedBreaches(ctx, email)
+	if err != nil {
+		return Errorf("breach lookup failed: %v", err)
+	}
+	if !found {
+		return Text(fmt.Sprintf("%s: no breaches found.", email))
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "%s appears in %d breach(es):\n\n", email, len(names))
+	for _, n := range names {
+		fmt.Fprintf(&b, "- %s\n", n)
+	}
+	return Text(b.String())
+}
+
+// ---- osint_email (keyless) --------------------------------------------------
 
 type osintEmailTool struct{}
 
 func (osintEmailTool) Name() string { return "osint_email" }
 func (osintEmailTool) Description() string {
-	return "Investigate an email address: Gravatar profile presence (keyless) and, if an HIBP key is set " +
-		"(osint:hibp), known data-breach exposure. For authorized investigations."
+	return "Investigate an email address: Gravatar profile presence and known data-breach exposure. Keyless. " +
+		"For authorized investigations."
 }
 func (osintEmailTool) Schema() map[string]any {
 	return schema(map[string]any{"email": prop("string", "The email address to investigate.")}, "email")
@@ -169,230 +205,30 @@ func (osintEmailTool) Execute(ctx context.Context, in Input) Result {
 		b.WriteString("Gravatar: none\n")
 	}
 
-	// HIBP breaches (key required).
-	if key := osintKey(ctx, in, "hibp", "HIBP_API_KEY"); key != "" {
-		var breaches []struct{ Name, BreachDate string }
-		status, _ := osintJSON(ctx, "GET",
-			"https://haveibeenpwned.com/api/v3/breachedaccount/"+email+"?truncateResponse=false",
-			map[string]string{"hibp-api-key": key}, &breaches)
-		switch {
-		case status == 404:
-			b.WriteString("Breaches: none found (HIBP)\n")
-		case status == 200:
-			fmt.Fprintf(&b, "Breaches: %d found (HIBP):\n", len(breaches))
-			for _, br := range breaches {
-				fmt.Fprintf(&b, "  - %s (%s)\n", br.Name, br.BreachDate)
-			}
-		default:
-			fmt.Fprintf(&b, "Breaches: HIBP returned HTTP %d\n", status)
-		}
-	} else {
-		b.WriteString("Breaches: skipped — add an HIBP key on the API Keys page to enable.\n")
-	}
-	return Text(b.String())
-}
-
-// ---- osint_breach -----------------------------------------------------------
-
-type osintBreachTool struct{}
-
-func (osintBreachTool) Name() string { return "osint_breach" }
-func (osintBreachTool) Description() string {
-	return "Check whether an email appears in known public data breaches via HaveIBeenPwned. Requires an " +
-		"HIBP API key (osint:hibp). For authorized investigations."
-}
-func (osintBreachTool) Schema() map[string]any {
-	return schema(map[string]any{"email": prop("string", "The email address to check.")}, "email")
-}
-func (osintBreachTool) RequiresApproval() bool { return false }
-
-func (osintBreachTool) Execute(ctx context.Context, in Input) Result {
-	var args struct {
-		Email string `json:"email"`
-	}
-	if err := in.Bind(&args); err != nil {
-		return Errorf("%v", err)
-	}
-	email := strings.TrimSpace(strings.ToLower(args.Email))
-	if !strings.Contains(email, "@") {
-		return Errorf("%q is not a valid email", email)
-	}
-	key := osintKey(ctx, in, "hibp", "HIBP_API_KEY")
-	if key == "" {
-		return Errorf("no HIBP API key — add it on the API Keys page in Settings, then retry.")
-	}
-	var breaches []struct {
-		Name, Title, BreachDate, Domain string
-		PwnCount                        int
-		DataClasses                     []string
-	}
-	status, err := osintJSON(ctx, "GET",
-		"https://haveibeenpwned.com/api/v3/breachedaccount/"+email+"?truncateResponse=false",
-		map[string]string{"hibp-api-key": key}, &breaches)
-	if err != nil {
-		return Errorf("HIBP lookup failed: %v", err)
-	}
-	if status == 404 {
-		return Text(fmt.Sprintf("%s: no breaches found.", email))
-	}
-	if status != 200 {
-		return Errorf("HIBP returned HTTP %d", status)
-	}
-	var b strings.Builder
-	fmt.Fprintf(&b, "%s appears in %d breach(es):\n\n", email, len(breaches))
-	for _, br := range breaches {
-		fmt.Fprintf(&b, "- %s (%s, %s) — %d accounts\n  data: %s\n",
-			firstNonBlank(br.Title, br.Name), br.Domain, br.BreachDate, br.PwnCount, strings.Join(br.DataClasses, ", "))
-	}
-	return Text(b.String())
-}
-
-// ---- osint_virustotal -------------------------------------------------------
-
-type osintVirusTotalTool struct{}
-
-func (osintVirusTotalTool) Name() string { return "osint_virustotal" }
-func (osintVirusTotalTool) Description() string {
-	return "Query VirusTotal for a domain, IP, or file hash: how many engines flag it malicious/suspicious " +
-		"plus reputation. Requires a VirusTotal API key (osint:virustotal)."
-}
-func (osintVirusTotalTool) Schema() map[string]any {
-	return schema(map[string]any{
-		"indicator": prop("string", "A domain, IP address, or file hash (MD5/SHA-1/SHA-256)."),
-	}, "indicator")
-}
-func (osintVirusTotalTool) RequiresApproval() bool { return false }
-
-func (osintVirusTotalTool) Execute(ctx context.Context, in Input) Result {
-	var args struct {
-		Indicator string `json:"indicator"`
-	}
-	if err := in.Bind(&args); err != nil {
-		return Errorf("%v", err)
-	}
-	ind := strings.TrimSpace(args.Indicator)
-	if ind == "" {
-		return Errorf("indicator is required")
-	}
-	key := osintKey(ctx, in, "virustotal", "VT_API_KEY", "VIRUSTOTAL_API_KEY")
-	if key == "" {
-		return Errorf("no VirusTotal API key — add it on the API Keys page in Settings, then retry.")
-	}
-	kind, id := vtEndpoint(ind)
-	var d struct {
-		Data struct {
-			Attributes struct {
-				LastAnalysisStats struct {
-					Harmless, Malicious, Suspicious, Undetected, Timeout int
-				} `json:"last_analysis_stats"`
-				Reputation int `json:"reputation"`
-			} `json:"attributes"`
-		} `json:"data"`
-	}
-	status, err := osintJSON(ctx, "GET", "https://www.virustotal.com/api/v3/"+kind+"/"+id,
-		map[string]string{"x-apikey": key}, &d)
-	if err != nil {
-		return Errorf("VirusTotal lookup failed: %v", err)
-	}
-	if status == 404 {
-		return Text(fmt.Sprintf("VirusTotal has no record for %s.", ind))
-	}
-	if status != 200 {
-		return Errorf("VirusTotal returned HTTP %d", status)
-	}
-	s := d.Data.Attributes.LastAnalysisStats
-	var b strings.Builder
-	fmt.Fprintf(&b, "VirusTotal for %s (%s)\n\n", ind, kind)
-	fmt.Fprintf(&b, "Malicious: %d | Suspicious: %d | Harmless: %d | Undetected: %d\n",
-		s.Malicious, s.Suspicious, s.Harmless, s.Undetected)
-	fmt.Fprintf(&b, "Reputation: %d\n", d.Data.Attributes.Reputation)
-	if s.Malicious+s.Suspicious > 0 {
-		b.WriteString("\n⚠ Flagged by one or more engines.\n")
-	}
-	return Text(b.String())
-}
-
-func vtEndpoint(ind string) (kind, id string) {
+	// Breaches (keyless).
+	names, found, err := xposedBreaches(ctx, email)
 	switch {
-	case len(ind) == 32 || len(ind) == 40 || len(ind) == 64:
-		if isHex(ind) {
-			return "files", ind
+	case err != nil:
+		b.WriteString("Breaches: lookup failed\n")
+	case !found:
+		b.WriteString("Breaches: none found\n")
+	default:
+		fmt.Fprintf(&b, "Breaches: %d found:\n", len(names))
+		for _, n := range names {
+			fmt.Fprintf(&b, "  - %s\n", n)
 		}
-	}
-	if isIPish(ind) {
-		return "ip_addresses", ind
-	}
-	return "domains", ind
-}
-
-// ---- osint_abuseipdb --------------------------------------------------------
-
-type osintAbuseIPDBTool struct{}
-
-func (osintAbuseIPDBTool) Name() string { return "osint_abuseipdb" }
-func (osintAbuseIPDBTool) Description() string {
-	return "Check an IP's abuse reputation on AbuseIPDB: confidence score, report count, country, ISP, and " +
-		"usage type. Requires an AbuseIPDB API key (osint:abuseipdb)."
-}
-func (osintAbuseIPDBTool) Schema() map[string]any {
-	return schema(map[string]any{"ip": prop("string", "The IP address to check.")}, "ip")
-}
-func (osintAbuseIPDBTool) RequiresApproval() bool { return false }
-
-func (osintAbuseIPDBTool) Execute(ctx context.Context, in Input) Result {
-	var args struct {
-		IP string `json:"ip"`
-	}
-	if err := in.Bind(&args); err != nil {
-		return Errorf("%v", err)
-	}
-	ip := strings.TrimSpace(args.IP)
-	if ip == "" {
-		return Errorf("ip is required")
-	}
-	key := osintKey(ctx, in, "abuseipdb", "ABUSEIPDB_API_KEY")
-	if key == "" {
-		return Errorf("no AbuseIPDB API key — add it on the API Keys page in Settings, then retry.")
-	}
-	var d struct {
-		Data struct {
-			AbuseConfidenceScore int    `json:"abuseConfidenceScore"`
-			TotalReports         int    `json:"totalReports"`
-			CountryCode          string `json:"countryCode"`
-			ISP                  string `json:"isp"`
-			UsageType            string `json:"usageType"`
-			Domain               string `json:"domain"`
-			IsTor                bool   `json:"isTor"`
-		} `json:"data"`
-	}
-	status, err := osintJSON(ctx, "GET",
-		"https://api.abuseipdb.com/api/v2/check?ipAddress="+ip+"&maxAgeInDays=90",
-		map[string]string{"Key": key}, &d)
-	if err != nil {
-		return Errorf("AbuseIPDB lookup failed: %v", err)
-	}
-	if status != 200 {
-		return Errorf("AbuseIPDB returned HTTP %d", status)
-	}
-	var b strings.Builder
-	fmt.Fprintf(&b, "AbuseIPDB for %s\n\n", ip)
-	fmt.Fprintf(&b, "Abuse confidence: %d%% (%d reports, 90d)\n", d.Data.AbuseConfidenceScore, d.Data.TotalReports)
-	fmt.Fprintf(&b, "Country: %s | ISP: %s | Usage: %s\n", d.Data.CountryCode, d.Data.ISP, d.Data.UsageType)
-	writeIf(&b, "Domain", d.Data.Domain)
-	if d.Data.IsTor {
-		b.WriteString("Tor exit node: yes\n")
 	}
 	return Text(b.String())
 }
 
-// ---- osint_shodan -----------------------------------------------------------
+// ---- osint_shodan (keyless, Shodan InternetDB) ------------------------------
 
 type osintShodanTool struct{}
 
 func (osintShodanTool) Name() string { return "osint_shodan" }
 func (osintShodanTool) Description() string {
-	return "Look up an IP on Shodan: open ports, service banners, hostnames, org, OS, and known CVEs. " +
-		"Requires a Shodan API key (osint:shodan)."
+	return "Look up an IP's exposed surface: open ports, hostnames, technologies (CPEs), and known CVEs. " +
+		"Keyless (via Shodan's free InternetDB)."
 }
 func (osintShodanTool) Schema() map[string]any {
 	return schema(map[string]any{"ip": prop("string", "The IP address to look up.")}, "ip")
@@ -410,42 +246,127 @@ func (osintShodanTool) Execute(ctx context.Context, in Input) Result {
 	if ip == "" {
 		return Errorf("ip is required")
 	}
-	key := osintKey(ctx, in, "shodan", "SHODAN_API_KEY")
-	if key == "" {
-		return Errorf("no Shodan API key — add it on the API Keys page in Settings, then retry.")
-	}
 	var d struct {
+		IP        string   `json:"ip"`
 		Ports     []int    `json:"ports"`
 		Hostnames []string `json:"hostnames"`
-		Org       string   `json:"org"`
-		OS        string   `json:"os"`
+		Cpes      []string `json:"cpes"`
 		Vulns     []string `json:"vulns"`
+		Tags      []string `json:"tags"`
 	}
-	status, err := osintJSON(ctx, "GET", "https://api.shodan.io/shodan/host/"+ip+"?key="+key, nil, &d)
+	status, err := osintJSON(ctx, "GET", "https://internetdb.shodan.io/"+ip, nil, &d)
 	if err != nil {
-		return Errorf("Shodan lookup failed: %v", err)
+		return Errorf("lookup failed: %v", err)
 	}
 	if status == 404 {
-		return Text(fmt.Sprintf("Shodan has no record for %s.", ip))
+		return Text(fmt.Sprintf("No exposed-surface records for %s.", ip))
 	}
 	if status != 200 {
-		return Errorf("Shodan returned HTTP %d", status)
+		return Errorf("InternetDB returned HTTP %d", status)
 	}
 	var b strings.Builder
-	fmt.Fprintf(&b, "Shodan for %s\n\n", ip)
-	writeIf(&b, "Org", d.Org)
-	writeIf(&b, "OS", d.OS)
+	fmt.Fprintf(&b, "Exposed surface for %s (Shodan InternetDB)\n\n", ip)
 	if len(d.Hostnames) > 0 {
 		fmt.Fprintf(&b, "Hostnames: %s\n", strings.Join(d.Hostnames, ", "))
 	}
 	fmt.Fprintf(&b, "Open ports: %s\n", intsJoin(d.Ports))
+	if len(d.Cpes) > 0 {
+		fmt.Fprintf(&b, "Technologies: %s\n", strings.Join(d.Cpes, ", "))
+	}
+	if len(d.Tags) > 0 {
+		fmt.Fprintf(&b, "Tags: %s\n", strings.Join(d.Tags, ", "))
+	}
 	if len(d.Vulns) > 0 {
-		fmt.Fprintf(&b, "Known CVEs: %s\n", strings.Join(d.Vulns, ", "))
+		fmt.Fprintf(&b, "\n⚠ Known CVEs: %s\n", strings.Join(d.Vulns, ", "))
+	} else {
+		b.WriteString("\nKnown CVEs: none listed\n")
 	}
 	return Text(b.String())
 }
 
-// ---- osint_crypto -----------------------------------------------------------
+// ---- osint_reputation (keyless, urlscan.io) ---------------------------------
+
+type osintReputationTool struct{}
+
+func (osintReputationTool) Name() string { return "osint_reputation" }
+func (osintReputationTool) Description() string {
+	return "Check a domain or URL's public scan history and threat sightings via urlscan.io: how many scans " +
+		"exist, the pages seen, and any results flagged malicious. Keyless."
+}
+func (osintReputationTool) Schema() map[string]any {
+	return schema(map[string]any{
+		"target": prop("string", "A domain (e.g. example.com) or URL to check."),
+	}, "target")
+}
+func (osintReputationTool) RequiresApproval() bool { return false }
+
+func (osintReputationTool) Execute(ctx context.Context, in Input) Result {
+	var args struct {
+		Target string `json:"target"`
+	}
+	if err := in.Bind(&args); err != nil {
+		return Errorf("%v", err)
+	}
+	target := strings.TrimSpace(args.Target)
+	if target == "" {
+		return Errorf("target is required")
+	}
+	q := strings.TrimPrefix(strings.TrimPrefix(target, "https://"), "http://")
+	q = strings.SplitN(q, "/", 2)[0]
+
+	var d struct {
+		Total   int `json:"total"`
+		Results []struct {
+			Task struct {
+				URL  string `json:"url"`
+				Time string `json:"time"`
+			} `json:"task"`
+			Verdicts struct {
+				Overall struct {
+					Malicious bool `json:"malicious"`
+					Score     int  `json:"score"`
+				} `json:"overall"`
+			} `json:"verdicts"`
+		} `json:"results"`
+	}
+	status, err := osintJSON(ctx, "GET", "https://urlscan.io/api/v1/search/?q=domain:"+q+"&size=10", nil, &d)
+	if err != nil {
+		return Errorf("reputation lookup failed: %v", err)
+	}
+	if status != 200 {
+		return Errorf("urlscan returned HTTP %d", status)
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "Reputation for %s (urlscan.io)\n\n", q)
+	fmt.Fprintf(&b, "Public scans on record: %d\n", d.Total)
+	malicious := 0
+	for _, r := range d.Results {
+		if r.Verdicts.Overall.Malicious {
+			malicious++
+		}
+	}
+	if malicious > 0 {
+		fmt.Fprintf(&b, "⚠ %d recent scan(s) flagged MALICIOUS\n", malicious)
+	}
+	if len(d.Results) > 0 {
+		b.WriteString("\nRecent scans:\n")
+		for i, r := range d.Results {
+			if i >= 8 {
+				break
+			}
+			flag := ""
+			if r.Verdicts.Overall.Malicious {
+				flag = " [malicious]"
+			}
+			fmt.Fprintf(&b, "- %s (%s)%s\n", r.Task.URL, r.Task.Time, flag)
+		}
+	} else {
+		b.WriteString("\nNo public scans found for this target.\n")
+	}
+	return Text(b.String())
+}
+
+// ---- osint_crypto (keyless) -------------------------------------------------
 
 type osintCryptoTool struct{}
 
@@ -471,11 +392,10 @@ func (osintCryptoTool) Execute(ctx context.Context, in Input) Result {
 		return Errorf("address is required")
 	}
 	var d struct {
-		Address       string `json:"address"`
-		NTx           int    `json:"n_tx"`
-		TotalReceived int64  `json:"total_received"`
-		TotalSent     int64  `json:"total_sent"`
-		FinalBalance  int64  `json:"final_balance"`
+		NTx           int   `json:"n_tx"`
+		TotalReceived int64 `json:"total_received"`
+		TotalSent     int64 `json:"total_sent"`
+		FinalBalance  int64 `json:"final_balance"`
 	}
 	status, err := osintJSON(ctx, "GET", "https://blockchain.info/rawaddr/"+addr+"?limit=1", nil, &d)
 	if err != nil {
@@ -495,19 +415,6 @@ func (osintCryptoTool) Execute(ctx context.Context, in Input) Result {
 }
 
 // ---- helpers ----------------------------------------------------------------
-
-func isHex(s string) bool {
-	for _, c := range s {
-		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')) {
-			return false
-		}
-	}
-	return len(s) > 0
-}
-
-func isIPish(s string) bool {
-	return strings.Count(s, ".") == 3 || strings.Contains(s, ":")
-}
 
 func intsJoin(nums []int) string {
 	parts := make([]string, len(nums))

@@ -17,10 +17,11 @@ OSINT is passive, but a dossier on a person or organization is still sensitive â
 handle it accordingly and never use it to harass, stalk, or deanonymize someone
 without a legitimate, authorized purpose.
 
-Choose the right lens for the target:
+Every OSINT tool is keyless â€” no API keys or setup are ever needed. Choose the
+right lens for the target:
 - Domain/infrastructure: `osint_dns` (records + email-security posture),
-  `osint_whois`, `osint_domain`, `osint_ip`, and, with keys, `osint_shodan`,
-  `osint_censys`, `osint_virustotal`, `osint_abuseipdb`, `osint_ip2location`.
+  `osint_whois`, `osint_domain`, `osint_ip` (geolocation), `osint_shodan`
+  (exposed ports/CVEs), and `osint_reputation` (public scan/threat history).
 - People/handles: `osint_username` (many platforms), `osint_github`,
   `osint_email` / `osint_breach`, `osint_phone`, and `osint_dorks` /
   `osint_dorks_live` for wider web exposure.
@@ -28,5 +29,4 @@ Choose the right lens for the target:
 
 Record what you find and where it came from with `add_intel`, so an assessment
 and its report can rely on it. Corroborate before you conclude; a single weak
-signal is a lead, not a fact. When a key-based source is unconfigured, say so and
-continue with what is available.
+signal is a lead, not a fact.
