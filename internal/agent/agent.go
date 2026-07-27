@@ -20,6 +20,7 @@ import (
 	"github.com/enowdev/antares/internal/findings"
 	"github.com/enowdev/antares/internal/llm"
 	"github.com/enowdev/antares/internal/plugin"
+	"github.com/enowdev/antares/internal/roleperf"
 	"github.com/enowdev/antares/internal/roles"
 	"github.com/enowdev/antares/internal/skills"
 	"github.com/enowdev/antares/internal/store"
@@ -128,6 +129,7 @@ type Agent struct {
 	roles    *roles.Registry
 	findings *findings.Store
 	intel    *engagement.Store
+	roleperf *roleperf.Tracker
 
 	mu     sync.Mutex
 	active map[string]context.CancelFunc
@@ -141,6 +143,7 @@ func New(cfg *config.Config, db store.Store, reg *tools.Registry, shell *tools.S
 		roles:    roles.NewRegistry(nil),
 		findings: findings.NewStore(config.Path("findings")),
 		intel:    engagement.NewStore(config.Path("intel")),
+		roleperf: roleperf.NewTracker(config.Path("role-performance.json")),
 		active:   map[string]context.CancelFunc{},
 	}
 }
@@ -673,6 +676,9 @@ func (a *Agent) subAgentFor(parent Request) tools.SubAgent {
 			}
 		}
 
+		untrack := trackSubAgent(sub.Role, sub.Prompt, parent.SessionID)
+		defer untrack()
+
 		res, err := a.Run(ctx, Request{
 			Message:     sub.Prompt,
 			SystemExtra: sub.SystemExtra,
@@ -697,8 +703,25 @@ func (a *Agent) subAgentFor(parent Request) tools.SubAgent {
 			return nil
 		})
 		note := ""
+		kept := false
 		if wt != nil {
+			// A dirty worktree left for review is work worth keeping.
+			kept = wt.Dirty(ctx)
 			note = "\n\n" + wt.Cleanup(ctx)
+		}
+		// Record how the specialist did, so the team can tell who delivers.
+		if sub.Role != "" && a.roleperf != nil {
+			turns := 0
+			success := err == nil && strings.TrimSpace(res.Reply) != ""
+			if res != nil {
+				turns = res.Turns
+				if success {
+					kept = true // a real answer is work kept
+				}
+			}
+			a.roleperf.Record(roleperf.Outcome{
+				Role: sub.Role, Success: success, Kept: kept, Turns: turns,
+			})
 		}
 		if err != nil {
 			return "", err

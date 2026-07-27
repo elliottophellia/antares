@@ -8,6 +8,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -17,6 +19,7 @@ import (
 	"github.com/enowdev/antares/internal/findings"
 	"github.com/enowdev/antares/internal/llm"
 	"github.com/enowdev/antares/internal/plugin"
+	"github.com/enowdev/antares/internal/roleperf"
 	"github.com/enowdev/antares/internal/roles"
 	"github.com/enowdev/antares/internal/store"
 	"github.com/enowdev/antares/internal/tools"
@@ -675,3 +678,58 @@ func (a *Agent) Findings() *findings.Store { return a.findings }
 
 // Intel exposes the engagement's fact ledger.
 func (a *Agent) Intel() *engagement.Store { return a.intel }
+
+// RolePerformance exposes the per-role performance tracker.
+func (a *Agent) RolePerformance() *roleperf.Tracker { return a.roleperf }
+
+// ---- swarm visibility --------------------------------------------------------
+
+// ActiveAgent is one sub-agent running right now.
+type ActiveAgent struct {
+	ID        string    `json:"id"`
+	Role      string    `json:"role"`
+	Task      string    `json:"task"`
+	Parent    string    `json:"parent"`
+	StartedAt time.Time `json:"started_at"`
+}
+
+var swarm = struct {
+	mu     sync.Mutex
+	agents map[string]ActiveAgent
+	seq    int
+}{agents: map[string]ActiveAgent{}}
+
+// trackSubAgent registers a running sub-agent and returns a function to
+// deregister it. The registry is what a swarm panel reads to show who is
+// working — the multi-agent state a person otherwise cannot see.
+func trackSubAgent(role, task, parent string) func() {
+	swarm.mu.Lock()
+	swarm.seq++
+	id := "sub-" + strconv.Itoa(swarm.seq)
+	swarm.agents[id] = ActiveAgent{
+		ID: id, Role: firstNonEmpty(role, "assistant"),
+		Task: truncate(task, 120), Parent: parent, StartedAt: nowFunc(),
+	}
+	swarm.mu.Unlock()
+	return func() {
+		swarm.mu.Lock()
+		delete(swarm.agents, id)
+		swarm.mu.Unlock()
+	}
+}
+
+// ActiveAgents lists the sub-agents running now, oldest first.
+func (a *Agent) ActiveAgents() []ActiveAgent {
+	swarm.mu.Lock()
+	defer swarm.mu.Unlock()
+	out := make([]ActiveAgent, 0, len(swarm.agents))
+	for _, ag := range swarm.agents {
+		out = append(out, ag)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].StartedAt.Before(out[j].StartedAt) })
+	return out
+}
+
+// nowFunc is time.Now, indirected so a test could pin it. The engine forbids a
+// literal time.Now in some contexts, but this is ordinary runtime code.
+var nowFunc = time.Now

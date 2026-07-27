@@ -98,8 +98,9 @@ func (s *Server) routes() {
 	// MCP
 	m.HandleFunc("GET /api/mcp", s.handleMCPStatus)
 
-	// Roles
+	// Roles and the swarm
 	m.HandleFunc("GET /api/roles", s.handleRoles)
+	m.HandleFunc("GET /api/swarm", s.handleSwarm)
 
 	// Plugins
 	m.HandleFunc("GET /api/plugins", s.handlePlugins)

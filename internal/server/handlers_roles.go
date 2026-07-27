@@ -9,8 +9,18 @@ func (s *Server) handleRoles(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"roles": []any{}})
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
-		"roles": reg.List(),
-		"scope": s.config().Security.Scope,
-	})
+	out := map[string]any{
+		"roles":  reg.List(),
+		"scope":  s.config().Security.Scope,
+		"active": s.agent.ActiveAgents(),
+	}
+	if perf := s.agent.RolePerformance(); perf != nil {
+		out["performance"] = perf.List()
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// handleSwarm reports the sub-agents running right now, for a live panel.
+func (s *Server) handleSwarm(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]any{"active": s.agent.ActiveAgents()})
 }
