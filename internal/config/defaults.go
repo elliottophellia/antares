@@ -71,6 +71,7 @@ func Default() *Config {
 				// on first browser use.
 				Stealth: true,
 			},
+			HTTP: HTTP{Preset: "chrome-131"},
 			Platform: map[string]string{
 				"cli": "default", "web": "default", "telegram": "default", "discord": "default",
 			},

@@ -125,7 +125,22 @@ type Tools struct {
 	Timeouts       map[string]int    `yaml:"timeouts" json:"timeouts"`
 	WebSearch      WebSearch         `yaml:"web_search" json:"web_search"`
 	Browser        Browser           `yaml:"browser" json:"browser"`
+	HTTP           HTTP              `yaml:"http" json:"http"`
 	Platform       map[string]string `yaml:"platform_toolsets" json:"platform_toolsets"`
+}
+
+// HTTP configures the http_request tool, which calls HTTP APIs with a
+// browser-identical TLS/HTTP2 fingerprint so requests are not rejected by
+// bot-detection layers at the cryptographic level.
+type HTTP struct {
+	// Preset is the browser fingerprint to mimic, e.g. "chrome-131" (the
+	// default), "chrome-131-windows", "chrome-133". Empty uses the default.
+	Preset string `yaml:"preset" json:"preset"`
+	// Proxy routes requests through a proxy, e.g. "http://host:3128" or
+	// "socks5://host:1080".
+	Proxy string `yaml:"proxy" json:"proxy"`
+	// TimeoutSeconds bounds a single request; 0 uses the built-in default.
+	TimeoutSeconds int `yaml:"timeout_seconds" json:"timeout_seconds"`
 }
 
 // WebSearch configures the search backend used by the web_search tool.

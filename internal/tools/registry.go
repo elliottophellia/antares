@@ -184,13 +184,13 @@ var Toolsets = map[string][]string{
 		"terminal", "todo", "skill", "delegate_task", "list_roles", "diagnostics",
 	},
 	"research": {
-		"read_file", "web_search", "web_fetch", "browser", "grep", "todo", "memory",
+		"read_file", "web_search", "web_fetch", "http_request", "browser", "grep", "todo", "memory",
 		"session_search", "rag_search", "skill", "scope_check", "view_image", "report_finding", "add_intel", "methodology_status",
 	},
-	"browser": {"browser", "web_search", "web_fetch", "read_file", "write_file", "todo", "scope_check", "report_finding", "add_intel", "methodology_status"},
+	"browser": {"browser", "web_search", "web_fetch", "http_request", "read_file", "write_file", "todo", "scope_check", "report_finding", "add_intel", "methodology_status"},
 	"default": {
 		"read_file", "write_file", "edit_file", "list_files", "glob", "grep",
-		"terminal", "web_search", "web_fetch", "browser", "todo", "memory",
+		"terminal", "web_search", "web_fetch", "http_request", "browser", "todo", "memory",
 		"session_search", "rag_search", "rag_index", "skill", "delegate_task", "list_roles", "image_generate", "view_image", "diagnostics",
 	},
 	"all": nil, // resolved dynamically to every registered tool

@@ -104,7 +104,8 @@ antares config path
 | `tools.toolset` | Which tools the model gets: `minimal`, `coding`, `research`, `default`, `all` |
 | `rag.provider` | `builtin` (internal vector store) or `enowx` (enowx-rag daemon) |
 | `gateway.telegram` / `gateway.discord` | Messaging bots |
-| `tools.browser` | The real-browser tool: executable, viewport, headed mode |
+| `tools.browser` | The real-browser tool: executable, viewport, headed mode, stealth |
+| `tools.http` | The http_request tool: browser-fingerprinted API calls, proxy |
 | `agent.verify_replies` | Check a finished answer against the request before showing it |
 
 ### Providers
@@ -154,6 +155,11 @@ reference the model names to click or type into. The page persists between
 tool calls, so a login holds while the agent keeps working. For sites behind a
 bot-detection challenge, a stealth mode launches a source-patched, signature-
 verified Chromium that passes them. See [docs/browser.md](docs/browser.md).
+
+**Fingerprinted HTTP.** For APIs rather than pages, `http_request` calls
+endpoints with a real browser's TLS and HTTP/2 fingerprint (JA3/JA4, HTTP/2
+settings, header order), so services that reject a stock HTTP client at the
+handshake still answer. See [docs/http.md](docs/http.md).
 
 **Specialist roles.** The agent is a team of specialists, not one generalist —
 a reviewer that only reads, a researcher that only browses, a report writer that
@@ -281,6 +287,7 @@ credentials, and RAG backend in one pass.
 | [Configuration](docs/configuration.md) | Every setting, and where it can be set |
 | [Tools](docs/tools.md) | The tool surface and the toolsets |
 | [Browser](docs/browser.md) | Driving a real browser |
+| [HTTP requests](docs/http.md) | Calling APIs with a browser TLS fingerprint |
 | [Roles](docs/roles.md) | Specialist agents, delegation, and authorized security testing |
 | [Skills](docs/skills.md) | Writing, installing, and learning skills |
 | [Hub](docs/hub.md) | The skill and MCP catalogue |
