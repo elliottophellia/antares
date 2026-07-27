@@ -117,6 +117,15 @@ func (m *Manager) Start(ctx context.Context) {
 	if mx := cfg.Gateway.Matrix; mx.Enabled && mx.Homeserver != "" && mx.AccessToken != "" {
 		m.startAdapter(ctx, NewMatrix(mx, m))
 	}
+	if sg := cfg.Gateway.Signal; sg.Enabled && sg.APIURL != "" && sg.Number != "" {
+		m.startAdapter(ctx, NewSignal(sg, m))
+	}
+	if wa := cfg.Gateway.WhatsApp; wa.Enabled && wa.Token != "" && wa.PhoneNumberID != "" {
+		m.startAdapter(ctx, NewWhatsApp(wa, m))
+	}
+	if fs := cfg.Gateway.Feishu; fs.Enabled && fs.AppID != "" && fs.AppSecret != "" {
+		m.startAdapter(ctx, NewFeishu(fs, m))
+	}
 }
 
 // startAdapter runs one adapter with restart-on-failure backoff.
@@ -192,6 +201,18 @@ func (m *Manager) Sync(platform string) error {
 	case "matrix":
 		if mx := cfg.Gateway.Matrix; mx.Enabled && mx.Homeserver != "" && mx.AccessToken != "" {
 			m.startAdapter(base, NewMatrix(mx, m))
+		}
+	case "signal":
+		if sg := cfg.Gateway.Signal; sg.Enabled && sg.APIURL != "" && sg.Number != "" {
+			m.startAdapter(base, NewSignal(sg, m))
+		}
+	case "whatsapp":
+		if wa := cfg.Gateway.WhatsApp; wa.Enabled && wa.Token != "" && wa.PhoneNumberID != "" {
+			m.startAdapter(base, NewWhatsApp(wa, m))
+		}
+	case "feishu":
+		if fs := cfg.Gateway.Feishu; fs.Enabled && fs.AppID != "" && fs.AppSecret != "" {
+			m.startAdapter(base, NewFeishu(fs, m))
 		}
 	default:
 		return fmt.Errorf("unknown platform %q", platform)

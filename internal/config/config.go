@@ -331,6 +331,44 @@ type Gateway struct {
 	Discord  Discord  `yaml:"discord" json:"discord"`
 	Slack    Slack    `yaml:"slack" json:"slack"`
 	Matrix   Matrix   `yaml:"matrix" json:"matrix"`
+	Signal   Signal   `yaml:"signal" json:"signal"`
+	WhatsApp WhatsApp `yaml:"whatsapp" json:"whatsapp"`
+	Feishu   Feishu   `yaml:"feishu" json:"feishu"`
+}
+
+// Signal talks to a signal-cli REST API daemon (bbernhard/signal-cli-rest-api),
+// which the user runs. It polls for messages and posts to send.
+type Signal struct {
+	Enabled        bool     `yaml:"enabled" json:"enabled"`
+	APIURL         string   `yaml:"api_url" json:"api_url"` // http://localhost:8080
+	Number         string   `yaml:"number" json:"number"`   // the bot's own +number
+	AllowedUsers   []string `yaml:"allowed_users" json:"allowed_users"`
+	RequirePairing bool     `yaml:"require_pairing" json:"require_pairing"`
+}
+
+// WhatsApp uses the Meta Cloud API: a webhook receives messages, the Graph API
+// sends them. The adapter runs its own listener on ListenAddr.
+type WhatsApp struct {
+	Enabled       bool     `yaml:"enabled" json:"enabled"`
+	Token         string   `yaml:"token" json:"token"`                     // Graph API access token
+	PhoneNumberID string   `yaml:"phone_number_id" json:"phone_number_id"` // for sending
+	VerifyToken   string   `yaml:"verify_token" json:"verify_token"`       // webhook challenge secret
+	ListenAddr    string   `yaml:"listen_addr" json:"listen_addr"`         // :8090
+	Path          string   `yaml:"path" json:"path"`                       // /webhook
+	AllowedUsers  []string `yaml:"allowed_users" json:"allowed_users"`
+}
+
+// Feishu (Lark) uses a webhook for events and a tenant token for sending. The
+// adapter runs its own listener on ListenAddr.
+type Feishu struct {
+	Enabled      bool     `yaml:"enabled" json:"enabled"`
+	AppID        string   `yaml:"app_id" json:"app_id"`
+	AppSecret    string   `yaml:"app_secret" json:"app_secret"`
+	VerifyToken  string   `yaml:"verify_token" json:"verify_token"`
+	ListenAddr   string   `yaml:"listen_addr" json:"listen_addr"` // :8091
+	Path         string   `yaml:"path" json:"path"`               // /webhook
+	AllowedUsers []string `yaml:"allowed_users" json:"allowed_users"`
+	AllowedChats []string `yaml:"allowed_chats" json:"allowed_chats"`
 }
 
 // Slack bot settings. Uses Socket Mode, so no public URL is needed: an
