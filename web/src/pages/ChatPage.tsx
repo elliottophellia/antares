@@ -20,6 +20,7 @@ import { Textarea } from '@/components/ui/primitives'
 import { SkeletonMessage } from '@/components/ui/skeleton'
 import { Markdown } from '@/components/chat/Markdown'
 import { ToolCallCard } from '@/components/chat/ToolCallCard'
+import { ApprovalCard, type ApprovalView } from '@/components/chat/ApprovalCard'
 import {
   SlashPalette,
   useCommands,
@@ -131,6 +132,7 @@ export default function ChatPage() {
   const [input, setInput] = useState('')
   const [error, setError] = useState<string>()
   const [title, setTitle] = useState('')
+  const [approvals, setApprovals] = useState<ApprovalView[]>([])
 
   const commands = useCommands()
   const matches = useMatches(input, commands)
@@ -216,6 +218,7 @@ export default function ChatPage() {
             stop()
             setMessages([])
             setTitle('')
+            setApprovals([])
             navigate('/')
             return
           case 'resume':
@@ -511,6 +514,17 @@ export default function ChatPage() {
             <div className="space-y-6">
               {messages.map((m) => (
                 <MessageBubble key={m.id} message={m} />
+              ))}
+              {approvals.map((a) => (
+                <ApprovalCard
+                  key={a.id}
+                  approval={a}
+                  onDecided={(id, decision) =>
+                    setApprovals((prev) =>
+                      prev.map((x) => (x.id === id ? { ...x, decided: decision } : x)),
+                    )
+                  }
+                />
               ))}
               {streaming ? <StreamingIndicator /> : null}
             </div>
