@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { CaretDown, Plus, Sparkle, Trash } from '@phosphor-icons/react'
+import { CaretDown, Plus, Sparkle, Storefront, Trash } from '@phosphor-icons/react'
 import { del, get, post } from '@/lib/api'
 import { useApi } from '@/lib/hooks'
 import { useI18n, useTimeAgo } from '@/lib/i18n'
@@ -27,6 +27,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { Skeleton, SkeletonList } from '@/components/ui/skeleton'
+import { HubDialog } from '@/components/hub/HubDialog'
 
 interface Skill {
   name: string
@@ -47,14 +48,21 @@ export default function SkillsPage() {
   const [filter, setFilter] = useState('')
   const [busy, setBusy] = useState('')
   const [composing, setComposing] = useState(false)
+  const [browsing, setBrowsing] = useState(false)
   const [expanded, setExpanded] = useState<string | null>(null)
   const [bodies, setBodies] = useState<Record<string, string>>({})
 
   usePageActions(
-    <Button size="sm" onClick={() => setComposing(true)} className="gap-1.5">
-      <Plus className="size-4" />
-      {t('common.new')}
-    </Button>,
+    <>
+      <Button size="sm" variant="outline" onClick={() => setBrowsing(true)} className="gap-1.5">
+        <Storefront className="size-4" />
+        {t('hub.browse')}
+      </Button>
+      <Button size="sm" onClick={() => setComposing(true)} className="gap-1.5">
+        <Plus className="size-4" />
+        {t('common.new')}
+      </Button>
+    </>,
     [t],
   )
 
@@ -101,6 +109,7 @@ export default function SkillsPage() {
   return (
     <PageBody>
       <NewSkillDialog open={composing} onOpenChange={setComposing} onSaved={reload} />
+      <HubDialog kind="skills" open={browsing} onOpenChange={setBrowsing} onInstalled={reload} />
 
       <Input
         value={filter}
@@ -116,9 +125,15 @@ export default function SkillsPage() {
           title={t('skills.none')}
           description={t('skills.noneDesc')}
           action={
-            <Button size="sm" onClick={() => setComposing(true)}>
-              {t('skills.compose')}
-            </Button>
+            <div className="flex flex-wrap justify-center gap-2">
+              <Button size="sm" onClick={() => setBrowsing(true)} className="gap-1.5">
+                <Storefront className="size-4" />
+                {t('hub.browse')}
+              </Button>
+              <Button size="sm" variant="outline" onClick={() => setComposing(true)}>
+                {t('skills.compose')}
+              </Button>
+            </div>
           }
         />
       ) : (

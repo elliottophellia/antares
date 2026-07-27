@@ -1,0 +1,240 @@
+import { useCallback, useEffect, useState } from 'react'
+import {
+  ArrowSquareOut,
+  CheckCircle,
+  DownloadSimple,
+  MagnifyingGlass,
+  Warning,
+} from '@phosphor-icons/react'
+import { get, post } from '@/lib/api'
+import { useI18n } from '@/lib/i18n'
+import { cn } from '@/lib/utils'
+import { Button } from '@/components/ui/button'
+import { Badge, Input } from '@/components/ui/primitives'
+import {
+  Dialog,
+  DialogBody,
+  DialogClose,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
+import { SkeletonList } from '@/components/ui/skeleton'
+
+export interface HubEntry {
+  id: string
+  kind: string
+  name: string
+  summary: string
+  source: string
+  tags?: string[]
+  homepage?: string
+  author?: string
+  installed: boolean
+  setup?: string
+  needs_keys?: string[]
+}
+
+/**
+ * Browse and install from the hub. Skills and MCP servers differ only in which
+ * endpoints they hit and what a successful install has to say afterwards, so
+ * one dialog serves both rather than two that drift apart.
+ */
+export function HubDialog({
+  kind,
+  open,
+  onOpenChange,
+  onInstalled,
+}: {
+  kind: 'skills' | 'mcp'
+  open: boolean
+  onOpenChange: (v: boolean) => void
+  onInstalled: () => void
+}) {
+  const { t } = useI18n()
+  const [query, setQuery] = useState('')
+  const [entries, setEntries] = useState<HubEntry[]>([])
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<string>()
+  const [busy, setBusy] = useState('')
+  const [note, setNote] = useState<string>()
+
+  const search = useCallback(
+    async (q: string) => {
+      setLoading(true)
+      setError(undefined)
+      try {
+        const path = kind === 'skills' ? '/hub/skills' : '/hub/mcp'
+        const r = await get<{ skills?: HubEntry[]; servers?: HubEntry[]; error?: string }>(
+          `${path}?q=${encodeURIComponent(q)}`,
+        )
+        setEntries(r.skills ?? r.servers ?? [])
+        setError(r.error)
+      } catch (e) {
+        setError((e as Error).message)
+        setEntries([])
+      } finally {
+        setLoading(false)
+      }
+    },
+    [kind],
+  )
+
+  useEffect(() => {
+    if (!open) return
+    setQuery('')
+    setNote(undefined)
+    void search('')
+  }, [open, search])
+
+  // Debounced: a repository lookup goes over the network, so firing per
+  // keystroke would rate-limit the user out of their own search.
+  useEffect(() => {
+    if (!open) return
+    const timer = setTimeout(() => void search(query), 400)
+    return () => clearTimeout(timer)
+  }, [query, open, search])
+
+  const install = async (entry: HubEntry) => {
+    setBusy(entry.id)
+    setNote(undefined)
+    setError(undefined)
+    try {
+      const path = kind === 'skills' ? '/hub/skills/install' : '/hub/mcp/install'
+      const r = await post<{ ok: boolean; error?: string; missing_keys?: string[] }>(path, {
+        id: entry.id,
+      })
+      if (!r.ok) {
+        setError(r.error ?? t('hub.installFailed'))
+        return
+      }
+      if (r.missing_keys?.length) {
+        setNote(t('hub.needsKeys', { keys: r.missing_keys.join(', ') }))
+      } else {
+        setNote(t('hub.installed', { name: entry.name }))
+      }
+      onInstalled()
+      void search(query)
+    } catch (e) {
+      setError((e as Error).message)
+    } finally {
+      setBusy('')
+    }
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-2xl">
+        <DialogHeader>
+          <DialogTitle>{kind === 'skills' ? t('hub.skillsTitle') : t('hub.mcpTitle')}</DialogTitle>
+          <DialogDescription>
+            {kind === 'skills' ? t('hub.skillsDesc') : t('hub.mcpDesc')}
+          </DialogDescription>
+        </DialogHeader>
+
+        <DialogBody>
+          <div className="relative">
+            <MagnifyingGlass className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+            <Input
+              autoFocus
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder={kind === 'skills' ? t('hub.searchSkills') : t('hub.searchMcp')}
+              className="pl-9"
+            />
+          </div>
+
+          {note ? (
+            <div className="flex items-start gap-2 rounded-[var(--radius-sm)] border border-[var(--success)]/40 bg-[color-mix(in_oklch,var(--success)_10%,transparent)] p-3 text-xs">
+              <CheckCircle className="mt-0.5 size-4 shrink-0 text-[var(--success)]" weight="fill" />
+              <span className="min-w-0">{note}</span>
+            </div>
+          ) : null}
+
+          {error ? (
+            <div className="flex items-start gap-2 rounded-[var(--radius-sm)] border border-destructive/40 bg-destructive/10 p-3 text-xs text-destructive">
+              <Warning className="mt-0.5 size-4 shrink-0" weight="fill" />
+              <span className="min-w-0 break-words">{error}</span>
+            </div>
+          ) : null}
+
+          {loading && entries.length === 0 ? (
+            <SkeletonList count={4} />
+          ) : entries.length === 0 ? (
+            <p className="py-6 text-center text-xs text-muted-foreground">{t('hub.noMatches')}</p>
+          ) : (
+            <div className="space-y-2">
+              {entries.map((e) => (
+                <div
+                  key={e.id}
+                  className={cn(
+                    'flex items-start gap-3 rounded-[var(--radius-sm)] border p-3 transition-colors',
+                    e.installed ? 'border-border bg-muted/30' : 'border-border hover:border-primary/40',
+                  )}
+                >
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <span className="text-sm font-medium">{e.name}</span>
+                      <Badge variant="outline">{e.source}</Badge>
+                      {e.installed ? (
+                        <Badge variant="success">
+                          <CheckCircle className="size-3" weight="fill" />
+                          {t('hub.alreadyInstalled')}
+                        </Badge>
+                      ) : null}
+                      {e.needs_keys?.length ? (
+                        <Badge variant="warning">{t('hub.keyRequired')}</Badge>
+                      ) : null}
+                    </div>
+                    <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{e.summary}</p>
+                    <div className="mt-1 flex flex-wrap items-center gap-2">
+                      <span className="break-all font-mono text-[10px] text-muted-foreground">
+                        {e.id}
+                      </span>
+                      {e.homepage ? (
+                        <a
+                          href={e.homepage}
+                          target="_blank"
+                          rel="noreferrer noopener"
+                          className="inline-flex items-center gap-1 text-[10px] text-primary underline underline-offset-2"
+                        >
+                          {t('hub.homepage')}
+                          <ArrowSquareOut className="size-3" />
+                        </a>
+                      ) : null}
+                    </div>
+                  </div>
+                  <Button
+                    size="sm"
+                    variant={e.installed ? 'outline' : 'default'}
+                    disabled={e.installed}
+                    loading={busy === e.id}
+                    onClick={() => install(e)}
+                    className="shrink-0 gap-1.5"
+                  >
+                    <DownloadSimple className="size-4" />
+                    {e.installed ? t('hub.added') : t('hub.add')}
+                  </Button>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {kind === 'skills' ? (
+            <p className="text-[11px] leading-relaxed text-muted-foreground">{t('hub.sourceHint')}</p>
+          ) : null}
+        </DialogBody>
+
+        <DialogFooter>
+          <DialogClose asChild>
+            <Button variant="outline" size="sm">
+              {t('common.close')}
+            </Button>
+          </DialogClose>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}

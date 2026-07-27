@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { CaretDown, CheckCircle, PlugsConnected, XCircle } from '@phosphor-icons/react'
+import { CaretDown, CheckCircle, PlugsConnected, Storefront, XCircle } from '@phosphor-icons/react'
 import { useApi } from '@/lib/hooks'
 import { useI18n } from '@/lib/i18n'
 import { cn } from '@/lib/utils'
@@ -14,6 +14,9 @@ import {
   EmptyState,
 } from '@/components/ui/primitives'
 import { SkeletonList } from '@/components/ui/skeleton'
+import { Button } from '@/components/ui/button'
+import { usePageActions } from '@/components/layout/PageChrome'
+import { HubDialog } from '@/components/hub/HubDialog'
 
 interface McpTool {
   name: string
@@ -29,8 +32,17 @@ interface McpServer {
 
 export default function McpPage() {
   const { t } = useI18n()
-  const { data, loading } = useApi<{ enabled: boolean; servers: McpServer[] }>('/mcp')
+  const { data, loading, reload } = useApi<{ enabled: boolean; servers: McpServer[] }>('/mcp')
   const [open, setOpen] = useState<string | null>(null)
+  const [browsing, setBrowsing] = useState(false)
+
+  usePageActions(
+    <Button size="sm" onClick={() => setBrowsing(true)} className="gap-1.5">
+      <Storefront className="size-4" />
+      {t('hub.browse')}
+    </Button>,
+    [t],
+  )
 
   if (loading && !data) return <SkeletonList count={3} />
 
@@ -38,6 +50,8 @@ export default function McpPage() {
 
   return (
     <PageBody>
+      <HubDialog kind="mcp" open={browsing} onOpenChange={setBrowsing} onInstalled={reload} />
+
       {!data?.enabled ? (
         <Card className="border-[var(--warning)]/40 bg-[color-mix(in_oklch,var(--warning)_10%,transparent)]">
           <CardContent className="pt-4 text-xs sm:text-sm">{t('mcp.disabled')}</CardContent>
@@ -49,6 +63,12 @@ export default function McpPage() {
           icon={<PlugsConnected className="size-8" />}
           title={t('mcp.none')}
           description={t('mcp.noneDesc')}
+          action={
+            <Button size="sm" onClick={() => setBrowsing(true)} className="gap-1.5">
+              <Storefront className="size-4" />
+              {t('hub.browse')}
+            </Button>
+          }
         />
       ) : (
         <div className="space-y-3">
