@@ -65,3 +65,15 @@ func (m *Model) demoReply(text string) {
 		block{kind: blockAssistant, done: true, text: "**Preview mode** — no model is attached.\n\nYou typed:\n\n> " + text + "\n\nEverything you see here (sidebar, Markdown, tools, reasoning) is rendered by the real TUI. Toggle reasoning with **Ctrl+R**, scroll with **PgUp/PgDn**, and try **/help**."},
 	)
 }
+
+// RenderDemoFrame renders a single demo frame at the given size — used by the
+// screenshot tool to preview the design.
+func RenderDemoFrame(w, h int) string {
+	m := NewDemo()
+	m.width, m.height = w, h
+	m.ready = true
+	m.layout()
+	m.refreshTranscript()
+	m.vp.GotoTop()
+	return m.View()
+}

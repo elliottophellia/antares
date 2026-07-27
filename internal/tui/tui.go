@@ -80,6 +80,8 @@ type Model struct {
 	palette    []Command
 	paletteSel int
 
+	cache map[string]string // memoised block renders, keyed by content+width
+
 	demo bool
 }
 

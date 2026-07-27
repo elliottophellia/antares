@@ -5,32 +5,25 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/bubbles/viewport"
-	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/glamour"
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/enowdev/antares/internal/version"
 )
 
-const minSidebar = 72 // hide the sidebar below this width
+const minSidebar = 74 // hide the sidebar below this width
 
 // layout (re)sizes every component from the current window size. Everything is
 // clamped so a tiny or huge terminal never breaks the render.
 func (m *Model) layout() {
-	sidebarW := 26
-	if m.width < minSidebar {
-		sidebarW = 0
-	}
-	// Border/padding budget: sidebar has a right border (1); main content sits to
-	// its right. Reserve rows for header (2), input (3), and status (1).
+	sidebarW := m.sidebarWidth()
 	contentW := m.width - sidebarW
-	if contentW < 20 {
-		contentW = max(m.width, 20)
-		sidebarW = 0
+	if contentW < 24 {
+		contentW = maxi(m.width, 24)
 	}
-	innerW := contentW - 2 // main content horizontal padding
-	if innerW < 10 {
-		innerW = 10
+	innerW := contentW - 2 // main column horizontal padding
+	if innerW < 12 {
+		innerW = 12
 	}
 
 	headerH, inputH, statusH := 2, 3, 1
@@ -42,19 +35,25 @@ func (m *Model) layout() {
 	if m.vp.Width == 0 {
 		m.vp = viewport.New(innerW, vpH)
 	} else {
-		m.vp.Width = innerW
-		m.vp.Height = vpH
+		m.vp.Width, m.vp.Height = innerW, vpH
 	}
-	m.ta.SetWidth(innerW - 2)
+	m.ta.SetWidth(innerW - 3)
 
-	// Glamour wraps Markdown to the content width.
 	r, err := glamour.NewTermRenderer(
 		glamour.WithStandardStyle(glamourStyle()),
-		glamour.WithWordWrap(innerW-2),
+		glamour.WithWordWrap(innerW-4),
 	)
 	if err == nil {
 		m.renderer = r
 	}
+	m.cache = map[string]string{} // width changed — drop cached renders
+}
+
+func (m *Model) sidebarWidth() int {
+	if m.width < minSidebar {
+		return 0
+	}
+	return 28
 }
 
 func glamourStyle() string {
@@ -68,44 +67,45 @@ func (m *Model) View() string {
 	if !m.ready {
 		return "starting antares…"
 	}
-	sidebarW := 26
-	if m.width < minSidebar {
-		sidebarW = 0
-	}
 	main := m.mainColumn()
-	if sidebarW == 0 {
+	if m.sidebarWidth() == 0 {
 		return main
 	}
-	side := m.st.sidebar.Width(sidebarW - 1).Height(m.height).Render(m.sidebar())
+	side := m.st.sidebar.Width(m.sidebarWidth() - 1).Height(m.height).Render(m.sidebar())
 	return lipgloss.JoinHorizontal(lipgloss.Top, side, main)
 }
 
 // mainColumn stacks header, transcript, input, and status.
 func (m *Model) mainColumn() string {
 	pad := lipgloss.NewStyle().Padding(0, 1)
+	w := m.vp.Width
 
+	// Header bar: title on the left, a context pill on the right.
 	title := m.title
 	if title == "" {
 		title = "New conversation"
 	}
-	head := m.st.header.Render(title)
+	left := m.st.header.Render(title)
 	if m.sessionID != "" {
-		head += "  " + m.st.headerDim.Render("· "+shortID(m.sessionID))
+		left += " " + m.st.headerDim.Render(shortID(m.sessionID))
 	}
-	header := pad.Render(head) + "\n" + pad.Render(m.st.headerDim.Render(strings.Repeat("─", maxi(m.vp.Width, 1))))
+	right := m.st.tokenPill.Render(fmt.Sprintf(" %d↑ %d↓ ", m.tokensIn, m.tokensOut))
+	gap := w - lipgloss.Width(left) - lipgloss.Width(right)
+	if gap < 1 {
+		gap = 1
+		right = ""
+	}
+	headerLine := left + strings.Repeat(" ", gap) + right
+	header := pad.Render(headerLine) + "\n" + pad.Render(m.st.rule.Render(strings.Repeat("─", maxi(w, 1))))
 
 	body := pad.Render(m.vp.View())
-
 	input := m.inputView()
 	status := pad.Render(m.statusBar())
 
-	col := lipgloss.JoinVertical(lipgloss.Left, header, body, input, status)
-
-	// The command palette floats above the input when active.
 	if len(m.palette) > 0 {
-		col = lipgloss.JoinVertical(lipgloss.Left, header, body, pad.Render(m.paletteView()), input, status)
+		return lipgloss.JoinVertical(lipgloss.Left, header, body, pad.Render(m.paletteView()), input, status)
 	}
-	return col
+	return lipgloss.JoinVertical(lipgloss.Left, header, body, input, status)
 }
 
 func (m *Model) inputView() string {
@@ -113,29 +113,31 @@ func (m *Model) inputView() string {
 	if !m.busy {
 		box = m.st.inputFocus
 	}
-	prompt := m.st.userLabel.Render("❯ ")
-	field := lipgloss.JoinHorizontal(lipgloss.Top, prompt, m.ta.View())
+	field := lipgloss.JoinHorizontal(lipgloss.Top, m.st.prompt.Render("❯ "), m.ta.View())
 	return lipgloss.NewStyle().Padding(0, 1).Render(box.Width(m.vp.Width - 2).Render(field))
 }
 
 func (m *Model) sidebar() string {
 	var b strings.Builder
 	b.WriteString(m.st.logo.Render("◆ antares"))
-	b.WriteString("\n")
-	b.WriteString(m.st.headerDim.Render(version.Version))
-	b.WriteString("\n\n")
+	b.WriteString("  " + m.st.headerDim.Render(version.Version) + "\n\n")
+
+	// live status dot
+	if m.busy {
+		b.WriteString(m.st.stRunning.Render("● ") + m.st.sideValue.Render("working") + "\n\n")
+	} else {
+		b.WriteString(m.st.stDone.Render("● ") + m.st.sideValue.Render("ready") + "\n\n")
+	}
 
 	section := func(label, value string) {
-		b.WriteString(m.st.sideLabel.Render(strings.ToUpper(label)))
-		b.WriteString("\n")
-		b.WriteString(m.st.sideValue.Render(value))
-		b.WriteString("\n\n")
+		b.WriteString(m.st.sideLabel.Render(strings.ToUpper(label)) + "\n")
+		b.WriteString(m.st.sideValue.Render(value) + "\n\n")
 	}
 	model, provider := "—", ""
 	if m.cfg != nil {
 		model, provider = firstNon(m.cfg.Model.Default, "—"), m.cfg.Model.Provider
 	}
-	section("Model", model)
+	section("Model", truncate(model, 22))
 	if provider != "" {
 		section("Provider", provider)
 	}
@@ -143,43 +145,46 @@ func (m *Model) sidebar() string {
 	if m.title != "" {
 		sess = m.title
 	}
-	section("Session", truncate(sess, 20))
+	section("Session", truncate(sess, 22))
 	section("Tokens", fmt.Sprintf("%d in / %d out", m.tokensIn, m.tokensOut))
-	section("Reasoning", onOff(m.showReasoning))
 
-	b.WriteString(m.st.sideLabel.Render("SHORTCUTS"))
-	b.WriteString("\n")
-	for _, s := range [][2]string{
+	reason := m.st.stErr.Render("off")
+	if m.showReasoning {
+		reason = m.st.stDone.Render("on")
+	}
+	b.WriteString(m.st.sideLabel.Render("REASONING") + "\n" + reason + "\n\n")
+
+	// Shortcuts (trimmed on short terminals).
+	b.WriteString(m.st.sideLabel.Render("SHORTCUTS") + "\n")
+	rows := [][2]string{
 		{"Enter", "send"}, {"Ctrl+J", "newline"}, {"/", "commands"},
-		{"Ctrl+R", "reasoning"}, {"Ctrl+L", "clear"}, {"PgUp/Dn", "scroll"},
-		{"Ctrl+C", "stop/quit"},
-	} {
-		b.WriteString(m.st.statusKey.Render(s[0]))
-		b.WriteString(m.st.sideLabel.Render(" " + s[1] + "\n"))
+		{"Ctrl+R", "reasoning"}, {"Ctrl+L", "clear"}, {"PgUp/Dn", "scroll"}, {"Ctrl+C", "quit"},
+	}
+	if m.height < 24 {
+		rows = rows[:4]
+	}
+	for _, s := range rows {
+		b.WriteString(m.st.statusKey.Render(pad(s[0], 8)) + m.st.sideLabel.Render(s[1]) + "\n")
 	}
 	return b.String()
 }
 
 func (m *Model) statusBar() string {
-	sep := m.st.statusSep.Render("  ·  ")
+	sep := m.st.statusSep.Render("  ")
 	var parts []string
 	if m.busy {
-		parts = append(parts, m.spin.View()+m.st.status.Render(" working"))
+		parts = append(parts, m.spin.View()+m.st.status.Render("working"))
 	} else {
-		parts = append(parts, m.st.status.Render("ready"))
+		parts = append(parts, m.st.stDone.Render("●")+m.st.status.Render(" ready"))
 	}
 	if m.status != "" {
-		parts = append(parts, m.st.status.Render(m.status))
+		parts = append(parts, m.st.statusSep.Render("·")+" "+m.st.status.Render(m.status))
 	}
-	if m.tokensOut > 0 {
-		parts = append(parts, m.st.status.Render(fmt.Sprintf("%d/%d tok", m.tokensIn, m.tokensOut)))
-	}
-	if m.vp.ScrollPercent() < 1 && m.vp.TotalLineCount() > m.vp.Height {
-		parts = append(parts, m.st.scrollHint.Render(fmt.Sprintf("%d%%↑", int(m.vp.ScrollPercent()*100))))
+	if m.vp.TotalLineCount() > m.vp.Height && !m.vp.AtBottom() {
+		parts = append(parts, m.st.scrollHint.Render(fmt.Sprintf("↑ %d%%", int(m.vp.ScrollPercent()*100))))
 	}
 	line := strings.Join(parts, sep)
-	// Right-aligned hint.
-	hint := m.st.status.Render("/help")
+	hint := m.st.statusKey.Render("/") + m.st.status.Render("help")
 	gap := m.vp.Width - lipgloss.Width(line) - lipgloss.Width(hint)
 	if gap < 1 {
 		return truncate(line, maxi(m.vp.Width, 1))
@@ -188,25 +193,21 @@ func (m *Model) statusBar() string {
 }
 
 func (m *Model) paletteView() string {
-	var b strings.Builder
+	var rows []string
 	for i, c := range m.palette {
-		name, desc := m.st.paletteName.Render("/"+c.Name), m.st.paletteDesc.Render(c.Summary)
-		row := name + "  " + desc
+		marker := "  "
+		name := m.st.paletteName.Render("/" + c.Name)
 		if i == m.paletteSel {
-			row = m.st.paletteSel.Render("❯ ") + m.st.paletteSel.Render("/"+c.Name) + "  " + desc
-		} else {
-			row = "  " + row
+			marker = m.st.paletteSel.Render("❯ ")
+			name = m.st.paletteSel.Render("/" + c.Name)
 		}
-		b.WriteString(row)
-		if i < len(m.palette)-1 {
-			b.WriteString("\n")
-		}
+		rows = append(rows, marker+name+"  "+m.st.paletteDesc.Render(c.Summary))
 	}
-	return m.st.paletteBox.Width(m.vp.Width - 2).Render(b.String())
+	return m.st.paletteBox.Width(m.vp.Width - 2).Render(strings.Join(rows, "\n"))
 }
 
-// refreshTranscript rebuilds the viewport content from the blocks and, unless
-// the user has scrolled up, keeps it pinned to the newest line.
+// refreshTranscript rebuilds the viewport content, keeping it pinned to the
+// newest line unless the user scrolled up.
 func (m *Model) refreshTranscript() {
 	if !m.ready {
 		return
@@ -220,55 +221,93 @@ func (m *Model) refreshTranscript() {
 
 func (m *Model) renderBlocks() string {
 	var out []string
-	for _, bl := range m.blocks {
+	for i := range m.blocks {
+		bl := m.blocks[i]
 		if bl.kind == blockReasoning && !m.showReasoning {
 			continue
 		}
-		out = append(out, m.renderBlock(bl))
+		out = append(out, m.renderBlockCached(bl))
 	}
 	return strings.Join(out, "\n\n")
 }
 
+// renderBlockCached memoises rendered output for settled blocks so streaming
+// stays smooth even with a long transcript (Glamour is the expensive part).
+func (m *Model) renderBlockCached(bl block) string {
+	if bl.streaming || (bl.kind == blockAssistant && !bl.done) {
+		return m.renderBlock(bl)
+	}
+	key := fmt.Sprintf("%d|%d|%v|%v|%s|%s", bl.kind, m.vp.Width, bl.done, bl.isError, bl.title, bl.text)
+	if m.cache == nil {
+		m.cache = map[string]string{}
+	}
+	if s, ok := m.cache[key]; ok {
+		return s
+	}
+	s := m.renderBlock(bl)
+	m.cache[key] = s
+	return s
+}
+
 func (m *Model) renderBlock(bl block) string {
+	cw := m.vp.Width
 	switch bl.kind {
 	case blockUser:
-		return m.st.userLabel.Render("❯ You") + "\n" + m.st.userText.Render(wrap(bl.text, m.vp.Width))
+		badge := m.st.userBadge.Render("❯ You")
+		card := m.st.userCard.Width(cw - 2).Render(m.st.userText.Render(wrap(bl.text, cw-6)))
+		return badge + "\n" + card
+
 	case blockAssistant:
-		if m.renderer != nil {
-			if s, err := m.renderer.Render(bl.text); err == nil {
-				return strings.TrimRight(s, "\n")
-			}
-		}
-		return wrap(bl.text, m.vp.Width)
+		badge := m.st.asstBadge.Render("◆ antares")
+		return badge + "\n" + m.st.asstBar.Render(m.markdown(bl.text, cw-4))
+
 	case blockReasoning:
-		return m.st.reasonLabel.Render("reasoning") + "\n" + m.st.reasoning.Render(wrap(bl.text, m.vp.Width-2))
+		body := m.st.reasoning.Render(wrap(bl.text, cw-4))
+		return m.st.reasonBadge.Render("… thinking") + "\n" + indent(body, m.st.reasoning.Render("▏ "))
+
 	case blockTool:
-		head := m.st.toolLabel.Render("⚙ " + bl.title)
+		dot, label := m.toolStatus(bl)
+		head := m.st.toolMeta.Render("⚙ "+bl.title) + "  " + dot
 		body := strings.TrimSpace(bl.text)
 		if body == "" {
-			if bl.streaming {
-				return head + "  " + m.st.system.Render("…")
-			}
-			return head
+			return m.st.toolCard.Width(cw - 2).Render(head + "  " + m.st.system.Render(label))
 		}
-		style := m.st.toolBox
-		if bl.isError {
-			style = m.st.errorBox
-		}
-		return head + "\n" + style.Render(clampLines(body, 12, m.vp.Width-2))
+		res := m.st.toolResult.Render(clampLines(body, 10, cw-6))
+		return m.st.toolCard.Width(cw - 2).Render(head + "\n" + res)
+
 	case blockNotice:
-		return m.st.notice.Render("! " + wrap(bl.text, m.vp.Width-2))
+		return m.st.notice.Render(wrap(bl.text, cw-4))
+
 	case blockError:
-		return m.st.errorBox.Render(wrap(bl.text, m.vp.Width-2))
+		return m.st.errorCard.Width(cw - 2).Render(m.st.stErr.Render("✗ ") + wrap(bl.text, cw-6))
+
 	case blockSystem:
-		return m.st.system.Render(wrap(bl.text, m.vp.Width))
+		return m.st.system.Render(wrap(bl.text, cw))
 	}
 	return bl.text
 }
 
-// ---- small helpers ----------------------------------------------------------
+func (m *Model) toolStatus(bl block) (dot, label string) {
+	switch {
+	case bl.isError:
+		return m.st.stErr.Render("✗ error"), "error"
+	case bl.done:
+		return m.st.stDone.Render("✓ done"), "done"
+	default:
+		return m.st.stRunning.Render("● running"), "running…"
+	}
+}
 
-func (m *Model) refresh() tea.Cmd { m.refreshTranscript(); return nil }
+func (m *Model) markdown(text string, w int) string {
+	if m.renderer != nil {
+		if s, err := m.renderer.Render(text); err == nil {
+			return strings.TrimRight(s, "\n")
+		}
+	}
+	return wrap(text, w)
+}
+
+// ---- helpers ----------------------------------------------------------------
 
 func wrap(s string, w int) string {
 	if w < 4 {
@@ -277,23 +316,34 @@ func wrap(s string, w int) string {
 	return lipgloss.NewStyle().Width(w).Render(s)
 }
 
-func clampLines(s string, maxLines, w int) string {
+func indent(s, prefix string) string {
 	lines := strings.Split(s, "\n")
-	trimmed := false
+	for i, l := range lines {
+		lines[i] = prefix + l
+	}
+	return strings.Join(lines, "\n")
+}
+
+func clampLines(s string, maxLines, w int) string {
+	s = wrap(s, w)
+	lines := strings.Split(s, "\n")
 	if len(lines) > maxLines {
 		lines = lines[:maxLines]
-		trimmed = true
+		return strings.Join(lines, "\n") + "\n…"
 	}
-	out := strings.Join(lines, "\n")
-	if trimmed {
-		out += "\n…"
+	return strings.Join(lines, "\n")
+}
+
+func pad(s string, n int) string {
+	for len([]rune(s)) < n {
+		s += " "
 	}
-	return out
+	return s
 }
 
 func shortID(id string) string {
-	if len(id) > 12 {
-		return id[:12]
+	if len(id) > 10 {
+		return id[:10]
 	}
 	return id
 }
@@ -302,6 +352,9 @@ func truncate(s string, n int) string {
 	r := []rune(s)
 	if len(r) <= n {
 		return s
+	}
+	if n < 1 {
+		return ""
 	}
 	return string(r[:n-1]) + "…"
 }
