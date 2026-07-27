@@ -94,6 +94,7 @@ intercepted before the message reaches the model.
 | `/rollback` | List the files this session changed |
 | `/rollback all` \| `/rollback <path>` | Put them back |
 | `/panel <question>` | Ask several models and synthesise one answer |
+| `/team` | How the specialist roles have performed |
 
 See [the harness](harness.md) for what these actually do.
 
@@ -104,6 +105,7 @@ See [the harness](harness.md) for what these actually do.
 | `/roles` | List the specialist roles |
 | `/role [name]` | Run this conversation as a role |
 | `/panel <question>` | Ask several models and synthesise one answer |
+| `/team` | How the specialist roles have performed |
 
 ### Authorized security testing
 
