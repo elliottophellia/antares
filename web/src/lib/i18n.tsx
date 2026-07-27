@@ -159,6 +159,9 @@ const en = {
   'chat.somethingWrong': 'something went wrong',
   'chat.toolArgs': 'Arguments',
   'chat.toolResult': 'Result',
+  'chat.toolError': 'error',
+  'chat.nLines': '{n} lines',
+  'chat.tasks': 'Tasks',
   'chat.copyCode': 'Copy code',
   'chat.codeText': 'text',
 
@@ -609,6 +612,9 @@ const id: Dict = {
   'chat.somethingWrong': 'terjadi kesalahan',
   'chat.toolArgs': 'Argumen',
   'chat.toolResult': 'Hasil',
+  'chat.toolError': 'gagal',
+  'chat.nLines': '{n} baris',
+  'chat.tasks': 'Tugas',
   'chat.copyCode': 'Salin kode',
   'chat.codeText': 'teks',
 

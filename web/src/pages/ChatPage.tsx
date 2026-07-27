@@ -21,7 +21,7 @@ import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/primitives'
 import { SkeletonMessage } from '@/components/ui/skeleton'
 import { Markdown } from '@/components/chat/Markdown'
-import { ToolCallCard } from '@/components/chat/ToolCallCard'
+import { ToolCallCard, TaskList } from '@/components/chat/ToolCallCard'
 import { ApprovalCard, type ApprovalView } from '@/components/chat/ApprovalCard'
 import { RolePicker } from '@/components/chat/RolePicker'
 import {
@@ -858,18 +858,22 @@ function StreamingIndicator({ turn, tool }: { turn?: number; tool?: string }) {
 function ReasoningBlock({ text }: { text: string }) {
   const { t } = useI18n()
   const [open, setOpen] = useState(false)
+  // A slim inline toggle rather than a boxed card: collapsed reasoning should
+  // barely take a line, expanding into a quiet left-ruled block when opened.
   return (
-    <div className="rounded-[var(--radius-sm)] border border-border bg-muted/40">
+    <div className="text-muted-foreground">
       <button
         onClick={() => setOpen((v) => !v)}
-        className="flex w-full items-center gap-1.5 px-3 py-2 text-[11px] font-medium text-muted-foreground"
+        className="flex items-center gap-1.5 text-[11px] font-medium transition-colors hover:text-foreground"
       >
         <Brain className="size-3.5" />
         {t('chat.reasoning')}
-        <CaretDown className={cn('ml-auto size-3 transition-transform', open && 'rotate-180')} />
+        <CaretDown className={cn('size-3 transition-transform', open && 'rotate-180')} />
       </button>
       {open ? (
-        <p className="whitespace-pre-wrap break-words px-3 pb-3 text-xs text-muted-foreground">{text}</p>
+        <p className="mt-1.5 whitespace-pre-wrap break-words border-l-2 border-border pl-3 text-xs">
+          {text}
+        </p>
       ) : null}
     </div>
   )
@@ -936,7 +940,11 @@ function MessageBubble({ message }: { message: ChatMessage }) {
               return <ReasoningBlock key={`r${i}`} text={seg.text} />
             }
             if (seg.kind === 'tool') {
-              return <ToolCallCard key={seg.call.id} call={seg.call} />
+              return seg.call.name === 'todo' ? (
+                <TaskList key={seg.call.id} call={seg.call} />
+              ) : (
+                <ToolCallCard key={seg.call.id} call={seg.call} />
+              )
             }
             return (
               <div key={`t${i}`} className="text-sm leading-relaxed">
@@ -947,9 +955,13 @@ function MessageBubble({ message }: { message: ChatMessage }) {
         : // Fallback for any message that predates the timeline model.
           <>
             {message.reasoning ? <ReasoningBlock text={message.reasoning} /> : null}
-            {message.toolCalls?.map((call) => (
-              <ToolCallCard key={call.id} call={call} />
-            ))}
+            {message.toolCalls?.map((call) =>
+              call.name === 'todo' ? (
+                <TaskList key={call.id} call={call} />
+              ) : (
+                <ToolCallCard key={call.id} call={call} />
+              ),
+            )}
             {message.content ? (
               <div className="text-sm leading-relaxed">
                 <Markdown content={message.content} />

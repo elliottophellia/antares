@@ -1,9 +1,12 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import {
   CaretDown,
+  CaretRight,
   CheckCircle,
+  Circle,
   CircleNotch,
   Database,
+  FilePlus,
   FileText,
   Globe,
   ListChecks,
@@ -11,44 +14,89 @@ import {
   PencilSimple,
   Terminal,
   Wrench,
-  XCircle,
 } from '@phosphor-icons/react'
 import { cn } from '@/lib/utils'
 import type { ToolCallView } from '@/pages/ChatPage'
 import { useI18n } from '@/lib/i18n'
 
-const ICONS: Record<string, React.ComponentType<{ className?: string; weight?: 'regular' | 'fill' }>> = {
-  read_file: FileText,
-  write_file: PencilSimple,
-  edit_file: PencilSimple,
-  list_files: FileText,
-  glob: MagnifyingGlass,
-  grep: MagnifyingGlass,
-  terminal: Terminal,
-  web_search: Globe,
-  web_fetch: Globe,
-  memory: Database,
-  rag_search: Database,
-  rag_index: Database,
-  session_search: MagnifyingGlass,
-  todo: ListChecks,
+type IconType = React.ComponentType<{ className?: string; weight?: 'regular' | 'fill' }>
+type Meta = { label: string; Icon: IconType }
+
+// Verb + icon per tool, so a call reads as an action ("edit foo.ts") rather than
+// a raw function name. The verb is implied by the icon/diff, mirroring how a
+// clean IDE chat presents its tools.
+const TOOL_META: Record<string, Meta> = {
+  read_file: { label: 'read', Icon: FileText },
+  write_file: { label: 'create', Icon: FilePlus },
+  edit_file: { label: 'edit', Icon: PencilSimple },
+  list_files: { label: 'list', Icon: FileText },
+  glob: { label: 'find', Icon: MagnifyingGlass },
+  grep: { label: 'search', Icon: MagnifyingGlass },
+  terminal: { label: 'run', Icon: Terminal },
+  web_search: { label: 'search', Icon: Globe },
+  web_fetch: { label: 'fetch', Icon: Globe },
+  memory: { label: 'memory', Icon: Database },
+  rag_search: { label: 'recall', Icon: Database },
+  rag_index: { label: 'index', Icon: Database },
+  session_search: { label: 'search', Icon: MagnifyingGlass },
+  todo: { label: 'tasks', Icon: ListChecks },
+}
+
+type DiffRow = { type: 'ctx' | 'add' | 'del'; text: string }
+type Diff = { rows: DiffRow[]; added: number; removed: number }
+
+// Line-based diff (LCS) between old and new source, for the expanded edit view.
+function lineDiff(oldText: string, newText: string): Diff {
+  const a = (oldText || '').replace(/\n$/, '').split('\n')
+  const b = (newText || '').replace(/\n$/, '').split('\n')
+  if (!oldText) {
+    return { rows: b.map((text) => ({ type: 'add', text })), added: b.length, removed: 0 }
+  }
+  const n = a.length
+  const m = b.length
+  const dp = Array.from({ length: n + 1 }, () => new Array<number>(m + 1).fill(0))
+  for (let i = n - 1; i >= 0; i--) {
+    for (let j = m - 1; j >= 0; j--) {
+      dp[i][j] = a[i] === b[j] ? dp[i + 1][j + 1] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1])
+    }
+  }
+  const rows: DiffRow[] = []
+  let i = 0
+  let j = 0
+  let added = 0
+  let removed = 0
+  while (i < n && j < m) {
+    if (a[i] === b[j]) {
+      rows.push({ type: 'ctx', text: a[i] })
+      i++
+      j++
+    } else if (dp[i + 1][j] >= dp[i][j + 1]) {
+      rows.push({ type: 'del', text: a[i] })
+      i++
+      removed++
+    } else {
+      rows.push({ type: 'add', text: b[j] })
+      j++
+      added++
+    }
+  }
+  while (i < n) {
+    rows.push({ type: 'del', text: a[i] })
+    i++
+    removed++
+  }
+  while (j < m) {
+    rows.push({ type: 'add', text: b[j] })
+    j++
+    added++
+  }
+  return { rows, added, removed }
 }
 
 /** One-line human summary of a tool call, derived from its arguments. */
-function summarize(name: string, rawArgs: string): string {
-  let args: Record<string, unknown> = {}
-  try {
-    args = JSON.parse(rawArgs || '{}') as Record<string, unknown>
-  } catch {
-    return ''
-  }
+function summarize(name: string, args: Record<string, unknown>): string {
   const s = (k: string) => (typeof args[k] === 'string' ? (args[k] as string) : '')
   switch (name) {
-    case 'read_file':
-    case 'write_file':
-    case 'edit_file':
-    case 'list_files':
-      return s('path')
     case 'terminal':
       return s('command')
     case 'grep':
@@ -72,12 +120,126 @@ function summarize(name: string, rawArgs: string): string {
   }
 }
 
+type TodoItem = { content: string; status: string }
+
+/** Robloxkit-style task list, rendered for `todo` tool calls: a compact
+ *  checklist with a status glyph per item and a done/total tally. */
+export function TaskList({ call }: { call: ToolCallView }) {
+  const { t } = useI18n()
+  const items = useMemo<TodoItem[]>(() => {
+    try {
+      const parsed = JSON.parse(call.args || '{}') as { items?: TodoItem[] }
+      return Array.isArray(parsed.items) ? parsed.items : []
+    } catch {
+      return []
+    }
+  }, [call.args])
+
+  // A read call, or a write with no list — nothing worth a checklist; fall back
+  // to the ordinary tool card so the raw result is still reachable.
+  if (items.length === 0) return <ToolCallCard call={call} />
+
+  const done = items.filter((it) => it.status === 'completed').length
+
+  return (
+    <div className="rounded-[var(--radius-sm)] border border-border bg-card px-3 py-2.5">
+      <div className="mb-2 flex items-center gap-1.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+        <ListChecks className="size-3.5" />
+        {t('chat.tasks')}
+        <span className="ml-auto tabular-nums">
+          {done}/{items.length}
+        </span>
+      </div>
+      <ul className="space-y-1.5">
+        {items.map((it, i) => (
+          <li key={i} className="flex items-start gap-2 text-[12px] leading-snug">
+            <span className="mt-0.5 shrink-0">
+              {it.status === 'completed' ? (
+                <CheckCircle className="size-3.5 text-[var(--success)]" weight="fill" />
+              ) : it.status === 'in_progress' ? (
+                <CircleNotch className="size-3.5 animate-spin text-primary" />
+              ) : (
+                <Circle className="size-3.5 text-muted-foreground/40" />
+              )}
+            </span>
+            <span
+              className={cn(
+                'min-w-0 flex-1',
+                it.status === 'completed'
+                  ? 'text-muted-foreground line-through'
+                  : it.status === 'in_progress'
+                    ? 'font-medium text-foreground'
+                    : 'text-muted-foreground',
+              )}
+            >
+              {it.content}
+            </span>
+          </li>
+        ))}
+      </ul>
+    </div>
+  )
+}
+
 export function ToolCallCard({ call }: { call: ToolCallView }) {
   const { t } = useI18n()
   const [open, setOpen] = useState(false)
-  const Icon = ICONS[call.name] ?? Wrench
-  const summary = summarize(call.name, call.args)
+
+  const args = useMemo<Record<string, unknown>>(() => {
+    try {
+      return JSON.parse(call.args || '{}') as Record<string, unknown>
+    } catch {
+      return {}
+    }
+  }, [call.args])
+
+  const meta = TOOL_META[call.name] ?? { label: call.name, Icon: Wrench }
+  const isEdit = call.name === 'edit_file'
+  const isCreate = call.name === 'write_file'
+  const isDiff = isEdit || isCreate
+  const isRead = call.name === 'read_file'
   const output = call.result ?? call.progress ?? ''
+
+  // File tools carry a path: render it as filename over its parent directory.
+  const path = typeof args.path === 'string' ? (args.path as string) : ''
+  const fileName = path ? path.split('/').pop() || path : ''
+  const parentPath = path.includes('/') ? path.slice(0, path.lastIndexOf('/')) : ''
+  const summary = path ? '' : summarize(call.name, args)
+
+  const diff = useMemo<Diff>(() => {
+    if (isEdit) return lineDiff(String(args.old_string ?? ''), String(args.new_string ?? ''))
+    if (isCreate) return lineDiff('', String(args.content ?? ''))
+    return { rows: [], added: 0, removed: 0 }
+  }, [isEdit, isCreate, args.old_string, args.new_string, args.content])
+
+  // Lines read, for the collapsed read summary.
+  const readLines = isRead && output.trim() ? output.trim().split('\n').length : 0
+
+  const canExpand = isDiff ? diff.rows.length > 0 : (call.args && call.args !== '{}') || !!output
+
+  // Right-side status: a diff tally for edits, "N lines" for reads, a spinner
+  // while running, else a short result echo.
+  const right = call.isError ? (
+    <span className="text-[10px] font-semibold text-destructive">{t('chat.toolError')}</span>
+  ) : isDiff ? (
+    <span className="flex items-center gap-1.5 text-[10px] font-semibold tabular-nums">
+      {call.running ? <CircleNotch className="size-3 animate-spin text-muted-foreground" /> : null}
+      {diff.added > 0 ? <span className="text-emerald-500">+{diff.added}</span> : null}
+      {diff.removed > 0 ? <span className="text-destructive">-{diff.removed}</span> : null}
+    </span>
+  ) : call.running ? (
+    <CircleNotch className="size-3.5 animate-spin text-muted-foreground" />
+  ) : isRead && readLines ? (
+    <span className="text-[10px] text-muted-foreground/70">{t('chat.nLines', { n: readLines })}</span>
+  ) : call.result !== undefined ? (
+    output ? (
+      <span className="max-w-[45%] truncate text-[10px] text-muted-foreground/70">
+        {output.trim().split('\n')[0]}
+      </span>
+    ) : (
+      <CheckCircle className="size-3.5 text-[var(--success)]" weight="fill" />
+    )
+  ) : null
 
   return (
     <div
@@ -87,56 +249,119 @@ export function ToolCallCard({ call }: { call: ToolCallView }) {
       )}
     >
       <button
-        onClick={() => setOpen((v) => !v)}
-        className="flex w-full items-center gap-2 px-3 py-2 text-left"
+        type="button"
+        onClick={() => canExpand && setOpen((v) => !v)}
+        className={cn(
+          'flex w-full items-start gap-2 px-3 py-2 text-left',
+          canExpand ? 'cursor-pointer hover:bg-muted/40' : 'cursor-default',
+        )}
       >
-        <Icon className="size-4 shrink-0 text-muted-foreground" />
-        <span className="shrink-0 font-mono text-[11px] font-medium">{call.name}</span>
-        {summary ? (
-          <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-muted-foreground">
-            {summary}
+        <span className="mt-0.5 shrink-0 text-muted-foreground">
+          {canExpand ? (
+            open ? (
+              <CaretDown className="size-3.5" />
+            ) : (
+              <CaretRight className="size-3.5" />
+            )
+          ) : (
+            <meta.Icon className="size-3.5" />
+          )}
+        </span>
+
+        {path ? (
+          <span className="flex min-w-0 flex-1 flex-col leading-tight" title={path}>
+            <span
+              className={cn(
+                'truncate font-mono text-[11px]',
+                isDiff ? 'font-medium text-primary' : 'text-foreground',
+              )}
+            >
+              {fileName}
+            </span>
+            {parentPath ? (
+              <span className="truncate font-mono text-[10px] text-muted-foreground/60">
+                {parentPath}/
+              </span>
+            ) : null}
           </span>
         ) : (
-          <span className="flex-1" />
+          <>
+            <span className="shrink-0 font-mono text-[11px] font-medium">{meta.label}</span>
+            {summary ? (
+              <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-muted-foreground">
+                {summary}
+              </span>
+            ) : (
+              <span className="flex-1" />
+            )}
+          </>
         )}
-        {call.running ? (
-          <CircleNotch className="size-3.5 shrink-0 animate-spin text-muted-foreground" />
-        ) : call.isError ? (
-          <XCircle className="size-3.5 shrink-0 text-destructive" weight="fill" />
-        ) : call.result !== undefined ? (
-          <CheckCircle className="size-3.5 shrink-0 text-[var(--success)]" weight="fill" />
-        ) : null}
-        <CaretDown className={cn('size-3 shrink-0 transition-transform', open && 'rotate-180')} />
+
+        <span className="mt-0.5 shrink-0">{right}</span>
       </button>
 
-      {open ? (
-        <div className="space-y-2 border-t border-border px-3 py-2">
-          {call.args && call.args !== '{}' ? (
-            <div>
-              <p className="mb-1 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
-                {t('chat.toolArgs')}
-              </p>
-              <pre className="max-h-48 overflow-auto rounded bg-muted/50 p-2 font-mono text-[11px]">
-                {prettyJSON(call.args)}
-              </pre>
+      {open && canExpand ? (
+        isDiff ? (
+          <div className="border-t border-border bg-muted/30">
+            <div className="max-h-64 overflow-auto py-1 font-mono text-[11px] leading-[1.5]">
+              {diff.rows.map((r, ri) => (
+                <div
+                  key={ri}
+                  className={cn(
+                    'flex gap-2 px-3',
+                    r.type === 'add'
+                      ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-300'
+                      : r.type === 'del'
+                        ? 'bg-destructive/10 text-destructive'
+                        : 'text-muted-foreground/70',
+                  )}
+                >
+                  <span
+                    className={cn(
+                      'select-none',
+                      r.type === 'add'
+                        ? 'text-emerald-500'
+                        : r.type === 'del'
+                          ? 'text-destructive'
+                          : 'text-transparent',
+                    )}
+                  >
+                    {r.type === 'add' ? '+' : r.type === 'del' ? '-' : ' '}
+                  </span>
+                  <span className="whitespace-pre">{r.text || ' '}</span>
+                </div>
+              ))}
             </div>
-          ) : null}
-          {output ? (
-            <div>
-              <p className="mb-1 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
-                {t('chat.toolResult')}
-              </p>
-              <pre
-                className={cn(
-                  'max-h-80 overflow-auto whitespace-pre-wrap break-words rounded bg-muted/50 p-2 font-mono text-[11px]',
-                  call.isError && 'text-destructive',
-                )}
-              >
-                {output}
-              </pre>
-            </div>
-          ) : null}
-        </div>
+          </div>
+        ) : (
+          <div className="space-y-2 border-t border-border px-3 py-2">
+            {call.args && call.args !== '{}' ? (
+              <div>
+                <p className="mb-1 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+                  {t('chat.toolArgs')}
+                </p>
+                <pre className="max-h-48 overflow-auto rounded bg-muted/50 p-2 font-mono text-[11px]">
+                  {prettyJSON(call.args)}
+                </pre>
+              </div>
+            ) : null}
+            {output ? (
+              <div>
+                <p className="mb-1 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+                  {t('chat.toolResult')}
+                </p>
+                <pre
+                  className={cn(
+                    'max-h-80 overflow-auto whitespace-pre-wrap break-words rounded bg-muted/50 p-2 font-mono text-[11px]',
+                    call.isError && 'text-destructive',
+                  )}
+                >
+                  {output}
+                </pre>
+              </div>
+            ) : null}
+          </div>
+        )
       ) : null}
     </div>
   )
