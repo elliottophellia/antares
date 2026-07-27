@@ -143,10 +143,12 @@ type RoleInfo struct {
 type FindingStore interface {
 	Add(sessionID string, f findings.Finding) (findings.Finding, error)
 	Triage(sessionID, id string, status findings.Status, duplicateOf string) (findings.Finding, bool, error)
+	List(sessionID string) ([]findings.Finding, error)
 }
 
 // IntelStore is the subset of the engagement store the tools need.
 type IntelStore interface {
 	Add(sessionID string, in engagement.Intel) (engagement.Intel, bool, error)
 	State(sessionID string, hasScope, hasReport bool) ([]engagement.PhaseState, error)
+	List(sessionID string) ([]engagement.Intel, error)
 }

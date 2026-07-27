@@ -152,6 +152,30 @@ func (a *Agent) methodologyBlock(sessionID string) string {
 		}
 		b.WriteString("\n")
 	}
+	// Testing coverage: which vulnerability classes have evidence, and which are
+	// still untested. This is what stops the agent from testing one class and
+	// declaring the phase done.
+	evidence := make([]string, 0, len(list))
+	for _, in := range list {
+		evidence = append(evidence, in.Value, in.Detail)
+	}
+	if a.findings != nil {
+		if fs, err := a.findings.List(sessionID); err == nil {
+			for _, f := range fs {
+				evidence = append(evidence, f.Title, f.CWE, f.Description)
+			}
+		}
+	}
+	cov := engagement.Coverage(evidence)
+	fmt.Fprintf(&b, "\nTesting coverage (%d%%):\n", engagement.CoveragePercent(cov))
+	for _, c := range cov {
+		mark := "[ ]"
+		if c.Covered {
+			mark = "[x]"
+		}
+		fmt.Fprintf(&b, "%s %s\n", mark, c.Area.Title)
+	}
+
 	if _, directive := engagement.NextStep(states); directive != "" {
 		b.WriteString("\nNext: " + directive + "\n")
 	}

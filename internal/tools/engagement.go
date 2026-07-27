@@ -92,6 +92,30 @@ func (methodologyStatusTool) Execute(_ context.Context, in Input) Result {
 		}
 		b.WriteString("\n")
 	}
+	// Testing-area coverage, from intel and any recorded findings.
+	evidence := []string{}
+	if list, err := in.Deps.Intel.List(in.SessionID); err == nil {
+		for _, it := range list {
+			evidence = append(evidence, it.Value, it.Detail)
+		}
+	}
+	if in.Deps.Findings != nil {
+		if fs, err := in.Deps.Findings.List(in.SessionID); err == nil {
+			for _, f := range fs {
+				evidence = append(evidence, f.Title, f.CWE, f.Description)
+			}
+		}
+	}
+	cov := engagement.Coverage(evidence)
+	fmt.Fprintf(&b, "\nTesting coverage (%d%%):\n", engagement.CoveragePercent(cov))
+	for _, c := range cov {
+		mark := "[ ]"
+		if c.Covered {
+			mark = "[x]"
+		}
+		fmt.Fprintf(&b, "%s %s\n", mark, c.Area.Title)
+	}
+
 	_, directive := engagement.NextStep(states)
 	fmt.Fprintf(&b, "\nNext: %s", directive)
 
