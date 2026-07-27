@@ -24,6 +24,7 @@ func init() {
 		methodologyStatusTool{},
 		imageGenerateTool{},
 		visionTool{},
+		diagnosticsTool{},
 	} {
 		globalRegistry.Register(t)
 	}
