@@ -24,3 +24,14 @@ func (s *Server) handleRoles(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleSwarm(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"active": s.agent.ActiveAgents()})
 }
+
+// handleSessionRole reports which specialist a session runs as, so the chat
+// picker can reflect it after a reload.
+func (s *Server) handleSessionRole(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	role := ""
+	if s.db != nil && id != "" {
+		role, _ = s.db.GetKV(r.Context(), "role:"+id)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"role": role})
+}

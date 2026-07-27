@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { useNavigate, useParams } from 'react-router-dom'
+import { useLocation, useNavigate, useParams } from 'react-router-dom'
 import {
   ArrowUp,
   Brain,
@@ -23,6 +23,7 @@ import { SkeletonMessage } from '@/components/ui/skeleton'
 import { Markdown } from '@/components/chat/Markdown'
 import { ToolCallCard } from '@/components/chat/ToolCallCard'
 import { ApprovalCard, type ApprovalView } from '@/components/chat/ApprovalCard'
+import { RolePicker } from '@/components/chat/RolePicker'
 import {
   SlashPalette,
   useCommands,
@@ -144,6 +145,7 @@ const SUGGESTION_KEYS: MessageKey[] = [
 export default function ChatPage() {
   const { sessionId } = useParams<{ sessionId: string }>()
   const navigate = useNavigate()
+  const location = useLocation()
   const { t } = useI18n()
 
   const [messages, setMessages] = useState<ChatMessage[]>([])
@@ -155,6 +157,7 @@ export default function ChatPage() {
   const [approvals, setApprovals] = useState<ApprovalView[]>([])
   // Data URLs, which is what the API takes and what a preview needs.
   const [images, setImages] = useState<string[]>([])
+  const [role, setRole] = useState('')
 
   const commands = useCommands()
   const matches = useMatches(input, commands)
@@ -163,6 +166,24 @@ export default function ChatPage() {
   const abortRef = useRef<(() => void) | null>(null)
   const scrollRef = useStickyScroll(messages)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+
+  // Landing on a bare "/" resumes the last conversation, so switching back to
+  // Chat continues where you were rather than starting over. The New button
+  // arrives with state.fresh set, which skips the resume and forgets it.
+  useEffect(() => {
+    if (sessionId) {
+      localStorage.setItem('antares:last-session', sessionId)
+      return
+    }
+    if (location.state?.fresh) {
+      localStorage.removeItem('antares:last-session')
+      return
+    }
+    const last = localStorage.getItem('antares:last-session')
+    if (last) navigate(`/c/${last}`, { replace: true })
+    // Only when the route id changes, not on every render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sessionId])
 
   useEffect(() => {
     if (!sessionId) {
@@ -178,6 +199,9 @@ export default function ChatPage() {
         setTitle(d.session.title || t('chat.conversation'))
         setError(undefined)
       })
+    get<{ role?: string }>(`/sessions/${sessionId}/role`)
+      .then((r) => setRole(r.role ?? ''))
+      .catch(() => {})
       .catch((e: Error) => setError(e.message))
       .finally(() => setLoading(false))
     // t is stable per language; refetching on language change is harmless.
@@ -238,10 +262,11 @@ export default function ChatPage() {
           case 'new':
           case 'clear':
             stop()
+            localStorage.removeItem('antares:last-session')
             setMessages([])
             setTitle('')
             setApprovals([])
-            navigate('/')
+            navigate('/', { state: { fresh: true } })
             return
           case 'resume':
             if (r.action.value) navigate(`/c/${r.action.value}`)
@@ -298,7 +323,7 @@ export default function ChatPage() {
 
     abortRef.current = streamPost(
       '/chat',
-      { session_id: sessionId ?? '', message: text, images: attached },
+      { session_id: sessionId ?? '', message: text, images: attached, role },
       (event: StreamEvent) => {
         switch (event.type) {
           case 'session':
@@ -386,7 +411,7 @@ export default function ChatPage() {
         abortRef.current = null
       },
     )
-  }, [input, images, streaming, sessionId, navigate, runCommand, t])
+  }, [input, images, role, streaming, sessionId, navigate, runCommand, t])
 
   const complete = (c: CommandSpec) => {
     // Commands that take arguments keep the composer open on a trailing space;
@@ -463,9 +488,11 @@ export default function ChatPage() {
 
   const newChat = () => {
     stop()
-    navigate('/')
+    localStorage.removeItem('antares:last-session')
     setMessages([])
     setTitle('')
+    setRole('')
+    navigate('/', { state: { fresh: true } })
   }
 
   const composer = (
@@ -474,6 +501,8 @@ export default function ChatPage() {
       <Composer
         ref={textareaRef}
         value={input}
+        role={role}
+        onRoleChange={setRole}
         images={images}
         onAttach={attachFiles}
         onRemoveImage={(i) => setImages((prev) => prev.filter((_, x) => x !== i))}
@@ -592,7 +621,7 @@ export default function ChatPage() {
 
       {/* Floating composer: sits close to the last message rather than pinned
           against the very bottom edge of the viewport. */}
-      <div className="safe-bottom bg-gradient-to-t from-background via-background to-transparent px-4 pb-4 pt-3 sm:px-6">
+      <div className="bg-gradient-to-t from-background via-background to-transparent px-4 pt-3 pb-[max(1.5rem,env(safe-area-inset-bottom))] sm:px-6 sm:pb-[max(2rem,env(safe-area-inset-bottom))]">
         <div className="mx-auto w-full max-w-3xl">{composer}</div>
       </div>
     </div>
@@ -601,6 +630,8 @@ export default function ChatPage() {
 
 interface ComposerProps {
   value: string
+  role: string
+  onRoleChange: (role: string) => void
   images: string[]
   onChange: (v: string) => void
   onAttach: (files: FileList | File[]) => void
@@ -620,6 +651,8 @@ interface ComposerProps {
 const Composer = ({
   ref,
   value,
+  role,
+  onRoleChange,
   images,
   onChange,
   onAttach,
@@ -660,6 +693,7 @@ const Composer = ({
       ) : null}
 
       <div className="flex items-end gap-1.5">
+        <RolePicker value={role} onChange={onRoleChange} />
         <input
           ref={fileRef}
           type="file"

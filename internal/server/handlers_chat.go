@@ -91,6 +91,7 @@ type chatRequest struct {
 	SessionID string   `json:"session_id"`
 	Message   string   `json:"message"`
 	Images    []string `json:"images"` // data URLs or bare base64
+	Role      string   `json:"role"`   // run this turn as a specialist
 	Model     string   `json:"model"`
 	Toolset   string   `json:"toolset"`
 	UserID    string   `json:"user_id"`
@@ -106,6 +107,18 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	if strings.TrimSpace(req.Message) == "" && len(req.Images) == 0 {
 		writeError(w, http.StatusBadRequest, errors.New("message is required"))
 		return
+	}
+
+	// Persist the picked role against the session so a reload reflects it. The
+	// session id is only known once the run assigns one, so a brand-new
+	// conversation stores its role after the session event; an existing one
+	// stores it now.
+	if s.db != nil && req.SessionID != "" {
+		if strings.TrimSpace(req.Role) == "" {
+			_ = s.db.DeleteKV(r.Context(), "role:"+req.SessionID)
+		} else {
+			_ = s.db.SetKV(r.Context(), "role:"+req.SessionID, req.Role)
+		}
 	}
 
 	sse, err := newSSE(w)
@@ -137,6 +150,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		SessionID: req.SessionID,
 		Message:   req.Message,
 		Images:    decodeImages(req.Images),
+		Role:      req.Role,
 		Platform:  "web",
 		UserID:    req.UserID,
 		Model:     req.Model,
@@ -144,7 +158,16 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Run streams its own error and done events, so nothing is re-sent here.
-	emit := func(e agent.Event) error { return sse.send(e) }
+	// A brand-new conversation gets its session id here; store the picked role
+	// against it so a reload reflects it.
+	emit := func(e agent.Event) error {
+		if e.Type == agent.EventSession && e.ID != "" && req.SessionID == "" && s.db != nil {
+			if strings.TrimSpace(req.Role) != "" {
+				_ = s.db.SetKV(ctx, "role:"+e.ID, req.Role)
+			}
+		}
+		return sse.send(e)
+	}
 	if _, err := s.agent.Run(ctx, agentReq, emit); err != nil && ctx.Err() == nil {
 		slog.Debug("chat turn failed", "error", err)
 	}

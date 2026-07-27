@@ -38,6 +38,7 @@ function AntaresMark({ className }: { className?: string }) {
 
 function NavItems({ onNavigate }: { onNavigate?: () => void }) {
   const { t } = useI18n()
+  const location = useLocation()
   return (
     <nav className="flex flex-col gap-0.5">
       {ROUTES.map(({ path, icon: Icon }) => (
@@ -46,21 +47,27 @@ function NavItems({ onNavigate }: { onNavigate?: () => void }) {
           to={path}
           end={path === '/'}
           onClick={onNavigate}
-          className={({ isActive }) =>
-            cn(
+          className={({ isActive }) => {
+            // The chat lives at "/" but a resumed conversation is "/c/:id";
+            // keep Chat highlighted there too.
+            const active = isActive || (path === '/' && location.pathname.startsWith('/c/'))
+            return cn(
               'flex items-center gap-2.5 rounded-[var(--radius-sm)] px-3 py-2 text-sm transition-colors',
-              isActive
+              active
                 ? 'bg-primary/12 font-medium text-primary'
                 : 'text-muted-foreground hover:bg-accent hover:text-accent-foreground',
             )
-          }
+          }}
         >
-          {({ isActive }) => (
-            <>
-              <Icon className="size-4.5 shrink-0" weight={isActive ? 'fill' : 'regular'} />
-              <span className="truncate">{t(NAV_LABELS[path])}</span>
-            </>
-          )}
+          {({ isActive }) => {
+            const active = isActive || (path === '/' && location.pathname.startsWith('/c/'))
+            return (
+              <>
+                <Icon className="size-4.5 shrink-0" weight={active ? 'fill' : 'regular'} />
+                <span className="truncate">{t(NAV_LABELS[path])}</span>
+              </>
+            )
+          }}
         </NavLink>
       ))}
     </nav>
@@ -289,19 +296,23 @@ export function AppShell() {
                   key={path}
                   to={path}
                   end={path === '/'}
-                  className={({ isActive }) =>
-                    cn(
+                  className={({ isActive }) => {
+                    const active = isActive || (path === '/' && location.pathname.startsWith('/c/'))
+                    return cn(
                       'flex flex-1 flex-col items-center gap-1 px-1 py-2.5 text-[10px] font-medium leading-none transition-colors',
-                      isActive ? 'text-primary' : 'text-muted-foreground',
+                      active ? 'text-primary' : 'text-muted-foreground',
                     )
-                  }
+                  }}
                 >
-                  {({ isActive }) => (
-                    <>
-                      <Icon className="size-5" weight={isActive ? 'fill' : 'regular'} />
-                      <span className="max-w-full truncate">{t(NAV_LABELS[path])}</span>
-                    </>
-                  )}
+                  {({ isActive }) => {
+                    const active = isActive || (path === '/' && location.pathname.startsWith('/c/'))
+                    return (
+                      <>
+                        <Icon className="size-5" weight={active ? 'fill' : 'regular'} />
+                        <span className="max-w-full truncate">{t(NAV_LABELS[path])}</span>
+                      </>
+                    )
+                  }}
                 </NavLink>
               ))}
             </nav>

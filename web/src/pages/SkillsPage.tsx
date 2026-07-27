@@ -14,6 +14,10 @@ import {
   Input,
   Label,
   Switch,
+  Tabs,
+  TabsContent,
+  TabsList,
+  TabsTrigger,
   Textarea,
 } from '@/components/ui/primitives'
 import {
@@ -118,6 +122,19 @@ export default function SkillsPage() {
       <NewSkillDialog open={composing} onOpenChange={setComposing} onSaved={reload} />
       <HubDialog kind="skills" open={browsing} onOpenChange={setBrowsing} onInstalled={reload} />
 
+      <Tabs defaultValue="everyday">
+        <TabsList>
+          <TabsTrigger value="everyday" className="gap-1.5">
+            <Sparkle className="size-3.5" /> {t('skills.tabEveryday')}
+          </TabsTrigger>
+          {library > 0 ? (
+            <TabsTrigger value="library" className="gap-1.5">
+              <ShieldCheck className="size-3.5" /> {t('skills.tabLibrary', { n: library })}
+            </TabsTrigger>
+          ) : null}
+        </TabsList>
+
+        <TabsContent value="everyday" className="space-y-4">
       <div className="space-y-1.5">
         <Input
           value={filter}
@@ -211,7 +228,14 @@ export default function SkillsPage() {
         </div>
       )}
 
-      {library > 0 && !query ? <SecurityLibrary total={library} /> : null}
+        </TabsContent>
+
+        {library > 0 ? (
+          <TabsContent value="library">
+            <SecurityLibrary total={library} />
+          </TabsContent>
+        ) : null}
+      </Tabs>
     </PageBody>
   )
 }
@@ -230,7 +254,7 @@ interface LibSkill {
  */
 function SecurityLibrary({ total }: { total: number }) {
   const { t } = useI18n()
-  const [open, setOpen] = useState(false)
+  const [open] = useState(true)
   const [category, setCategory] = useState('')
   const [offset, setOffset] = useState(0)
   const [reading, setReading] = useState<string | null>(null)
@@ -266,17 +290,8 @@ function SecurityLibrary({ total }: { total: number }) {
 
   return (
     <Card>
-      <button
-        onClick={() => setOpen((v) => !v)}
-        className="flex w-full items-center gap-2 p-3.5 text-left"
-      >
-        <ShieldCheck className="size-4 text-primary" weight="fill" />
-        <span className="text-sm font-medium">{t('skills.libraryTitle', { n: total })}</span>
-        <CaretDown className={cn('ml-auto size-4 text-muted-foreground transition-transform', open && 'rotate-180')} />
-      </button>
-
       {open ? (
-        <div className="border-t border-border p-3.5">
+        <div className="p-3.5">
           <div className="mb-3 flex flex-wrap gap-1.5">
             <button
               onClick={() => {
