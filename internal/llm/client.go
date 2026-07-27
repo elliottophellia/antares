@@ -90,6 +90,11 @@ func newBase(o Options) (Client, error) {
 		}
 		return &openAIClient{opts: o, vendor: "copilot",
 			copilot: &copilotTokenSource{ghToken: o.APIKey, client: o.HTTPClient}}, nil
+	case "codex", "responses", "openai-responses":
+		if o.BaseURL == "" {
+			o.BaseURL = "https://api.openai.com/v1"
+		}
+		return &codexClient{opts: o}, nil
 	case "openai":
 		if o.BaseURL == "" {
 			o.BaseURL = "https://api.openai.com/v1"
