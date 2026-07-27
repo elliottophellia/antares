@@ -2,54 +2,37 @@ package tui
 
 import "github.com/charmbracelet/lipgloss"
 
-// Palette — a Charm-flavoured scheme (purple/pink/blue) that adapts to light and
-// dark terminals and degrades on 16-colour ones.
-var (
-	colPrimary = lipgloss.AdaptiveColor{Light: "#7C3AED", Dark: "#B794F6"} // assistant / brand
-	colAccent  = lipgloss.AdaptiveColor{Light: "#DB2777", Dark: "#F472B6"} // user
-	colBlue    = lipgloss.AdaptiveColor{Light: "#2563EB", Dark: "#63B3ED"} // tools
-	colText    = lipgloss.AdaptiveColor{Light: "#1F2937", Dark: "#E2E8F0"}
-	colMuted   = lipgloss.AdaptiveColor{Light: "#6B7280", Dark: "#94A3B8"}
-	colFaint   = lipgloss.AdaptiveColor{Light: "#9CA3AF", Dark: "#64748B"}
-	colBorder  = lipgloss.AdaptiveColor{Light: "#E5E7EB", Dark: "#2D3748"}
-	colGreen   = lipgloss.AdaptiveColor{Light: "#059669", Dark: "#48BB78"}
-	colRed     = lipgloss.AdaptiveColor{Light: "#DC2626", Dark: "#FC8181"}
-	colYellow  = lipgloss.AdaptiveColor{Light: "#D97706", Dark: "#F6AD55"}
-	colOnBadge = lipgloss.AdaptiveColor{Light: "#FFFFFF", Dark: "#0B1020"} // text on a coloured badge
-	colPanel   = lipgloss.AdaptiveColor{Light: "#FAFAFA", Dark: "#161B26"} // subtle panel fill
-)
-
+// styles are built from a Theme. The look is near-monochrome greys; the theme's
+// accent is the only highlight (prompt, focus, the "you" marker), and ✓/✗ carry
+// the sole green/red. This keeps the UI calm rather than colourful.
 type styles struct {
 	// sidebar
 	sidebar   lipgloss.Style
 	logo      lipgloss.Style
 	sideLabel lipgloss.Style
 	sideValue lipgloss.Style
-	dotOn     lipgloss.Style
-	pillOn    lipgloss.Style
 
 	// header
 	header    lipgloss.Style
 	headerDim lipgloss.Style
-	tokenPill lipgloss.Style
 	rule      lipgloss.Style
 
-	// message badges
-	userBadge   lipgloss.Style
-	asstBadge   lipgloss.Style
-	toolBadge   lipgloss.Style
-	reasonBadge lipgloss.Style
-
-	// message cards / bodies
-	userCard   lipgloss.Style
+	// role labels + subtle rules
+	userLabel  lipgloss.Style
+	userBar    lipgloss.Style
 	userText   lipgloss.Style
-	asstBar    lipgloss.Style
-	toolCard   lipgloss.Style
-	toolMeta   lipgloss.Style
-	toolResult lipgloss.Style
+	asstLabel  lipgloss.Style
+	reasonLbl  lipgloss.Style
+	reasonBar  lipgloss.Style
 	reasoning  lipgloss.Style
+	toolName   lipgloss.Style
+	toolArgs   lipgloss.Style
+	toolBar    lipgloss.Style
+	toolResult lipgloss.Style
+	errLabel   lipgloss.Style
+	errBar     lipgloss.Style
+	errText    lipgloss.Style
 	notice     lipgloss.Style
-	errorCard  lipgloss.Style
 	system     lipgloss.Style
 
 	// statuses
@@ -57,14 +40,14 @@ type styles struct {
 	stDone    lipgloss.Style
 	stErr     lipgloss.Style
 
-	// input + status bar
+	// input + status
 	inputBox   lipgloss.Style
 	inputFocus lipgloss.Style
 	prompt     lipgloss.Style
 	status     lipgloss.Style
 	statusKey  lipgloss.Style
 	statusSep  lipgloss.Style
-	scrollHint lipgloss.Style
+	accent     lipgloss.Style
 
 	// palette
 	paletteBox  lipgloss.Style
@@ -73,57 +56,52 @@ type styles struct {
 	paletteDesc lipgloss.Style
 }
 
-func newStyles() styles {
-	badge := func(c lipgloss.TerminalColor) lipgloss.Style {
-		return lipgloss.NewStyle().Background(c).Foreground(colOnBadge).Bold(true).Padding(0, 1)
-	}
-	leftBar := func(c lipgloss.TerminalColor) lipgloss.Style {
-		return lipgloss.NewStyle().Border(lipgloss.ThickBorder(), false, false, false, true).BorderForeground(c).PaddingLeft(1)
+func newStyles(t Theme) styles {
+	leftBar := func(col lipgloss.TerminalColor) lipgloss.Style {
+		return lipgloss.NewStyle().Border(lipgloss.NormalBorder(), false, false, false, true).BorderForeground(col).PaddingLeft(1)
 	}
 	return styles{
-		sidebar:   lipgloss.NewStyle().Border(lipgloss.NormalBorder(), false, true, false, false).BorderForeground(colBorder).Padding(1, 2),
-		logo:      lipgloss.NewStyle().Foreground(colPrimary).Bold(true),
-		sideLabel: lipgloss.NewStyle().Foreground(colFaint).Bold(true),
-		sideValue: lipgloss.NewStyle().Foreground(colText),
-		dotOn:     lipgloss.NewStyle().Foreground(colGreen),
-		pillOn:    lipgloss.NewStyle().Foreground(colGreen),
+		sidebar:   lipgloss.NewStyle().Border(lipgloss.NormalBorder(), false, true, false, false).BorderForeground(t.Border).Padding(1, 2),
+		logo:      lipgloss.NewStyle().Foreground(t.Accent).Bold(true),
+		sideLabel: lipgloss.NewStyle().Foreground(t.Faint),
+		sideValue: lipgloss.NewStyle().Foreground(t.Text),
 
-		header:    lipgloss.NewStyle().Foreground(colText).Bold(true),
-		headerDim: lipgloss.NewStyle().Foreground(colMuted),
-		tokenPill: lipgloss.NewStyle().Foreground(colMuted).Background(colPanel).Padding(0, 1),
-		rule:      lipgloss.NewStyle().Foreground(colBorder),
+		header:    lipgloss.NewStyle().Foreground(t.Text).Bold(true),
+		headerDim: lipgloss.NewStyle().Foreground(t.Faint),
+		rule:      lipgloss.NewStyle().Foreground(t.Border),
 
-		userBadge:   badge(colAccent),
-		asstBadge:   badge(colPrimary),
-		toolBadge:   badge(colBlue),
-		reasonBadge: lipgloss.NewStyle().Foreground(colFaint).Italic(true),
+		userLabel:  lipgloss.NewStyle().Foreground(t.Accent).Bold(true),
+		userBar:    leftBar(t.Accent),
+		userText:   lipgloss.NewStyle().Foreground(t.Text),
+		asstLabel:  lipgloss.NewStyle().Foreground(t.Muted).Bold(true),
+		reasonLbl:  lipgloss.NewStyle().Foreground(t.Faint).Italic(true),
+		reasonBar:  leftBar(t.Border),
+		reasoning:  lipgloss.NewStyle().Foreground(t.Faint).Italic(true),
+		toolName:   lipgloss.NewStyle().Foreground(t.Text),
+		toolArgs:   lipgloss.NewStyle().Foreground(t.Faint),
+		toolBar:    leftBar(t.Border),
+		toolResult: lipgloss.NewStyle().Foreground(t.Faint),
+		errLabel:   lipgloss.NewStyle().Foreground(t.Red).Bold(true),
+		errBar:     leftBar(t.Red),
+		errText:    lipgloss.NewStyle().Foreground(t.Red),
+		notice:     lipgloss.NewStyle().Foreground(t.Yellow),
+		system:     lipgloss.NewStyle().Foreground(t.Faint),
 
-		userCard:   lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(colAccent).Padding(0, 1),
-		userText:   lipgloss.NewStyle().Foreground(colText),
-		asstBar:    leftBar(colPrimary),
-		toolCard:   lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(colBlue).Padding(0, 1),
-		toolMeta:   lipgloss.NewStyle().Foreground(colBlue).Bold(true),
-		toolResult: lipgloss.NewStyle().Foreground(colMuted),
-		reasoning:  lipgloss.NewStyle().Foreground(colFaint).Italic(true),
-		notice:     lipgloss.NewStyle().Foreground(colYellow).Border(lipgloss.NormalBorder(), false, false, false, true).BorderForeground(colYellow).PaddingLeft(1),
-		errorCard:  lipgloss.NewStyle().Foreground(colRed).Border(lipgloss.RoundedBorder()).BorderForeground(colRed).Padding(0, 1),
-		system:     lipgloss.NewStyle().Foreground(colFaint),
+		stRunning: lipgloss.NewStyle().Foreground(t.Yellow),
+		stDone:    lipgloss.NewStyle().Foreground(t.Green),
+		stErr:     lipgloss.NewStyle().Foreground(t.Red),
 
-		stRunning: lipgloss.NewStyle().Foreground(colYellow),
-		stDone:    lipgloss.NewStyle().Foreground(colGreen),
-		stErr:     lipgloss.NewStyle().Foreground(colRed),
+		inputBox:   lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(t.Border).Padding(0, 1),
+		inputFocus: lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(t.Accent).Padding(0, 1),
+		prompt:     lipgloss.NewStyle().Foreground(t.Accent).Bold(true),
+		status:     lipgloss.NewStyle().Foreground(t.Muted),
+		statusKey:  lipgloss.NewStyle().Foreground(t.Muted).Bold(true),
+		statusSep:  lipgloss.NewStyle().Foreground(t.Faint),
+		accent:     lipgloss.NewStyle().Foreground(t.Accent),
 
-		inputBox:   lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(colBorder).Padding(0, 1),
-		inputFocus: lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(colPrimary).Padding(0, 1),
-		prompt:     lipgloss.NewStyle().Foreground(colAccent).Bold(true),
-		status:     lipgloss.NewStyle().Foreground(colMuted),
-		statusKey:  lipgloss.NewStyle().Foreground(colText).Bold(true),
-		statusSep:  lipgloss.NewStyle().Foreground(colFaint),
-		scrollHint: lipgloss.NewStyle().Foreground(colPrimary),
-
-		paletteBox:  lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(colPrimary).Padding(0, 1),
-		paletteSel:  lipgloss.NewStyle().Foreground(colAccent).Bold(true),
-		paletteName: lipgloss.NewStyle().Foreground(colText).Bold(true),
-		paletteDesc: lipgloss.NewStyle().Foreground(colFaint),
+		paletteBox:  lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(t.Border).Padding(0, 1),
+		paletteSel:  lipgloss.NewStyle().Foreground(t.Accent).Bold(true),
+		paletteName: lipgloss.NewStyle().Foreground(t.Text),
+		paletteDesc: lipgloss.NewStyle().Foreground(t.Faint),
 	}
 }

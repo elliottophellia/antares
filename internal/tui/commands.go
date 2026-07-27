@@ -30,6 +30,7 @@ func init() {
 		{"sessions", "List recent sessions", (*Model).cmdSessions},
 		{"resume", "Resume a session by id", (*Model).cmdResume},
 		{"model", "Show or set the active model", (*Model).cmdModel},
+		{"theme", "Show or set the colour theme", (*Model).cmdTheme},
 		{"reasoning", "Toggle reasoning display", (*Model).cmdReasoning},
 		{"clear", "Clear the transcript", (*Model).cmdClear},
 		{"stop", "Interrupt the current turn", (*Model).cmdStop},
@@ -123,6 +124,37 @@ func (m *Model) cmdNew(string) (bool, tea.Cmd) {
 func (m *Model) cmdClear(string) (bool, tea.Cmd) {
 	m.blocks = nil
 	m.greet()
+	return false, nil
+}
+
+func (m *Model) cmdTheme(args string) (bool, tea.Cmd) {
+	if args == "" {
+		var b strings.Builder
+		b.WriteString("Themes (use /theme <name>):\n")
+		for _, n := range themeNames() {
+			mark := "  "
+			if n == m.themeName {
+				mark = "❯ "
+			}
+			b.WriteString(mark + n + "\n")
+		}
+		m.pushSystem(strings.TrimRight(b.String(), "\n"))
+		return false, nil
+	}
+	if _, ok := themes[args]; !ok {
+		m.pushSystem("Unknown theme " + args + ". Try /theme to list.")
+		return false, nil
+	}
+	m.themeName = args
+	m.st = newStyles(themeByName(args))
+	m.cache = nil
+	if m.cfg != nil {
+		m.cfg.Display.Theme = args
+		if m.ag != nil {
+			m.ag.SetConfig(m.cfg)
+		}
+	}
+	m.setStatus("theme → " + args)
 	return false, nil
 }
 

@@ -89,7 +89,7 @@ func (m *Model) mainColumn() string {
 	if m.sessionID != "" {
 		left += " " + m.st.headerDim.Render(shortID(m.sessionID))
 	}
-	right := m.st.tokenPill.Render(fmt.Sprintf(" %d↑ %d↓ ", m.tokensIn, m.tokensOut))
+	right := m.st.headerDim.Render(fmt.Sprintf("%d↑ %d↓", m.tokensIn, m.tokensOut))
 	gap := w - lipgloss.Width(left) - lipgloss.Width(right)
 	if gap < 1 {
 		gap = 1
@@ -181,7 +181,7 @@ func (m *Model) statusBar() string {
 		parts = append(parts, m.st.statusSep.Render("·")+" "+m.st.status.Render(m.status))
 	}
 	if m.vp.TotalLineCount() > m.vp.Height && !m.vp.AtBottom() {
-		parts = append(parts, m.st.scrollHint.Render(fmt.Sprintf("↑ %d%%", int(m.vp.ScrollPercent()*100))))
+		parts = append(parts, m.st.accent.Render(fmt.Sprintf("↑ %d%%", int(m.vp.ScrollPercent()*100))))
 	}
 	line := strings.Join(parts, sep)
 	hint := m.st.statusKey.Render("/") + m.st.status.Render("help")
@@ -253,33 +253,25 @@ func (m *Model) renderBlock(bl block) string {
 	cw := m.vp.Width
 	switch bl.kind {
 	case blockUser:
-		badge := m.st.userBadge.Render("❯ You")
-		card := m.st.userCard.Width(cw - 2).Render(m.st.userText.Render(wrap(bl.text, cw-6)))
-		return badge + "\n" + card
+		return m.st.userLabel.Render("You") + "\n" +
+			m.st.userBar.Render(m.st.userText.Render(wrap(bl.text, cw-3)))
 
 	case blockAssistant:
-		badge := m.st.asstBadge.Render("◆ antares")
-		return badge + "\n" + m.st.asstBar.Render(m.markdown(bl.text, cw-4))
+		return m.st.asstLabel.Render("antares") + "\n" + m.markdown(bl.text, cw-1)
 
 	case blockReasoning:
-		body := m.st.reasoning.Render(wrap(bl.text, cw-4))
-		return m.st.reasonBadge.Render("… thinking") + "\n" + indent(body, m.st.reasoning.Render("▏ "))
+		return m.st.reasonLbl.Render("thinking") + "\n" +
+			m.st.reasonBar.Render(m.st.reasoning.Render(wrap(bl.text, cw-3)))
 
 	case blockTool:
-		dot, label := m.toolStatus(bl)
-		head := m.st.toolMeta.Render("⚙ "+bl.title) + "  " + dot
-		body := strings.TrimSpace(bl.text)
-		if body == "" {
-			return m.st.toolCard.Width(cw - 2).Render(head + "  " + m.st.system.Render(label))
-		}
-		res := m.st.toolResult.Render(clampLines(body, 10, cw-6))
-		return m.st.toolCard.Width(cw - 2).Render(head + "\n" + res)
+		return m.renderTool(bl, cw)
 
 	case blockNotice:
-		return m.st.notice.Render(wrap(bl.text, cw-4))
+		return m.st.notice.Render(wrap(bl.text, cw))
 
 	case blockError:
-		return m.st.errorCard.Width(cw - 2).Render(m.st.stErr.Render("✗ ") + wrap(bl.text, cw-6))
+		return m.st.errLabel.Render("error") + "\n" +
+			m.st.errBar.Render(m.st.errText.Render(wrap(bl.text, cw-3)))
 
 	case blockSystem:
 		return m.st.system.Render(wrap(bl.text, cw))
@@ -287,15 +279,31 @@ func (m *Model) renderBlock(bl block) string {
 	return bl.text
 }
 
-func (m *Model) toolStatus(bl block) (dot, label string) {
+// renderTool draws a tool call as a single clean line — a status glyph, the tool
+// name, and a dim argument summary — with its result under a faint left rule.
+func (m *Model) renderTool(bl block, cw int) string {
+	var icon string
 	switch {
 	case bl.isError:
-		return m.st.stErr.Render("✗ error"), "error"
+		icon = m.st.stErr.Render("✗")
 	case bl.done:
-		return m.st.stDone.Render("✓ done"), "done"
+		icon = m.st.stDone.Render("✓")
 	default:
-		return m.st.stRunning.Render("● running"), "running…"
+		icon = m.st.stRunning.Render("●")
 	}
+	name, summary := bl.title, ""
+	if i := strings.Index(bl.title, "  "); i >= 0 {
+		name, summary = bl.title[:i], strings.TrimSpace(bl.title[i:])
+	}
+	head := icon + " " + m.st.toolName.Bold(true).Render(name)
+	if summary != "" {
+		head += "  " + m.st.toolArgs.Render(summary)
+	}
+	body := strings.TrimSpace(bl.text)
+	if body == "" {
+		return head
+	}
+	return head + "\n" + m.st.toolBar.Render(m.st.toolResult.Render(clampLines(body, 10, cw-3)))
 }
 
 func (m *Model) markdown(text string, w int) string {

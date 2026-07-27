@@ -76,6 +76,7 @@ type Model struct {
 	tokensIn, tokensOut int
 	showReasoning       bool
 	status              string
+	themeName           string
 
 	palette    []Command
 	paletteSel int
@@ -99,9 +100,19 @@ func New(ag *agent.Agent, cfg *config.Config, db store.Store) *Model {
 	sp := spinner.New()
 	sp.Spinner = spinner.Dot
 
+	name := defaultTheme
+	if cfg != nil {
+		if t := cfg.Display.Theme; t != "" && t != "system" && t != "default" {
+			if _, ok := themes[t]; ok {
+				name = t
+			}
+		}
+	}
+
 	return &Model{
 		ag: ag, cfg: cfg, db: db,
-		st:            newStyles(),
+		themeName:     name,
+		st:            newStyles(themeByName(name)),
 		ta:            ta,
 		spin:          sp,
 		showReasoning: cfg != nil && cfg.Display.ShowReasoning,

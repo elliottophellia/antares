@@ -29,7 +29,8 @@ func NewDemo() *Model {
 
 	m := &Model{
 		cfg:           cfg,
-		st:            newStyles(),
+		themeName:     defaultTheme,
+		st:            newStyles(themeByName(defaultTheme)),
 		ta:            ta,
 		spin:          sp,
 		showReasoning: true,
