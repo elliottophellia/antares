@@ -109,6 +109,21 @@ func (b *Board) List(key string) map[string][]Card {
 	return byCol
 }
 
+// Keys lists the session keys that have a board.
+func (b *Board) Keys() []string {
+	entries, err := os.ReadDir(b.dir)
+	if err != nil {
+		return nil
+	}
+	var out []string
+	for _, e := range entries {
+		if strings.HasSuffix(e.Name(), ".json") && !strings.HasSuffix(e.Name(), ".tmp") {
+			out = append(out, strings.TrimSuffix(e.Name(), ".json"))
+		}
+	}
+	return out
+}
+
 func normColumn(c string) string {
 	c = strings.ToLower(strings.TrimSpace(c))
 	switch c {
