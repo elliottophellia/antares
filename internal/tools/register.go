@@ -16,6 +16,7 @@ func init() {
 		memoryTool{}, sessionSearchTool{}, todoTool{}, skillTool{},
 		ragSearchTool{}, ragIndexTool{},
 		delegateTool{},
+		browserTool{},
 	} {
 		globalRegistry.Register(t)
 	}

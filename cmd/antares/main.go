@@ -362,6 +362,7 @@ func (rt *runtimeServices) close() {
 		rt.gateway.StopAll()
 	}
 	rt.shell.CloseAll()
+	tools.CloseBrowsers()
 	_ = rt.db.Close()
 }
 

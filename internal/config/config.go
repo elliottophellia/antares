@@ -106,10 +106,27 @@ type Tools struct {
 	MaxOutputChars int               `yaml:"max_output_chars" json:"max_output_chars"`
 	Timeouts       map[string]int    `yaml:"timeouts" json:"timeouts"`
 	WebSearch      WebSearch         `yaml:"web_search" json:"web_search"`
+	Browser        Browser           `yaml:"browser" json:"browser"`
 	Platform       map[string]string `yaml:"platform_toolsets" json:"platform_toolsets"`
 }
 
 // WebSearch configures the search backend used by the web_search tool.
+// Browser configures the real-browser tool.
+type Browser struct {
+	Enabled bool `yaml:"enabled" json:"enabled"`
+	// Executable overrides Chrome discovery; empty means look for one.
+	Executable string `yaml:"executable" json:"executable"`
+	// RemoteURL attaches to a Chrome already running with a debugging port,
+	// e.g. http://127.0.0.1:9222, instead of starting one.
+	RemoteURL string `yaml:"remote_url" json:"remote_url"`
+	// UserDataDir keeps cookies and logins between runs.
+	UserDataDir string `yaml:"user_data_dir" json:"user_data_dir"`
+	// Headed shows the window; it needs a display to be of any use.
+	Headed bool `yaml:"headed" json:"headed"`
+	Width  int  `yaml:"width" json:"width"`
+	Height int  `yaml:"height" json:"height"`
+}
+
 type WebSearch struct {
 	Provider   string `yaml:"provider" json:"provider"` // duckduckgo|brave|tavily|searxng|none
 	APIKey     string `yaml:"api_key" json:"api_key"`
