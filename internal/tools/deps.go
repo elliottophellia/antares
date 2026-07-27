@@ -72,4 +72,7 @@ type Deps struct {
 	Skills SkillLibrary
 	// Shell owns persistent terminal sessions keyed by session id.
 	Shell *ShellManager
+	// Checkpoint saves a copy of a file about to be changed. It may be nil,
+	// in which case nothing is kept and an edit cannot be undone.
+	Checkpoint func(sessionID, path, tool string)
 }

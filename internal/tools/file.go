@@ -189,7 +189,7 @@ func (writeFileTool) Execute(_ context.Context, in Input) Result {
 		if _, err := f.WriteString(args.Content); err != nil {
 			return Errorf("cannot append to %s: %v", args.Path, err)
 		}
-	} else if err := os.WriteFile(path, []byte(args.Content), 0o644); err != nil {
+	} else if err := writeWithCheckpoint(in, path, []byte(args.Content), "write_file"); err != nil {
 		return Errorf("cannot write %s: %v", args.Path, err)
 	}
 
@@ -261,7 +261,7 @@ func (editFileTool) Execute(_ context.Context, in Input) Result {
 	} else {
 		updated = strings.Replace(content, args.OldString, args.NewString, 1)
 	}
-	if err := os.WriteFile(path, []byte(updated), 0o644); err != nil {
+	if err := writeWithCheckpoint(in, path, []byte(updated), "edit_file"); err != nil {
 		return Errorf("cannot write %s: %v", args.Path, err)
 	}
 	replaced := count
@@ -391,4 +391,14 @@ func humanBytes(n int64) string {
 		exp++
 	}
 	return fmt.Sprintf("%.1f %cB", float64(n)/float64(div), "KMGT"[exp])
+}
+
+// writeWithCheckpoint keeps a copy of what is there before overwriting it, so
+// the change can be undone. A missing checkpoint store is not an error — it
+// only means there is nothing to roll back to.
+func writeWithCheckpoint(in Input, path string, content []byte, tool string) error {
+	if in.Deps != nil && in.Deps.Checkpoint != nil {
+		in.Deps.Checkpoint(in.SessionID, path, tool)
+	}
+	return os.WriteFile(path, content, 0o644)
 }

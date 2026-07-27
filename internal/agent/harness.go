@@ -5,11 +5,14 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
 	"sync"
+	"time"
 
+	"github.com/enowdev/antares/internal/checkpoint"
 	"github.com/enowdev/antares/internal/llm"
 	"github.com/enowdev/antares/internal/store"
 )
@@ -445,4 +448,43 @@ func (a *Agent) followUp(
 	_ = a.SetGoal(ctx, sess.ID, goal)
 	_ = emit(Event{Type: EventNotice, Message: "goal: " + j.Next})
 	return "The standing goal is not met yet. " + j.Next
+}
+
+// ---- checkpoints -------------------------------------------------------------
+
+// saveCheckpoint keeps a copy of a file before a tool changes it. A failure
+// here must not stop the edit — losing the ability to undo is bad, refusing to
+// work is worse.
+func (a *Agent) saveCheckpoint(sessionID, path, tool string) {
+	if a.checks == nil {
+		return
+	}
+	if err := a.checks.Save(sessionID, path, tool); err != nil {
+		slog.Debug("could not checkpoint a file", "path", path, "error", err)
+	}
+}
+
+// Checkpoint reports what a session has changed so far.
+func (a *Agent) Checkpoint(sessionID string) (*checkpoint.Checkpoint, error) {
+	if a.checks == nil {
+		return nil, errors.New("checkpoints are not enabled")
+	}
+	return a.checks.Load(sessionID)
+}
+
+// Rollback restores the files a session changed. Passing paths restores only
+// those.
+func (a *Agent) Rollback(sessionID string, paths []string) (*checkpoint.RestoreResult, error) {
+	if a.checks == nil {
+		return nil, errors.New("checkpoints are not enabled")
+	}
+	return a.checks.Restore(sessionID, paths)
+}
+
+// PruneCheckpoints drops the ones older than the given age.
+func (a *Agent) PruneCheckpoints(olderThan time.Duration) (int, error) {
+	if a.checks == nil {
+		return 0, nil
+	}
+	return a.checks.Prune(olderThan)
 }

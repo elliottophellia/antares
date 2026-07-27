@@ -157,3 +157,74 @@ func skillNameFrom(body string) string {
 	}
 	return "learned-skill"
 }
+
+// cmdRollback shows what a session changed on disk, and puts it back.
+func cmdRollback(_ context.Context, d Deps, in Input) (Result, error) {
+	if d.Agent == nil {
+		return Result{}, errNoAgent
+	}
+	if in.SessionID == "" {
+		return Result{}, errors.New("there is no session to roll back")
+	}
+
+	cp, err := d.Agent.Checkpoint(in.SessionID)
+	if err != nil {
+		return Result{}, err
+	}
+	if len(cp.Entries) == 0 {
+		return Result{Output: "No files have been changed in this session."}, nil
+	}
+
+	// Bare /rollback shows what would be undone. Undoing work without being
+	// asked twice is not a thing to do by accident.
+	if strings.TrimSpace(in.Args) == "" {
+		seen := map[string]bool{}
+		var b strings.Builder
+		b.WriteString("**Changed in this session**\n\n")
+		for _, e := range cp.Entries {
+			if seen[e.Path] {
+				continue
+			}
+			seen[e.Path] = true
+			state := "modified"
+			if !e.Existed {
+				state = "created"
+			}
+			fmt.Fprintf(&b, "- `%s` — %s\n", e.Path, state)
+		}
+		b.WriteString("\nUndo all of it with `/rollback all`, or one file with `/rollback <path>`.\n" +
+			"A created file is deleted; a modified one goes back to how it was before this session.")
+		return Result{Output: b.String()}, nil
+	}
+
+	var paths []string
+	if arg := strings.TrimSpace(in.Args); arg != "all" {
+		paths = strings.Fields(arg)
+	}
+
+	res, err := d.Agent.Rollback(in.SessionID, paths)
+	if err != nil {
+		return Result{}, err
+	}
+
+	var b strings.Builder
+	if len(res.Restored) > 0 {
+		fmt.Fprintf(&b, "**Restored %d file(s)**\n\n", len(res.Restored))
+		for _, p := range res.Restored {
+			fmt.Fprintf(&b, "- `%s`\n", p)
+		}
+	}
+	if len(res.Deleted) > 0 {
+		fmt.Fprintf(&b, "\n**Deleted %d file(s) that did not exist before**\n\n", len(res.Deleted))
+		for _, p := range res.Deleted {
+			fmt.Fprintf(&b, "- `%s`\n", p)
+		}
+	}
+	if len(res.Failed) > 0 {
+		b.WriteString("\n**Could not restore**\n\n")
+		for p, why := range res.Failed {
+			fmt.Fprintf(&b, "- `%s` — %s\n", p, why)
+		}
+	}
+	return Result{Output: strings.TrimSpace(b.String())}, nil
+}

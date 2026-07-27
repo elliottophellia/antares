@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/enowdev/antares/internal/checkpoint"
 	"github.com/enowdev/antares/internal/config"
 	"github.com/enowdev/antares/internal/llm"
 	"github.com/enowdev/antares/internal/skills"
@@ -111,6 +112,7 @@ type Agent struct {
 	shell  *tools.ShellManager
 	rag    tools.RAGProvider
 	skills *skills.Manager
+	checks *checkpoint.Store
 
 	mu     sync.Mutex
 	active map[string]context.CancelFunc
@@ -120,6 +122,7 @@ type Agent struct {
 func New(cfg *config.Config, db store.Store, reg *tools.Registry, shell *tools.ShellManager, ragProvider tools.RAGProvider) *Agent {
 	return &Agent{
 		cfg: cfg, db: db, reg: reg, shell: shell, rag: ragProvider,
+		checks: checkpoint.NewStore(config.Path("checkpoints")),
 		active: map[string]context.CancelFunc{},
 	}
 }
@@ -509,6 +512,7 @@ func (a *Agent) executeTools(
 			Deps: &tools.Deps{
 				Config: a.cfg, Store: a.db, RAG: a.rag, Shell: a.shell,
 				Sub: a.subAgentFor(req), Skills: a.skillLibrary(),
+				Checkpoint: a.saveCheckpoint,
 			},
 		}
 
