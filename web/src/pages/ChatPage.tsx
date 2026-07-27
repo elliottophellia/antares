@@ -210,6 +210,10 @@ export default function ChatPage() {
   const [paletteSel, setPaletteSel] = useState(0)
 
   const abortRef = useRef<(() => void) | null>(null)
+  // Holds the id of a session that was just created mid-stream on this page.
+  // Its messages are already live on screen, so the hydrate effect must not
+  // re-fetch and overwrite them before the turn is persisted.
+  const localSessionRef = useRef<string | null>(null)
   const scrollRef = useStickyScroll(messages)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
 
@@ -235,6 +239,13 @@ export default function ChatPage() {
     if (!sessionId) {
       setMessages([])
       setTitle('')
+      setLoading(false)
+      return
+    }
+    // A brand-new chat navigates to its own url mid-stream. The live messages
+    // are already on screen; re-fetching now would find the turn not yet
+    // persisted and wipe them. Skip the hydrate for that one session.
+    if (sessionId === localSessionRef.current) {
       setLoading(false)
       return
     }
@@ -374,6 +385,9 @@ export default function ChatPage() {
         switch (event.type) {
           case 'session':
             if (!sessionId && typeof event.id === 'string') {
+              // Remember this id so the hydrate effect the navigation triggers
+              // does not overwrite the messages we are streaming right now.
+              localSessionRef.current = event.id
               navigate(`/c/${event.id}`, { replace: true })
             }
             if (typeof event.title === 'string' && event.title) setTitle(event.title)
@@ -431,10 +445,13 @@ export default function ChatPage() {
         setError(err.message)
         setStreaming(false)
         abortRef.current = null
+        // The turn is persisted now, so a later revisit should hydrate fresh.
+        localSessionRef.current = null
       },
       () => {
         setStreaming(false)
         abortRef.current = null
+        localSessionRef.current = null
       },
     )
   }, [input, images, role, streaming, sessionId, navigate, runCommand, t])
