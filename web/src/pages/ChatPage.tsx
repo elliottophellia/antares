@@ -524,12 +524,13 @@ export default function ChatPage() {
   const composer = (
     <>
       <SlashPalette matches={matches} selected={paletteSel} onPick={complete} />
-      <Composer
-        ref={textareaRef}
-        value={input}
-        role={role}
-        onRoleChange={setRole}
-        images={images}
+      <div className="flex items-end gap-2">
+        <RolePicker value={role} onChange={setRole} />
+        <div className="min-w-0 flex-1">
+          <Composer
+            ref={textareaRef}
+            value={input}
+            images={images}
         onAttach={attachFiles}
         onRemoveImage={(i) => setImages((prev) => prev.filter((_, x) => x !== i))}
         onPaste={onPaste}
@@ -540,9 +541,11 @@ export default function ChatPage() {
         streaming={streaming}
         placeholder={t('chat.placeholder')}
         sendLabel={t('chat.send')}
-        stopLabel={t('chat.stop')}
-        attachLabel={t('chat.attach')}
-      />
+            stopLabel={t('chat.stop')}
+            attachLabel={t('chat.attach')}
+          />
+        </div>
+      </div>
     </>
   )
 
@@ -656,8 +659,6 @@ export default function ChatPage() {
 
 interface ComposerProps {
   value: string
-  role: string
-  onRoleChange: (role: string) => void
   images: string[]
   onChange: (v: string) => void
   onAttach: (files: FileList | File[]) => void
@@ -677,8 +678,6 @@ interface ComposerProps {
 const Composer = ({
   ref,
   value,
-  role,
-  onRoleChange,
   images,
   onChange,
   onAttach,
@@ -719,7 +718,6 @@ const Composer = ({
       ) : null}
 
       <div className="flex items-end gap-1.5">
-        <RolePicker value={role} onChange={onRoleChange} />
         <input
           ref={fileRef}
           type="file"

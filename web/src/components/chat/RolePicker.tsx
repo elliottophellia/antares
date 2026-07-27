@@ -83,7 +83,7 @@ export function RolePicker({
       </button>
 
       {open ? (
-        <div className="absolute bottom-full left-0 z-30 mb-1 max-h-[60vh] w-72 overflow-y-auto rounded-[var(--radius-lg)] border border-border bg-card p-1 shadow-lg">
+        <div className="absolute bottom-full left-0 z-30 mb-1 max-h-72 w-72 overflow-y-auto rounded-[var(--radius-lg)] border border-border bg-card p-1 shadow-lg">
           <button
             onClick={() => pick('')}
             className={cn(
