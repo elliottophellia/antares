@@ -16,6 +16,7 @@ func init() {
 		memoryTool{}, sessionSearchTool{}, todoTool{}, skillTool{},
 		ragSearchTool{}, ragIndexTool{},
 		delegateTool{},
+		taskTool{},
 		browserTool{},
 		listRolesTool{},
 		scopeCheckTool{},
@@ -73,6 +74,7 @@ func (delegateTool) Schema() map[string]any {
 		"max_turns":    propDefault("integer", "Turn budget for the sub-agent.", 20),
 		"context_note": prop("string", "Optional background the sub-agent needs."),
 		"isolate":      propDefault("boolean", "Run the sub-agent in its own git worktree, so parallel sub-agents editing the same repository do not conflict. Only works in a git repository.", false),
+		"background":   propDefault("boolean", "Return a task handle immediately and keep the sub-agent running in the background. Poll it with the task tool. Use this to launch several long workstreams at once.", false),
 	}, "prompt")
 }
 
@@ -84,6 +86,7 @@ func (delegateTool) Execute(ctx context.Context, in Input) Result {
 		MaxTurns    int    `json:"max_turns"`
 		ContextNote string `json:"context_note"`
 		Isolate     bool   `json:"isolate"`
+		Background  bool   `json:"background"`
 	}
 	if err := in.Bind(&args); err != nil {
 		return Errorf("%v", err)
@@ -103,6 +106,27 @@ func (delegateTool) Execute(ctx context.Context, in Input) Result {
 	}
 	if maxIter := in.Deps.Config.Delegation.MaxIterations; args.MaxTurns > maxIter && maxIter > 0 {
 		args.MaxTurns = maxIter
+	}
+
+	// Background delegation returns a handle at once and keeps running, so the
+	// caller can launch several workstreams and collect them later.
+	if args.Background {
+		if in.Deps.Tasks == nil {
+			return Errorf("background tasks are not available in this runtime")
+		}
+		id := in.Deps.Tasks.Start(SubAgentRequest{
+			Prompt:      prompt,
+			SystemExtra: args.ContextNote,
+			Role:        args.Role,
+			Toolset:     args.Toolset,
+			Isolate:     args.Isolate,
+			MaxTurns:    args.MaxTurns,
+			ParentID:    in.SessionID,
+		})
+		return Result{
+			Content: fmt.Sprintf("Started background task %s. Keep working, then poll it with the task tool (action=status id=%s) or collect the answer with action=output.", id, id),
+			Meta:    map[string]any{"task_id": id},
+		}
 	}
 
 	start := time.Now()

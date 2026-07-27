@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"time"
 
 	"github.com/enowdev/antares/internal/config"
 	"github.com/enowdev/antares/internal/engagement"
@@ -56,6 +57,28 @@ type SubAgentRequest struct {
 	OnProgress func(Progress)
 }
 
+// BackgroundTasks runs sub-agents asynchronously: Start returns a handle
+// immediately and the work continues in the background, to be polled later. It
+// is how one turn dispatches several long workstreams without blocking on each.
+type BackgroundTasks interface {
+	Start(req SubAgentRequest) string
+	Status(id string) (TaskInfo, bool)
+	List(parent string) []TaskInfo
+	Stop(id string) bool
+}
+
+// TaskInfo is a snapshot of a background task.
+type TaskInfo struct {
+	ID        string    `json:"id"`
+	Role      string    `json:"role"`
+	Task      string    `json:"task"`
+	Status    string    `json:"status"` // running|done|error|stopped
+	Output    string    `json:"output"`
+	Error     string    `json:"error"`
+	StartedAt time.Time `json:"started_at"`
+	EndedAt   time.Time `json:"ended_at"`
+}
+
 // SkillLibrary is the subset of the skills manager that tools need.
 type SkillLibrary interface {
 	List() []SkillInfo
@@ -91,6 +114,8 @@ type Deps struct {
 	RAG    RAGProvider
 	Sub    SubAgent
 	Skills SkillLibrary
+	// Tasks runs sub-agents in the background. It may be nil.
+	Tasks BackgroundTasks
 	// Shell owns persistent terminal sessions keyed by session id.
 	Shell *ShellManager
 	// Checkpoint saves a copy of a file about to be changed. It may be nil,

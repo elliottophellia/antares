@@ -131,6 +131,8 @@ type Agent struct {
 	intel    *engagement.Store
 	roleperf *roleperf.Tracker
 
+	bg *bgManager
+
 	mu     sync.Mutex
 	active map[string]context.CancelFunc
 }
@@ -144,6 +146,7 @@ func New(cfg *config.Config, db store.Store, reg *tools.Registry, shell *tools.S
 		findings: findings.NewStore(config.Path("findings")),
 		intel:    engagement.NewStore(config.Path("intel")),
 		roleperf: roleperf.NewTracker(config.Path("role-performance.json")),
+		bg:       newBGManager(),
 		active:   map[string]context.CancelFunc{},
 	}
 }
@@ -572,7 +575,7 @@ func (a *Agent) executeTools(
 			},
 			Deps: &tools.Deps{
 				Config: a.cfg, Store: a.db, RAG: a.rag, Shell: a.shell,
-				Sub: a.subAgentFor(req), Skills: a.skillLibrary(),
+				Sub: a.subAgentFor(req), Tasks: a.backgroundFor(req), Skills: a.skillLibrary(),
 				Checkpoint: a.saveCheckpoint,
 				Roles:      a.roleInfos,
 				Vision:     a.describeImage,
