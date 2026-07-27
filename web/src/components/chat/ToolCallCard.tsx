@@ -3,7 +3,6 @@ import {
   CaretDown,
   CaretRight,
   CheckCircle,
-  Circle,
   CircleNotch,
   Database,
   FilePlus,
@@ -120,67 +119,6 @@ function summarize(name: string, args: Record<string, unknown>): string {
   }
 }
 
-type TodoItem = { content: string; status: string }
-
-/** Robloxkit-style task list, rendered for `todo` tool calls: a compact
- *  checklist with a status glyph per item and a done/total tally. */
-export function TaskList({ call }: { call: ToolCallView }) {
-  const { t } = useI18n()
-  const items = useMemo<TodoItem[]>(() => {
-    try {
-      const parsed = JSON.parse(call.args || '{}') as { items?: TodoItem[] }
-      return Array.isArray(parsed.items) ? parsed.items : []
-    } catch {
-      return []
-    }
-  }, [call.args])
-
-  // A read call, or a write with no list — nothing worth a checklist; fall back
-  // to the ordinary tool card so the raw result is still reachable.
-  if (items.length === 0) return <ToolCallCard call={call} />
-
-  const done = items.filter((it) => it.status === 'completed').length
-
-  return (
-    <div className="rounded-[var(--radius-sm)] border border-border bg-card px-3 py-2.5">
-      <div className="mb-2 flex items-center gap-1.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
-        <ListChecks className="size-3.5" />
-        {t('chat.tasks')}
-        <span className="ml-auto tabular-nums">
-          {done}/{items.length}
-        </span>
-      </div>
-      <ul className="space-y-1.5">
-        {items.map((it, i) => (
-          <li key={i} className="flex items-start gap-2 text-[12px] leading-snug">
-            <span className="mt-0.5 shrink-0">
-              {it.status === 'completed' ? (
-                <CheckCircle className="size-3.5 text-[var(--success)]" weight="fill" />
-              ) : it.status === 'in_progress' ? (
-                <CircleNotch className="size-3.5 animate-spin text-primary" />
-              ) : (
-                <Circle className="size-3.5 text-muted-foreground/40" />
-              )}
-            </span>
-            <span
-              className={cn(
-                'min-w-0 flex-1',
-                it.status === 'completed'
-                  ? 'text-muted-foreground line-through'
-                  : it.status === 'in_progress'
-                    ? 'font-medium text-foreground'
-                    : 'text-muted-foreground',
-              )}
-            >
-              {it.content}
-            </span>
-          </li>
-        ))}
-      </ul>
-    </div>
-  )
-}
-
 export function ToolCallCard({ call }: { call: ToolCallView }) {
   const { t } = useI18n()
   const [open, setOpen] = useState(false)
@@ -252,7 +190,7 @@ export function ToolCallCard({ call }: { call: ToolCallView }) {
         type="button"
         onClick={() => canExpand && setOpen((v) => !v)}
         className={cn(
-          'flex w-full items-start gap-2 px-3 py-2 text-left',
+          'flex w-full items-start gap-2 px-2.5 py-1.5 text-left',
           canExpand ? 'cursor-pointer hover:bg-muted/40' : 'cursor-default',
         )}
       >

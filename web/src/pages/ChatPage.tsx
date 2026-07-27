@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useLocation, useNavigate, useParams } from 'react-router-dom'
 import {
   ArrowUp,
@@ -21,7 +21,8 @@ import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/primitives'
 import { SkeletonMessage } from '@/components/ui/skeleton'
 import { Markdown } from '@/components/chat/Markdown'
-import { ToolCallCard, TaskList } from '@/components/chat/ToolCallCard'
+import { ToolCallCard } from '@/components/chat/ToolCallCard'
+import { TaskBar, parseTasks } from '@/components/chat/TaskBar'
 import { ApprovalCard, type ApprovalView } from '@/components/chat/ApprovalCard'
 import { RolePicker } from '@/components/chat/RolePicker'
 import {
@@ -211,6 +212,22 @@ export default function ChatPage() {
   const commands = useCommands()
   const matches = useMatches(input, commands)
   const [paletteSel, setPaletteSel] = useState(0)
+
+  // The current checklist is the most recent todo write anywhere in the
+  // transcript; it drives the sticky task bar above the composer.
+  const tasks = useMemo(() => {
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const calls = messages[i].toolCalls
+      if (!calls) continue
+      for (let j = calls.length - 1; j >= 0; j--) {
+        if (calls[j].name === 'todo') {
+          const items = parseTasks(calls[j].args)
+          if (items.length > 0) return items
+        }
+      }
+    }
+    return []
+  }, [messages])
 
   const abortRef = useRef<(() => void) | null>(null)
   // Holds the id of a session that was just created mid-stream on this page.
@@ -662,7 +679,7 @@ export default function ChatPage() {
               <SkeletonMessage />
             </div>
           ) : (
-            <div className="space-y-6">
+            <div className="space-y-5">
               {messages.map((m) => (
                 <MessageBubble key={m.id} message={m} />
               ))}
@@ -688,7 +705,10 @@ export default function ChatPage() {
       {/* Floating composer: sits close to the last message rather than pinned
           against the very bottom edge of the viewport. */}
       <div className="bg-gradient-to-t from-background via-background to-transparent px-4 pt-3 pb-[max(1.5rem,env(safe-area-inset-bottom))] sm:px-6 sm:pb-[max(2rem,env(safe-area-inset-bottom))]">
-        <div className="mx-auto w-full max-w-3xl">{composer}</div>
+        <div className="mx-auto w-full max-w-3xl">
+          <TaskBar tasks={tasks} />
+          {composer}
+        </div>
       </div>
     </div>
   )
@@ -828,7 +848,7 @@ function ErrorBanner({ message, className }: { message: string; className?: stri
   )
 }
 
-function StreamingIndicator({ turn, tool }: { turn?: number; tool?: string }) {
+export function StreamingIndicator({ turn, tool }: { turn?: number; tool?: string }) {
   const { t } = useI18n()
   const [secs, setSecs] = useState(0)
   useEffect(() => {
@@ -879,7 +899,7 @@ function ReasoningBlock({ text }: { text: string }) {
   )
 }
 
-function MessageBubble({ message }: { message: ChatMessage }) {
+export function MessageBubble({ message }: { message: ChatMessage }) {
   const { t } = useI18n()
   const timeAgo = useTimeAgo()
   const [copied, setCopied] = useState(false)
@@ -891,27 +911,29 @@ function MessageBubble({ message }: { message: ChatMessage }) {
   }
 
   if (message.role === 'user') {
+    // Full-width, quietly set apart with a left rule and a faint tint — the
+    // model's replies own the column, the prompt sits above them as context.
     return (
-      <div className="flex justify-end fade-up">
-        <div className="max-w-[85%] space-y-2">
-          {message.images?.length ? (
-            <div className="flex flex-wrap justify-end gap-2">
-              {message.images.map((src, i) => (
-                <img
-                  key={i}
-                  src={src}
-                  alt=""
-                  className="max-h-48 rounded-[var(--radius-md)] border border-border object-contain"
-                />
-              ))}
-            </div>
-          ) : null}
-          {message.content ? (
-            <div className="rounded-[var(--radius-lg)] rounded-br-sm bg-primary px-3.5 py-2.5 text-sm text-primary-foreground">
-              <p className="whitespace-pre-wrap break-words">{message.content}</p>
-            </div>
-          ) : null}
-        </div>
+      <div className="fade-up space-y-2">
+        {message.images?.length ? (
+          <div className="flex flex-wrap gap-2">
+            {message.images.map((src, i) => (
+              <img
+                key={i}
+                src={src}
+                alt=""
+                className="max-h-48 rounded-[var(--radius-md)] border border-border object-contain"
+              />
+            ))}
+          </div>
+        ) : null}
+        {message.content ? (
+          <div className="rounded-[var(--radius-md)] border-l-2 border-primary bg-muted/40 px-3.5 py-2.5">
+            <p className="whitespace-pre-wrap break-words text-[13px] leading-relaxed text-foreground">
+              {message.content}
+            </p>
+          </div>
+        ) : null}
       </div>
     )
   }
@@ -933,21 +955,20 @@ function MessageBubble({ message }: { message: ChatMessage }) {
   }
 
   return (
-    <div className="group space-y-2 fade-up">
+    <div className="group space-y-1.5 fade-up">
       {message.segments && message.segments.length > 0
         ? message.segments.map((seg, i) => {
             if (seg.kind === 'reasoning') {
               return <ReasoningBlock key={`r${i}`} text={seg.text} />
             }
             if (seg.kind === 'tool') {
-              return seg.call.name === 'todo' ? (
-                <TaskList key={seg.call.id} call={seg.call} />
-              ) : (
+              // todo calls surface in the sticky TaskBar, not inline.
+              return seg.call.name === 'todo' ? null : (
                 <ToolCallCard key={seg.call.id} call={seg.call} />
               )
             }
             return (
-              <div key={`t${i}`} className="text-sm leading-relaxed">
+              <div key={`t${i}`} className="text-[13px] leading-relaxed">
                 <Markdown content={seg.text} />
               </div>
             )
@@ -956,14 +977,10 @@ function MessageBubble({ message }: { message: ChatMessage }) {
           <>
             {message.reasoning ? <ReasoningBlock text={message.reasoning} /> : null}
             {message.toolCalls?.map((call) =>
-              call.name === 'todo' ? (
-                <TaskList key={call.id} call={call} />
-              ) : (
-                <ToolCallCard key={call.id} call={call} />
-              ),
+              call.name === 'todo' ? null : <ToolCallCard key={call.id} call={call} />,
             )}
             {message.content ? (
-              <div className="text-sm leading-relaxed">
+              <div className="text-[13px] leading-relaxed">
                 <Markdown content={message.content} />
               </div>
             ) : null}

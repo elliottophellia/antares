@@ -323,7 +323,7 @@ func (a *Agent) Run(ctx context.Context, req Request, emit Emit) (*Result, error
 		llmReq := llm.Request{
 			Model:             modelName,
 			System:            systemPrompt,
-			Messages:          history,
+			Messages:          ensureToolResults(history),
 			Tools:             toolSpecs,
 			Temperature:       cfg.Model.Temperature,
 			TopP:              cfg.Model.TopP,
@@ -875,6 +875,48 @@ func firstNonEmpty(vals ...string) string {
 		}
 	}
 	return ""
+}
+
+// ensureToolResults guarantees the invariant every OpenAI-compatible provider
+// enforces: an assistant message carrying tool_calls must be immediately
+// followed by a tool message for each tool_call_id. A turn interrupted after
+// the assistant's tool_calls were persisted but before (all) their results
+// were — or a history reshaped by compaction — can otherwise leave a dangling
+// tool_call, which the provider rejects with "insufficient tool messages
+// following tool_calls message". For any tool_call with no matching result, a
+// synthetic stub result is spliced in so the request is always well-formed.
+// This is a send-time repair and does not mutate what is persisted.
+func ensureToolResults(msgs []llm.Message) []llm.Message {
+	out := make([]llm.Message, 0, len(msgs))
+	for i := 0; i < len(msgs); i++ {
+		m := msgs[i]
+		out = append(out, m)
+		if m.Role != llm.RoleAssistant || len(m.ToolCalls) == 0 {
+			continue
+		}
+		// Emit the tool results already present contiguously after this turn,
+		// recording which call ids they cover.
+		covered := make(map[string]bool, len(m.ToolCalls))
+		j := i + 1
+		for j < len(msgs) && msgs[j].Role == llm.RoleTool {
+			covered[msgs[j].ToolCallID] = true
+			out = append(out, msgs[j])
+			j++
+		}
+		// Stub any call that never produced a result.
+		for _, tc := range m.ToolCalls {
+			if !covered[tc.ID] {
+				out = append(out, llm.Message{
+					Role:       llm.RoleTool,
+					ToolCallID: tc.ID,
+					Name:       tc.Name,
+					Content:    "[no result recorded — the previous run was interrupted before this tool finished]",
+				})
+			}
+		}
+		i = j - 1 // skip the tool messages already appended
+	}
+	return out
 }
 
 func maxInt(a, b int) int {

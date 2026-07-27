@@ -10,7 +10,7 @@ import { useI18n } from '@/lib/i18n'
 export function Markdown({ content, className }: { content: string; className?: string }) {
   const blocks = useMemo(() => parseBlocks(content), [content])
   return (
-    <div className={cn('space-y-3', className)}>
+    <div className={cn('space-y-2.5', className)}>
       {blocks.map((block, i) =>
         block.type === 'code' ? (
           <CodeBlock key={i} code={block.code} lang={block.lang} />
