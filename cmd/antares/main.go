@@ -83,6 +83,8 @@ func run() error {
 		return cmdModel(args)
 	case "setup":
 		return cmdSetup(args)
+	case "autopilot":
+		return cmdAutopilot(args)
 	case "auth", "login":
 		return cmdAuth(args)
 	case "cron":
@@ -120,6 +122,8 @@ Usage:
   antares config get <path>
   antares config set <path> <value>
   antares cron list|add|run|rm   Manage scheduled jobs
+  antares autopilot add|list|run Run a queue of tasks unattended
+  antares auth copilot           Sign in to GitHub Copilot
   antares rag index <path>       Index files into semantic search
   antares backup           Archive everything; also list, restore, prune
   antares doctor           Check configuration and connectivity

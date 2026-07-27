@@ -21,6 +21,7 @@ type Config struct {
 	Security      Security            `yaml:"security" json:"security"`
 	ImageGen      ImageGen            `yaml:"image_gen" json:"image_gen"`
 	Cron          Cron                `yaml:"cron" json:"cron"`
+	Autopilot     Autopilot           `yaml:"autopilot" json:"autopilot"`
 	Gateway       Gateway             `yaml:"gateway" json:"gateway"`
 	Delegation    Delegation          `yaml:"delegation" json:"delegation"`
 	CodeExecution CodeExecution       `yaml:"code_execution" json:"code_execution"`
@@ -317,6 +318,15 @@ type Skills struct {
 }
 
 // Cron configures the built-in scheduler.
+// Autopilot configures the unattended work-queue runner.
+type Autopilot struct {
+	// VerifyCommand runs in each card's workspace to check the work (e.g.
+	// "go build ./... && go test ./..."). Empty skips verification.
+	VerifyCommand string `yaml:"verify_command" json:"verify_command"`
+	// BaseBranch is the PR base when autopilot runs with --pr. Default "main".
+	BaseBranch string `yaml:"base_branch" json:"base_branch"`
+}
+
 type Cron struct {
 	Enabled       bool   `yaml:"enabled" json:"enabled"`
 	Timezone      string `yaml:"timezone" json:"timezone"`
