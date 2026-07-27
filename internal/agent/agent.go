@@ -301,6 +301,7 @@ func (a *Agent) Run(ctx context.Context, req Request, emit Emit) (*Result, error
 		toolCalls int
 		verified  int
 		judged    int
+		failures  []toolFailure // errored tool calls, for post-turn learning
 	)
 	repeats := newRepeatTracker(cfg.Agent.RepeatLimit)
 	goal, hasGoal := a.GetGoal(ctx, sess.ID)
@@ -406,8 +407,13 @@ func (a *Agent) Run(ctx context.Context, req Request, emit Emit) (*Result, error
 		}
 
 		results := a.executeTools(runCtx, resp.ToolCalls, byName, req, sess, emit)
-		for _, r := range results {
+		for i, r := range results {
 			history = append(history, r.message)
+			if r.isError && i < len(resp.ToolCalls) {
+				failures = append(failures, toolFailure{
+					Tool: resp.ToolCalls[i].Name, Args: resp.ToolCalls[i].Arguments, Error: r.message.Content,
+				})
+			}
 			if !req.Quiet {
 				if err := a.db.AppendMessage(ctx, &store.Message{
 					ID: newID("msg"), SessionID: sess.ID, Role: store.RoleTool,
@@ -438,6 +444,12 @@ func (a *Agent) Run(ctx context.Context, req Request, emit Emit) (*Result, error
 		a.maybeTitle(ctx, sess, req.Message, lastReply)
 		if err := emit(Event{Type: EventSession, ID: sess.ID, Title: sess.Title}); err != nil {
 			return nil, err
+		}
+		// The agent grows: if it hit tool errors but still produced a reply, it
+		// recovered — reflect on those errors in the background and keep any
+		// reusable lesson for next time.
+		if len(failures) > 0 && strings.TrimSpace(lastReply) != "" {
+			go a.learnFromErrors(context.Background(), req.Message, lastReply, failures)
 		}
 	}
 	_ = emit(Event{Type: EventDone})
