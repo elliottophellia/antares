@@ -75,15 +75,15 @@ export function RolePicker({
     <div ref={ref} className="relative">
       <button
         onClick={() => setOpen((v) => !v)}
-        className="flex items-center gap-1.5 rounded-[var(--radius-sm)] border border-border px-2.5 py-1.5 text-xs transition-colors hover:border-primary/40"
+        className="flex h-[3.25rem] items-center gap-1.5 rounded-[var(--radius-xl)] border border-border bg-card px-3 text-sm shadow-sm transition-colors hover:border-primary/40 focus-visible:border-ring"
       >
-        <UsersThree className="size-3.5 text-muted-foreground" />
-        <span className="max-w-32 truncate">{current ? current.title : t('roles.asAssistant')}</span>
-        <CaretDown className="size-3 text-muted-foreground" />
+        <UsersThree className="size-4 shrink-0 text-muted-foreground" />
+        <span className="max-w-28 truncate">{current ? current.title : t('roles.asAssistant')}</span>
+        <CaretDown className="size-3.5 shrink-0 text-muted-foreground" />
       </button>
 
       {open ? (
-        <div className="absolute bottom-full left-0 z-30 mb-1 max-h-72 w-72 overflow-y-auto rounded-[var(--radius-lg)] border border-border bg-card p-1 shadow-lg">
+        <div className="absolute bottom-full left-0 z-30 mb-2 max-h-72 w-72 overflow-y-auto rounded-[var(--radius-lg)] border border-border bg-card p-1 shadow-lg">
           <button
             onClick={() => pick('')}
             className={cn(
