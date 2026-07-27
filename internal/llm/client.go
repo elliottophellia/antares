@@ -41,6 +41,9 @@ type Options struct {
 	// APIVersion is the Azure OpenAI api-version query parameter. Ignored by
 	// other kinds.
 	APIVersion string
+	// Region is the AWS region for Bedrock, e.g. "us-east-1". Empty reads
+	// AWS_REGION / AWS_DEFAULT_REGION.
+	Region string
 }
 
 // New builds the adapter matching kind. Unknown kinds fall back to the
@@ -77,6 +80,8 @@ func newBase(o Options) (Client, error) {
 			o.BaseURL = "https://generativelanguage.googleapis.com/v1beta"
 		}
 		return &geminiClient{opts: o}, nil
+	case "bedrock", "aws", "aws-bedrock":
+		return newBedrock(o)
 	case "openai":
 		if o.BaseURL == "" {
 			o.BaseURL = "https://api.openai.com/v1"

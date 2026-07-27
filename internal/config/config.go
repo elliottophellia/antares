@@ -75,6 +75,7 @@ type Provider struct {
 	Label       string            `yaml:"label" json:"label"`
 	TimeoutSecs int               `yaml:"timeout_seconds" json:"timeout_seconds"`
 	APIVersion  string            `yaml:"api_version" json:"api_version"`
+	Region      string            `yaml:"region" json:"region"`
 }
 
 // Database picks the persistence driver.

@@ -237,6 +237,12 @@ func (c *anthropicClient) Chat(ctx context.Context, req Request) (*Response, err
 	if err := c.opts.doJSON(ctx, "POST", c.opts.BaseURL+"/messages", c.buildBody(req, false), c.headers(), &raw); err != nil {
 		return nil, err
 	}
+	return c.fromResponse(&raw)
+}
+
+// fromResponse converts a decoded Anthropic messages response into the neutral
+// shape. It is shared with the Bedrock adapter, which returns the same body.
+func (c *anthropicClient) fromResponse(raw *antResponse) (*Response, error) {
 	if raw.Error != nil {
 		return nil, fmt.Errorf("provider error: %s", raw.Error.Message)
 	}
