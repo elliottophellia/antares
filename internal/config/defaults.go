@@ -74,6 +74,7 @@ func Default() *Config {
 		Terminal: Terminal{
 			Backend: "local", CWD: "~/antares-workspace", Timeout: 300,
 			HomeMode: "workspace", LifetimeSeconds: 3600, Shell: "",
+			Sandbox:         "none",
 			BlockedCommands: []string{"rm -rf /", "mkfs", ":(){:|:&};:", "shutdown", "reboot"},
 			AllowNetwork:    true, DockerImage: "debian:bookworm-slim",
 		},

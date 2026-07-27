@@ -276,6 +276,7 @@ credentials, and RAG backend in one pass.
 | [Skills](docs/skills.md) | Writing, installing, and learning skills |
 | [Hub](docs/hub.md) | The skill and MCP catalogue |
 | [Plugins](docs/plugins.md) | Hooks for external programs |
+| [Sandboxing](docs/sandbox.md) | Confining what commands can reach |
 | [Commands](docs/commands.md) | Every slash command |
 | [Harness](docs/harness.md) | Goals, steering, verification, repetition guard |
 | [Memory and RAG](docs/memory-and-rag.md) | What is remembered, and retrieval |

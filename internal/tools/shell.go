@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"os/exec"
 	"runtime"
@@ -13,6 +14,7 @@ import (
 	"time"
 
 	"github.com/enowdev/antares/internal/config"
+	"github.com/enowdev/antares/internal/sandbox"
 )
 
 // ShellManager owns one long-lived shell per session so `cd`, exported
@@ -21,6 +23,8 @@ type ShellManager struct {
 	mu       sync.Mutex
 	sessions map[string]*shellSession
 	cfg      config.Terminal
+	// sandboxOnce keeps a confinement warning from repeating on every shell.
+	sandboxOnce sync.Once
 }
 
 // NewShellManager builds a manager for the given terminal config.
@@ -113,7 +117,24 @@ func (m *ShellManager) session(id, workspace string) (*shellSession, error) {
 		}
 		cmd = exec.Command("ssh", "-tt", m.cfg.SSHHost, "/bin/sh")
 	default:
-		cmd = exec.Command(shell, shellArgs...)
+		// The shell is what gives the agent its reach, so it is what gets
+		// confined. A sandbox that cannot be built is reported once and then
+		// stepped around: refusing to run anything helps nobody.
+		mode, note := sandbox.Resolve(sandbox.Mode(m.cfg.Sandbox))
+		if note != "" {
+			m.warnSandboxOnce(note)
+		}
+		policy := sandbox.Policy{
+			Workspace:    workspace,
+			AllowNetwork: m.cfg.AllowNetwork,
+			Hidden:       m.hiddenPaths(),
+		}
+		built, err := sandbox.Command(mode, policy, shell, shellArgs...)
+		if err != nil {
+			m.warnSandboxOnce(err.Error())
+			built = exec.Command(shell, shellArgs...)
+		}
+		cmd = built
 		cmd.Dir = workspace
 		cmd.Env = append(os.Environ(), "ANTARES_SESSION="+id, "TERM=dumb", "PAGER=cat", "GIT_PAGER=cat")
 	}
@@ -361,4 +382,27 @@ func max(a, b int) int {
 		return a
 	}
 	return b
+}
+
+// warnSandboxOnce logs a confinement problem the first time only. It happens
+// per shell start, and repeating it every time would bury the log.
+func (m *ShellManager) warnSandboxOnce(note string) {
+	m.sandboxOnce.Do(func() {
+		slog.Warn("terminal sandbox", "detail", note)
+	})
+}
+
+// hiddenPaths resolves the credential directories kept out of the sandbox.
+func (m *ShellManager) hiddenPaths() []string {
+	list := m.cfg.SandboxHidden
+	if len(list) == 0 {
+		list = sandbox.DefaultHidden
+	}
+	out := make([]string, 0, len(list))
+	for _, p := range list {
+		if expanded := config.Expand(p); expanded != "" {
+			out = append(out, expanded)
+		}
+	}
+	return out
 }

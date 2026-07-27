@@ -159,8 +159,14 @@ type Terminal struct {
 	Shell           string   `yaml:"shell" json:"shell"`
 	BlockedCommands []string `yaml:"blocked_commands" json:"blocked_commands"`
 	AllowNetwork    bool     `yaml:"allow_network" json:"allow_network"`
-	DockerImage     string   `yaml:"docker_image" json:"docker_image"`
-	SSHHost         string   `yaml:"ssh_host" json:"ssh_host"`
+	// Sandbox confines what a command can reach: none, auto, bubblewrap, or
+	// namespace. Auto uses the strongest thing this machine has.
+	Sandbox string `yaml:"sandbox" json:"sandbox"`
+	// SandboxHidden are paths kept out of the sandbox. Empty uses the default
+	// list, which is the credential directories.
+	SandboxHidden []string `yaml:"sandbox_hidden" json:"sandbox_hidden"`
+	DockerImage   string   `yaml:"docker_image" json:"docker_image"`
+	SSHHost       string   `yaml:"ssh_host" json:"ssh_host"`
 }
 
 // Compression controls automatic context compaction.
