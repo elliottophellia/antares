@@ -14,6 +14,7 @@ import {
   X,
 } from '@phosphor-icons/react'
 import { get, post, streamGet, streamPost, type StreamEvent } from '@/lib/api'
+import { copyText } from '@/lib/clipboard'
 import { useStickyScroll } from '@/lib/hooks'
 import { useI18n, useTimeAgo, type MessageKey } from '@/lib/i18n'
 import { cn } from '@/lib/utils'
@@ -497,7 +498,7 @@ export default function ChatPage() {
             break
           case 'copy': {
             const last = [...messages].reverse().find((m) => m.role === 'assistant')
-            if (last) await navigator.clipboard.writeText(last.content).catch(() => {})
+            if (last) await copyText(last.content)
             pushSystem(last ? t('chat.copied') : t('chat.nothingToCopy'))
             return
           }
@@ -983,9 +984,10 @@ export function MessageBubble({ message }: { message: ChatMessage }) {
   const [copied, setCopied] = useState(false)
 
   const copy = async () => {
-    await navigator.clipboard.writeText(message.content)
-    setCopied(true)
-    setTimeout(() => setCopied(false), 1500)
+    if (await copyText(message.content)) {
+      setCopied(true)
+      setTimeout(() => setCopied(false), 1500)
+    }
   }
 
   if (message.role === 'user') {

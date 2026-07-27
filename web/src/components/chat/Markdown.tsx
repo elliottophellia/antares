@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react'
 import { Check, Copy } from '@phosphor-icons/react'
 import { cn } from '@/lib/utils'
+import { copyText } from '@/lib/clipboard'
 import { useI18n } from '@/lib/i18n'
 
 /**
@@ -262,9 +263,10 @@ function CodeBlock({ code, lang }: { code: string; lang: string }) {
   const { t } = useI18n()
   const [copied, setCopied] = useState(false)
   const copy = async () => {
-    await navigator.clipboard.writeText(code)
-    setCopied(true)
-    setTimeout(() => setCopied(false), 1500)
+    if (await copyText(code)) {
+      setCopied(true)
+      setTimeout(() => setCopied(false), 1500)
+    }
   }
   return (
     <div className="group relative overflow-hidden rounded-[var(--radius-sm)] border border-border bg-muted/40">
