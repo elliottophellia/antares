@@ -51,6 +51,9 @@ type Model struct {
 	ContextWindow    int     `yaml:"context_window" json:"context_window"`
 	ReasoningEffort  string  `yaml:"reasoning_effort" json:"reasoning_effort"`
 	ParallelToolCall bool    `yaml:"parallel_tool_calls" json:"parallel_tool_calls"`
+	// MaxRetries is how many times a transient provider failure (429, 5xx,
+	// dropped connection) is retried with backoff. Zero uses a safe default.
+	MaxRetries int `yaml:"max_retries" json:"max_retries"`
 	// Panel is the set of models /panel asks. Two or more, or the command has
 	// nothing to compare.
 	Panel []string `yaml:"panel" json:"panel"`
@@ -113,6 +116,10 @@ type Agent struct {
 	VerifyMax int `yaml:"verify_max" json:"verify_max"`
 	// GoalMaxIterations bounds a standing goal so it cannot run forever.
 	GoalMaxIterations int `yaml:"goal_max_iterations" json:"goal_max_iterations"`
+	// WrapUntrustedOutput fences tool output that carries external content
+	// (web pages, HTTP bodies, MCP results) so the model treats it as data and
+	// not as instructions — a defence against prompt injection. On by default.
+	WrapUntrustedOutput bool `yaml:"wrap_untrusted_output" json:"wrap_untrusted_output"`
 }
 
 // Tools controls which toolsets are exposed to the model.

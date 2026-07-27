@@ -40,9 +40,17 @@ func (a *Agent) newClient(modelOverride string) (client llm.Client, model, provi
 		timeout = 5 * time.Minute
 	}
 
+	retries := cfg.Model.MaxRetries
+	switch {
+	case retries == 0:
+		retries = 3 // unset → a sensible default
+	case retries < 0:
+		retries = 0 // explicit opt-out
+	}
 	client, err = llm.New(llm.Options{
 		Kind: p.Kind, BaseURL: p.BaseURL, APIKey: p.APIKey,
 		Headers: p.Headers, Timeout: timeout, ProviderID: id,
+		Retries: retries,
 	})
 	if err != nil {
 		return nil, "", "", err

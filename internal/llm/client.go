@@ -32,6 +32,12 @@ type Options struct {
 	Timeout    time.Duration
 	ProviderID string
 	HTTPClient *http.Client
+	// Retries is how many times a transient failure (429, 5xx, connection
+	// drop) is retried with backoff before giving up. Zero disables retrying.
+	Retries int
+	// RetryBaseDelay is the first backoff step; it doubles each attempt. Zero
+	// uses a sensible default.
+	RetryBaseDelay time.Duration
 }
 
 // New builds the adapter matching kind. Unknown kinds fall back to the
@@ -45,6 +51,18 @@ func New(o Options) (Client, error) {
 	}
 	o.BaseURL = strings.TrimRight(strings.TrimSpace(o.BaseURL), "/")
 
+	base, err := newBase(o)
+	if err != nil {
+		return nil, err
+	}
+	if o.Retries > 0 {
+		return newRetrying(base, o.Retries, o.RetryBaseDelay), nil
+	}
+	return base, nil
+}
+
+// newBase builds the raw adapter for a kind, without the retry wrapper.
+func newBase(o Options) (Client, error) {
 	switch strings.ToLower(strings.TrimSpace(o.Kind)) {
 	case "anthropic", "claude":
 		if o.BaseURL == "" {
@@ -79,6 +97,9 @@ type apiError struct {
 	Status int
 	Body   string
 	URL    string
+	// RetryAfter is the provider's requested wait from a Retry-After header,
+	// or zero if none was sent.
+	RetryAfter time.Duration
 }
 
 func (e *apiError) Error() string {
@@ -209,8 +230,9 @@ func (o Options) do(ctx context.Context, method, url string, body any, headers m
 	}
 	if resp.StatusCode >= 400 {
 		data, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<16))
+		ra := parseRetryAfter(resp.Header.Get("Retry-After"))
 		resp.Body.Close()
-		return nil, &apiError{Status: resp.StatusCode, Body: string(data), URL: url}
+		return nil, &apiError{Status: resp.StatusCode, Body: string(data), URL: url, RetryAfter: ra}
 	}
 	return resp, nil
 }
