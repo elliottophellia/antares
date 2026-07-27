@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/enowdev/antares/internal/engagement"
 	"github.com/enowdev/antares/internal/llm"
 	"github.com/enowdev/antares/internal/store"
 	"github.com/enowdev/antares/internal/tools"
@@ -72,6 +73,14 @@ func (a *Agent) buildSystemPrompt(ctx context.Context, req Request, sess *store.
 		}
 	}
 
+	// When an assessment is under way, its methodology state is pushed into every
+	// turn so the agent is driven towards completeness instead of having to ask.
+	if hasTool(active, "methodology_status") {
+		if block := a.methodologyBlock(sess.ID); block != "" {
+			b.WriteString(block)
+		}
+	}
+
 	if a.skills != nil && cfg.Skills.Enabled {
 		if catalogue := a.skills.PromptBlock(60); catalogue != "" {
 			b.WriteString("\n## Your skills\n\n")
@@ -101,6 +110,54 @@ func (a *Agent) buildSystemPrompt(ctx context.Context, req Request, sess *store.
 		fmt.Fprintf(&b, "\n## Persona\n\n%s\n", p)
 	}
 
+	return b.String()
+}
+
+// methodologyBlock renders the live assessment state — which phases have
+// evidence, which are open, and the single next step — so the agent is pushed
+// towards completeness. It is empty until an engagement has started (the first
+// intel is recorded), so ordinary sessions never see it.
+func (a *Agent) methodologyBlock(sessionID string) string {
+	if a.intel == nil {
+		return ""
+	}
+	list, err := a.intel.List(sessionID)
+	if err != nil || len(list) == 0 {
+		return ""
+	}
+
+	hasScope := len(a.cfg.Security.Scope) > 0
+	hasReport := false
+	if a.findings != nil {
+		if f, err := a.findings.List(sessionID); err == nil && len(f) > 0 {
+			hasReport = true
+		}
+	}
+	states, err := a.intel.State(sessionID, hasScope, hasReport)
+	if err != nil || len(states) == 0 {
+		return ""
+	}
+
+	var b strings.Builder
+	b.WriteString("\n## Assessment in progress\n\n")
+	b.WriteString("Keep testing until every phase has evidence. Do not write the report while services sit untested.\n\n")
+	for _, st := range states {
+		mark := map[engagement.PhaseStatus]string{
+			engagement.Complete: "[x]", engagement.InProgress: "[~]",
+			engagement.Blocked: "[!]", engagement.NotStarted: "[ ]",
+		}[st.Status]
+		fmt.Fprintf(&b, "%s %s", mark, st.Title)
+		if st.Evidence > 0 {
+			fmt.Fprintf(&b, " (%d recorded)", st.Evidence)
+		}
+		b.WriteString("\n")
+	}
+	if _, directive := engagement.NextStep(states); directive != "" {
+		b.WriteString("\nNext: " + directive + "\n")
+	}
+	if !hasScope {
+		b.WriteString("No scope is set — add authorized targets with the scope tools before active testing.\n")
+	}
 	return b.String()
 }
 
