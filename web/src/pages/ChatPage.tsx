@@ -197,6 +197,9 @@ export default function ChatPage() {
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [loading, setLoading] = useState(!!sessionId)
   const [streaming, setStreaming] = useState(false)
+  // Live status for the streaming indicator: which step, and what tool (if any)
+  // is running right now. Reset at the start of every send.
+  const [live, setLive] = useState<{ turn: number; tool?: string }>({ turn: 1 })
   const [input, setInput] = useState('')
   const [error, setError] = useState<string>()
   const [title, setTitle] = useState('')
@@ -382,6 +385,7 @@ export default function ChatPage() {
     setImages([])
     setError(undefined)
     setStreaming(true)
+    setLive({ turn: 1 })
 
     const patchAssistant = (fn: (m: ChatMessage) => ChatMessage) =>
       setMessages((prev) => prev.map((m) => (m.id === assistantId ? fn(m) : m)))
@@ -412,6 +416,7 @@ export default function ChatPage() {
             patchAssistant((m) => appendSeg(m, 'reasoning', String(event.delta ?? '')))
             break
           case 'tool_call':
+            setLive((s) => ({ turn: s.turn + 1, tool: String(event.name ?? '') }))
             patchAssistant((m) =>
               pushToolSeg(m, {
                 id: String(event.id ?? ''),
@@ -430,6 +435,8 @@ export default function ChatPage() {
             )
             break
           case 'tool_result':
+            // The tool finished; back to thinking until the next call or text.
+            setLive((s) => ({ ...s, tool: undefined }))
             patchAssistant((m) =>
               updateToolSeg(m, String(event.id ?? ''), (c) => ({
                 ...c,
@@ -670,7 +677,7 @@ export default function ChatPage() {
                   }
                 />
               ))}
-              {streaming ? <StreamingIndicator /> : null}
+              {streaming ? <StreamingIndicator turn={live.turn} tool={live.tool} /> : null}
             </div>
           )}
 
@@ -821,12 +828,29 @@ function ErrorBanner({ message, className }: { message: string; className?: stri
   )
 }
 
-function StreamingIndicator() {
+function StreamingIndicator({ turn, tool }: { turn?: number; tool?: string }) {
+  const { t } = useI18n()
+  const [secs, setSecs] = useState(0)
+  useEffect(() => {
+    const start = Date.now()
+    const id = setInterval(() => setSecs(Math.round((Date.now() - start) / 1000)), 1000)
+    return () => clearInterval(id)
+  }, [])
+  // Show what it is doing: the running tool, else the step, else just "working".
+  const label = tool
+    ? t('chat.running', { tool })
+    : turn && turn > 1
+      ? t('chat.workingStep', { n: turn })
+      : t('chat.working')
   return (
-    <div className="flex items-center gap-1.5 px-1 text-xs text-muted-foreground">
-      <span className="pulse-dot size-1.5 rounded-full bg-primary" />
-      <span className="pulse-dot size-1.5 rounded-full bg-primary [animation-delay:0.2s]" />
-      <span className="pulse-dot size-1.5 rounded-full bg-primary [animation-delay:0.4s]" />
+    <div className="flex items-center gap-2 px-1 text-xs text-muted-foreground">
+      <span className="flex items-center gap-1">
+        <span className="pulse-dot size-1.5 rounded-full bg-primary" />
+        <span className="pulse-dot size-1.5 rounded-full bg-primary [animation-delay:0.2s]" />
+        <span className="pulse-dot size-1.5 rounded-full bg-primary [animation-delay:0.4s]" />
+      </span>
+      <span className="font-medium text-foreground/70">{label}</span>
+      <span className="text-[10px] tabular-nums text-muted-foreground/60">· {secs}s</span>
     </div>
   )
 }
