@@ -275,6 +275,7 @@ credentials, and RAG backend in one pass.
 | [Browser](docs/browser.md) | Driving a real browser |
 | [Skills](docs/skills.md) | Writing, installing, and learning skills |
 | [Hub](docs/hub.md) | The skill and MCP catalogue |
+| [Plugins](docs/plugins.md) | Hooks for external programs |
 | [Commands](docs/commands.md) | Every slash command |
 | [Harness](docs/harness.md) | Goals, steering, verification, repetition guard |
 | [Memory and RAG](docs/memory-and-rag.md) | What is remembered, and retrieval |

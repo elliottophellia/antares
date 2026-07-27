@@ -14,6 +14,7 @@ import (
 
 	"github.com/enowdev/antares/internal/checkpoint"
 	"github.com/enowdev/antares/internal/llm"
+	"github.com/enowdev/antares/internal/plugin"
 	"github.com/enowdev/antares/internal/store"
 )
 
@@ -487,4 +488,20 @@ func (a *Agent) PruneCheckpoints(olderThan time.Duration) (int, error) {
 		return 0, nil
 	}
 	return a.checks.Prune(olderThan)
+}
+
+// ---- plugins -----------------------------------------------------------------
+
+// SetPlugins attaches the plugin manager. Passing nil disables hooks.
+func (a *Agent) SetPlugins(m *plugin.Manager) { a.plugins = m }
+
+// Plugins exposes the manager, or nil when none is attached.
+func (a *Agent) Plugins() *plugin.Manager { return a.plugins }
+
+// notifyPlugins sends an event that has no reply worth acting on.
+func (a *Agent) notifyPlugins(ctx context.Context, p plugin.Payload) {
+	if a.plugins == nil {
+		return
+	}
+	a.plugins.Dispatch(ctx, p)
 }

@@ -16,6 +16,7 @@ type Config struct {
 	Memory        Memory              `yaml:"memory" json:"memory"`
 	RAG           RAG                 `yaml:"rag" json:"rag"`
 	Skills        Skills              `yaml:"skills" json:"skills"`
+	Plugins       Plugins             `yaml:"plugins" json:"plugins"`
 	Cron          Cron                `yaml:"cron" json:"cron"`
 	Gateway       Gateway             `yaml:"gateway" json:"gateway"`
 	Delegation    Delegation          `yaml:"delegation" json:"delegation"`
@@ -212,6 +213,12 @@ type RAG struct {
 	EnowxProject  string `yaml:"enowx_project" json:"enowx_project"`
 	EnowxRerank   bool   `yaml:"enowx_rerank" json:"enowx_rerank"`
 	EnowxCompress bool   `yaml:"enowx_compress" json:"enowx_compress"`
+}
+
+// Plugins configures external programs that hook into the agent.
+type Plugins struct {
+	Enabled bool     `yaml:"enabled" json:"enabled"`
+	Dirs    []string `yaml:"dirs" json:"dirs"`
 }
 
 // Skills configures the self-improving skill library.

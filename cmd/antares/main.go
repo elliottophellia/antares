@@ -23,6 +23,7 @@ import (
 	"github.com/enowdev/antares/internal/hub"
 	"github.com/enowdev/antares/internal/logx"
 	"github.com/enowdev/antares/internal/mcp"
+	"github.com/enowdev/antares/internal/plugin"
 	"github.com/enowdev/antares/internal/rag"
 	"github.com/enowdev/antares/internal/server"
 	"github.com/enowdev/antares/internal/skills"
@@ -194,6 +195,17 @@ func bootstrap(ctx context.Context) (*runtimeServices, error) {
 	ag := agent.New(cfg, db, tools.Default(), shell, ragProvider)
 	ag.SetSkills(skillMgr)
 
+	if cfg.Plugins.Enabled {
+		pluginMgr := plugin.NewManager(expandAll(cfg.Plugins.Dirs))
+		if err := pluginMgr.Load(); err != nil {
+			slog.Warn("some plugins failed to load", "error", err)
+		}
+		if n := pluginMgr.Count(); n > 0 {
+			slog.Info("plugins loaded", "count", n)
+		}
+		ag.SetPlugins(pluginMgr)
+	}
+
 	rt := &runtimeServices{cfg: cfg, db: db, shell: shell, agent: ag, skills: skillMgr}
 
 	// MCP servers are optional; a failing one is recorded, never fatal.
@@ -358,6 +370,16 @@ func (rt *runtimeServices) reload() error {
 		slog.Warn("some skills failed to load", "error", err)
 	}
 	rt.agent.SetSkills(rt.skills)
+
+	if cfg.Plugins.Enabled {
+		pluginMgr := plugin.NewManager(expandAll(cfg.Plugins.Dirs))
+		if err := pluginMgr.Load(); err != nil {
+			slog.Warn("some plugins failed to load", "error", err)
+		}
+		rt.agent.SetPlugins(pluginMgr)
+	} else {
+		rt.agent.SetPlugins(nil)
+	}
 
 	// The gateway holds its own pointer; without this it would keep reconciling
 	// against the configuration it was constructed with.
@@ -565,4 +587,13 @@ func cmdDoctor() error {
 	}
 	fmt.Printf("✓ tools         %d registered\n", len(tools.Default().Names()))
 	return nil
+}
+
+// expandAll resolves ~ in a list of directories.
+func expandAll(dirs []string) []string {
+	out := make([]string, 0, len(dirs))
+	for _, d := range dirs {
+		out = append(out, config.Expand(d))
+	}
+	return out
 }

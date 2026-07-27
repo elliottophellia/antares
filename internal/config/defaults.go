@@ -95,6 +95,9 @@ func Default() *Config {
 			EnowxBaseURL: "http://127.0.0.1:7777", EnowxProject: "antares",
 			EnowxRerank: true, EnowxCompress: true,
 		},
+		Plugins: Plugins{
+			Enabled: true, Dirs: []string{"~/.antares/plugins"},
+		},
 		Skills: Skills{
 			Enabled: true, Dirs: []string{"~/.antares/skills"},
 			CreationNudgeInterval: 25, AutoCreate: true,

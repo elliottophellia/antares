@@ -17,6 +17,7 @@ import (
 	"github.com/enowdev/antares/internal/checkpoint"
 	"github.com/enowdev/antares/internal/config"
 	"github.com/enowdev/antares/internal/llm"
+	"github.com/enowdev/antares/internal/plugin"
 	"github.com/enowdev/antares/internal/skills"
 	"github.com/enowdev/antares/internal/store"
 	"github.com/enowdev/antares/internal/tools"
@@ -106,13 +107,14 @@ type Result struct {
 
 // Agent owns the shared services a run needs.
 type Agent struct {
-	cfg    *config.Config
-	db     store.Store
-	reg    *tools.Registry
-	shell  *tools.ShellManager
-	rag    tools.RAGProvider
-	skills *skills.Manager
-	checks *checkpoint.Store
+	cfg     *config.Config
+	db      store.Store
+	reg     *tools.Registry
+	shell   *tools.ShellManager
+	rag     tools.RAGProvider
+	skills  *skills.Manager
+	checks  *checkpoint.Store
+	plugins *plugin.Manager
 
 	mu     sync.Mutex
 	active map[string]context.CancelFunc
@@ -492,6 +494,36 @@ func (a *Agent) executeTools(
 			return
 		}
 
+		// Plugins see the call before it runs, and may refuse it or change
+		// its arguments.
+		if a.plugins != nil {
+			hook := a.plugins.Dispatch(ctx, plugin.Payload{
+				Event: plugin.PreToolCall, SessionID: sess.ID, Platform: req.Platform,
+				Tool: call.Name, Arguments: call.Arguments,
+			})
+			if hook.Notice != "" {
+				_ = safeEmit(Event{Type: EventNotice, Message: hook.Notice})
+			}
+			if hook.Deny {
+				content := "refused by policy: " + hook.Reason
+				outcomes[i] = toolOutcome{
+					message: llm.Message{
+						Role: llm.RoleTool, ToolCallID: call.ID, Name: call.Name,
+						Content: content,
+					},
+					isError: true,
+				}
+				_ = safeEmit(Event{
+					Type: EventToolResult, ID: call.ID, Name: call.Name,
+					Content: content, IsError: true,
+				})
+				return
+			}
+			if hook.Arguments != "" {
+				call.Arguments = hook.Arguments
+			}
+		}
+
 		workspace := sess.Workspace
 		if workspace == "" {
 			workspace = a.cfg.Agent.Workspace
@@ -527,6 +559,22 @@ func (a *Agent) executeTools(
 			content = "(tool produced no output)"
 		}
 		slog.Debug("tool executed", "tool", call.Name, "ms", time.Since(start).Milliseconds(), "error", res.IsError)
+
+		// Plugins see the result and may replace what the model is shown —
+		// redacting a secret out of a log, for instance.
+		if a.plugins != nil {
+			hook := a.plugins.Dispatch(ctx, plugin.Payload{
+				Event: plugin.PostToolCall, SessionID: sess.ID, Platform: req.Platform,
+				Tool: call.Name, Arguments: call.Arguments,
+				Result: content, IsError: res.IsError,
+			})
+			if hook.Notice != "" {
+				_ = safeEmit(Event{Type: EventNotice, Message: hook.Notice})
+			}
+			if hook.Result != "" {
+				content = hook.Result
+			}
+		}
 
 		outcomes[i] = toolOutcome{
 			message: llm.Message{Role: llm.RoleTool, ToolCallID: call.ID, Name: call.Name, Content: content},
