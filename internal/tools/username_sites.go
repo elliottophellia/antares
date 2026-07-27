@@ -1,0 +1,81 @@
+package tools
+
+// moreUsernameSites extends the username search with a broad platform database
+// (developer, social, creative, gaming, forum, and professional sites), so the
+// scan covers a person's likely footprint rather than only the top handful.
+// Detection is by HTTP status, or by an Absent marker string for sites that
+// serve a 200 "not found" page.
+var moreUsernameSites = []usernameSite{
+	// Developer / tech
+	{Name: "Bitbucket", Profile: "https://bitbucket.org/%s/"},
+	{Name: "SourceForge", Profile: "https://sourceforge.net/u/%s/"},
+	{Name: "CodePen", Profile: "https://codepen.io/%s"},
+	{Name: "Docker Hub", Profile: "https://hub.docker.com/u/%s"},
+	{Name: "StackOverflow", Profile: "https://stackoverflow.com/users/%s"},
+	{Name: "HackerOne", Profile: "https://hackerone.com/%s"},
+	{Name: "Bugcrowd", Profile: "https://bugcrowd.com/%s"},
+	{Name: "GitBook", Profile: "https://%s.gitbook.io/"},
+	{Name: "Codeberg", Profile: "https://codeberg.org/%s"},
+	{Name: "Launchpad", Profile: "https://launchpad.net/~%s"},
+	{Name: "Exercism", Profile: "https://exercism.org/profiles/%s"},
+	{Name: "LeetCode", Profile: "https://leetcode.com/%s/"},
+	{Name: "HackerRank", Profile: "https://www.hackerrank.com/%s"},
+	{Name: "Codewars", Profile: "https://www.codewars.com/users/%s"},
+	{Name: "CratesIO", Profile: "https://crates.io/users/%s"},
+	{Name: "RubyGems", Profile: "https://rubygems.org/profiles/%s"},
+	{Name: "Packagist", Profile: "https://packagist.org/users/%s/"},
+	// Social / microblog
+	{Name: "Mastodon (mastodon.social)", Profile: "https://mastodon.social/@%s"},
+	{Name: "Bluesky", Profile: "https://bsky.app/profile/%s.bsky.social"},
+	{Name: "Threads", Profile: "https://www.threads.net/@%s"},
+	{Name: "Tumblr", Profile: "https://%s.tumblr.com"},
+	{Name: "VK", Profile: "https://vk.com/%s"},
+	{Name: "Flickr", Profile: "https://www.flickr.com/people/%s"},
+	{Name: "Snapchat", Profile: "https://www.snapchat.com/add/%s"},
+	{Name: "About.me", Profile: "https://about.me/%s"},
+	{Name: "Linktree", Profile: "https://linktr.ee/%s"},
+	{Name: "Gravatar", Profile: "https://gravatar.com/%s"},
+	// Creative / media
+	{Name: "SoundCloud", Profile: "https://soundcloud.com/%s"},
+	{Name: "Bandcamp", Profile: "https://%s.bandcamp.com"},
+	{Name: "Spotify", Profile: "https://open.spotify.com/user/%s"},
+	{Name: "Behance", Profile: "https://www.behance.net/%s"},
+	{Name: "Dribbble", Profile: "https://dribbble.com/%s"},
+	{Name: "DeviantArt", Profile: "https://www.deviantart.com/%s"},
+	{Name: "ArtStation", Profile: "https://www.artstation.com/%s"},
+	{Name: "500px", Profile: "https://500px.com/p/%s"},
+	{Name: "Vimeo", Profile: "https://vimeo.com/%s"},
+	{Name: "Imgur", Profile: "https://imgur.com/user/%s"},
+	{Name: "Giphy", Profile: "https://giphy.com/%s"},
+	{Name: "Patreon", Profile: "https://www.patreon.com/%s"},
+	{Name: "Ko-fi", Profile: "https://ko-fi.com/%s"},
+	{Name: "BuyMeACoffee", Profile: "https://www.buymeacoffee.com/%s"},
+	{Name: "Gumroad", Profile: "https://%s.gumroad.com"},
+	// Gaming
+	{Name: "Xbox Gamertag", Profile: "https://account.xbox.com/en-us/profile?gamertag=%s"},
+	{Name: "Chess.com", Profile: "https://www.chess.com/member/%s"},
+	{Name: "Lichess", Profile: "https://lichess.org/@/%s"},
+	{Name: "Roblox (search)", Profile: "https://www.roblox.com/user.aspx?username=%s"},
+	{Name: "itch.io", Profile: "https://%s.itch.io"},
+	{Name: "SpeedrunCom", Profile: "https://www.speedrun.com/user/%s"},
+	// Forums / communities
+	{Name: "Product Hunt", Profile: "https://www.producthunt.com/@%s"},
+	{Name: "Hashnode", Profile: "https://hashnode.com/@%s"},
+	{Name: "Substack", Profile: "https://%s.substack.com"},
+	{Name: "Wattpad", Profile: "https://www.wattpad.com/user/%s"},
+	{Name: "Goodreads", Profile: "https://www.goodreads.com/%s"},
+	{Name: "Last.fm", Profile: "https://www.last.fm/user/%s"},
+	{Name: "Trakt", Profile: "https://trakt.tv/users/%s"},
+	{Name: "Letterboxd", Profile: "https://letterboxd.com/%s/"},
+	{Name: "MyAnimeList", Profile: "https://myanimelist.net/profile/%s"},
+	{Name: "AniList", Profile: "https://anilist.co/user/%s"},
+	{Name: "Fandom", Profile: "https://community.fandom.com/wiki/User:%s"},
+	{Name: "Wikipedia", Profile: "https://en.wikipedia.org/wiki/User:%s"},
+	// Professional / marketplace
+	{Name: "Fiverr", Profile: "https://www.fiverr.com/%s"},
+	{Name: "Freelancer", Profile: "https://www.freelancer.com/u/%s"},
+	{Name: "Dev Community (Forem)", Profile: "https://dev.to/%s"},
+	{Name: "AngelList/Wellfound", Profile: "https://wellfound.com/u/%s"},
+	{Name: "Slides", Profile: "https://slides.com/%s"},
+	{Name: "Disqus", Profile: "https://disqus.com/by/%s/"},
+}

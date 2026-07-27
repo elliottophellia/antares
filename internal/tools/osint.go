@@ -402,15 +402,18 @@ func (osintUsernameTool) Execute(ctx context.Context, in Input) Result {
 		return Errorf("username is required")
 	}
 
+	// Base sites plus the broad platform database.
+	sites := append(append([]usernameSite{}, usernameSites...), moreUsernameSites...)
+
 	type hit struct {
 		site  string
 		url   string
 		found bool
 	}
-	results := make([]hit, len(usernameSites))
+	results := make([]hit, len(sites))
 	var wg sync.WaitGroup
-	sem := make(chan struct{}, 8)
-	for i, s := range usernameSites {
+	sem := make(chan struct{}, 16)
+	for i, s := range sites {
 		wg.Add(1)
 		go func(i int, s usernameSite) {
 			defer wg.Done()
@@ -431,7 +434,7 @@ func (osintUsernameTool) Execute(ctx context.Context, in Input) Result {
 	sort.Slice(found, func(i, j int) bool { return found[i].site < found[j].site })
 
 	var b strings.Builder
-	fmt.Fprintf(&b, "Username search for %q — %d/%d platforms matched:\n\n", user, len(found), len(usernameSites))
+	fmt.Fprintf(&b, "Username search for %q — %d/%d platforms matched:\n\n", user, len(found), len(sites))
 	if len(found) == 0 {
 		b.WriteString("No public profiles found on the checked platforms.\n")
 	}
