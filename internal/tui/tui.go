@@ -1,18 +1,18 @@
+// Package tui is antares' terminal UI: a colourful, responsive, web-like chat
+// built on Bubble Tea — sidebar, scrollable transcript with Markdown, a bordered
+// input box, a slash-command palette, and toggleable reasoning. The Bubble Tea
+// renderer owns the screen, so resizing and redraws never corrupt the layout.
 package tui
 
 import (
-	"bufio"
 	"context"
-	"errors"
-	"fmt"
-	"os"
-	"os/signal"
 	"strings"
-	"sync"
-	"syscall"
-	"time"
 
-	"golang.org/x/term"
+	"github.com/charmbracelet/bubbles/spinner"
+	"github.com/charmbracelet/bubbles/textarea"
+	"github.com/charmbracelet/bubbles/viewport"
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/glamour"
 
 	"github.com/enowdev/antares/internal/agent"
 	"github.com/enowdev/antares/internal/config"
@@ -35,380 +35,284 @@ const (
 
 // block is one entry in the scrollback.
 type block struct {
-	kind blockKind
-	// title labels tool blocks ("terminal: ls -la").
-	title string
-	text  string
-	// streaming marks the block currently being appended to.
+	kind      blockKind
+	title     string
+	text      string
 	streaming bool
 	done      bool
 	isError   bool
 }
 
-// Model is the TUI state. All mutation happens on the event loop goroutine
-// except agent events, which arrive on evCh and are applied there too.
-type Model struct {
-	agent *agent.Agent
-	cfg   *config.Config
-	db    store.Store
+// agent-event bridge messages.
+type (
+	evMsg   struct{ e agent.Event }
+	doneMsg struct{ err error }
+)
 
-	out    *os.File
-	in     *bufio.Reader
-	width  int
-	height int
+// Model is the Bubble Tea model.
+type Model struct {
+	ag  *agent.Agent
+	cfg *config.Config
+	db  store.Store
+
+	st       styles
+	renderer *glamour.TermRenderer
+
+	width, height int
+	ready         bool
+
+	vp   viewport.Model
+	ta   textarea.Model
+	spin spinner.Model
 
 	blocks    []block
-	scroll    int // lines scrolled up from the bottom; 0 pins to the newest
-	ed        editor
 	sessionID string
 	title     string
 
-	busy      bool
-	cancel    context.CancelFunc
-	spinner   int
-	statusMsg string
-	statusAt  time.Time
+	busy   bool
+	cancel context.CancelFunc
+	msgCh  chan tea.Msg
 
-	// completion state for the slash palette
+	tokensIn, tokensOut int
+	showReasoning       bool
+	status              string
+
 	palette    []Command
 	paletteSel int
 
-	mu sync.Mutex
+	demo bool
 }
 
 // New builds a TUI bound to a running agent.
 func New(ag *agent.Agent, cfg *config.Config, db store.Store) *Model {
+	ta := textarea.New()
+	ta.Placeholder = "Message antares…  (/ for commands, Enter to send, Ctrl+J for newline)"
+	ta.Prompt = ""
+	ta.ShowLineNumbers = false
+	ta.CharLimit = 0
+	ta.SetHeight(1)
+	ta.Focus()
+	ta.KeyMap.InsertNewline.SetEnabled(false) // Enter sends; Ctrl+J adds a newline.
+
+	sp := spinner.New()
+	sp.Spinner = spinner.Dot
+
 	return &Model{
-		agent: ag, cfg: cfg, db: db,
-		out: os.Stdout,
-		in:  bufio.NewReaderSize(os.Stdin, 4096),
+		ag: ag, cfg: cfg, db: db,
+		st:            newStyles(),
+		ta:            ta,
+		spin:          sp,
+		showReasoning: cfg != nil && cfg.Display.ShowReasoning,
 	}
 }
 
 // Run takes over the terminal until the user quits.
 func (m *Model) Run(ctx context.Context) error {
-	if !term.IsTerminal(int(os.Stdin.Fd())) {
-		return errors.New("the TUI needs an interactive terminal (try `antares chat \"…\"` instead)")
-	}
-
-	oldState, err := term.MakeRaw(int(os.Stdin.Fd()))
-	if err != nil {
-		return fmt.Errorf("entering raw mode: %w", err)
-	}
-	// Restoring the terminal matters more than any error path below, so it is
-	// deferred first and also wired to signals.
-	restore := func() {
-		_ = term.Restore(int(os.Stdin.Fd()), oldState)
-		fmt.Fprint(m.out, escCursorShow+escAltScreenOff+escReset)
-	}
-	defer restore()
-
-	fmt.Fprint(m.out, escAltScreenOn+escClear+escHome+escCursorHide)
-	m.refreshSize()
-
-	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
-
-	// SIGWINCH keeps the layout correct when the window is resized.
-	winch := make(chan os.Signal, 1)
-	signal.Notify(winch, syscall.SIGWINCH)
-	defer signal.Stop(winch)
-
-	m.greet()
-	m.render()
-
-	keys := make(chan keyEvent, 32)
-	keyErr := make(chan error, 1)
-	go func() {
-		for {
-			k, err := readKey(m.in)
-			if err != nil {
-				keyErr <- err
-				return
-			}
-			keys <- k
-		}
-	}()
-
-	ticker := time.NewTicker(120 * time.Millisecond)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-ctx.Done():
-			return nil
-		case <-winch:
-			m.refreshSize()
-			m.render()
-		case <-keyErr:
-			return nil
-		case <-ticker.C:
-			// Only repaint while something is moving, to keep idle CPU at zero.
-			if m.busy {
-				m.spinner++
-				m.render()
-			} else if !m.statusAt.IsZero() && time.Since(m.statusAt) > 4*time.Second {
-				m.statusMsg = ""
-				m.statusAt = time.Time{}
-				m.render()
-			}
-		case k := <-keys:
-			quit, err := m.handleKey(ctx, k)
-			if err != nil {
-				return err
-			}
-			if quit {
-				return nil
-			}
-			m.render()
-		}
-	}
+	p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithContext(ctx))
+	_, err := p.Run()
+	return err
 }
 
-func (m *Model) refreshSize() {
-	w, h, err := term.GetSize(int(os.Stdout.Fd()))
-	if err != nil || w <= 0 {
-		w, h = 80, 24
-	}
-	m.width, m.height = w, h
+func (m *Model) Init() tea.Cmd {
+	m.greet()
+	return tea.Batch(textarea.Blink, m.spin.Tick)
 }
 
 func (m *Model) greet() {
-	m.push(block{
+	m.blocks = append(m.blocks, block{
 		kind: blockSystem,
-		text: fmt.Sprintf("%s %s — type a message, or /help for commands.", version.Display, version.Version),
+		text: version.Display + " " + version.Version + " — type a message, or /help for commands.",
 	})
-	provider, model := m.cfg.Model.Provider, m.cfg.Model.Default
-	if model == "" {
-		m.push(block{
-			kind: blockNotice,
-			text: "No model selected yet. Run /setup, or set model.default in the dashboard.",
-		})
-	} else {
-		m.push(block{kind: blockSystem, text: fmt.Sprintf("Model: %s · %s", model, provider)})
+	if m.cfg != nil && m.cfg.Model.Default == "" && !m.demo {
+		m.blocks = append(m.blocks, block{kind: blockNotice, text: "No model selected. Run /setup, or set model.default in the dashboard."})
 	}
 }
 
-func (m *Model) push(b block) {
-	m.mu.Lock()
-	m.blocks = append(m.blocks, b)
-	m.mu.Unlock()
-}
+func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case tea.WindowSizeMsg:
+		m.width, m.height = msg.Width, msg.Height
+		m.layout()
+		m.ready = true
+		m.refreshTranscript()
+		return m, nil
 
-// appendTo streams text into the last block of a kind, opening one if needed.
-func (m *Model) appendTo(kind blockKind, text string) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if n := len(m.blocks); n > 0 && m.blocks[n-1].kind == kind && m.blocks[n-1].streaming {
-		m.blocks[n-1].text += text
-		return
+	case spinner.TickMsg:
+		if m.busy {
+			var cmd tea.Cmd
+			m.spin, cmd = m.spin.Update(msg)
+			return m, cmd
+		}
+		return m, nil
+
+	case evMsg:
+		m.applyEvent(msg.e)
+		m.refreshTranscript()
+		return m, m.listen()
+
+	case doneMsg:
+		m.busy = false
+		m.cancel = nil
+		m.closeStreaming()
+		if msg.err != nil && !strings.Contains(msg.err.Error(), "context canceled") {
+			m.blocks = append(m.blocks, block{kind: blockError, text: msg.err.Error()})
+		}
+		m.refreshTranscript()
+		return m, nil
+
+	case tea.KeyMsg:
+		return m.onKey(msg)
 	}
-	m.blocks = append(m.blocks, block{kind: kind, text: text, streaming: true})
+
+	// Forward anything else to the components.
+	var cmds []tea.Cmd
+	var cmd tea.Cmd
+	m.ta, cmd = m.ta.Update(msg)
+	cmds = append(cmds, cmd)
+	m.vp, cmd = m.vp.Update(msg)
+	cmds = append(cmds, cmd)
+	return m, tea.Batch(cmds...)
 }
 
-func (m *Model) closeStreaming() {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	for i := range m.blocks {
-		m.blocks[i].streaming = false
-	}
-}
-
-// setStatus shows a transient message in the status bar.
-func (m *Model) setStatus(format string, args ...any) {
-	m.statusMsg = fmt.Sprintf(format, args...)
-	m.statusAt = time.Now()
-}
-
-// handleKey advances the UI for one key press; it reports whether to quit.
-func (m *Model) handleKey(ctx context.Context, k keyEvent) (bool, error) {
-	// The palette takes priority so Tab/arrows complete rather than edit.
+func (m *Model) onKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	// Palette navigation takes priority.
 	if len(m.palette) > 0 {
-		switch k.kind {
-		case keyTab:
-			// One candidate means there is nothing to choose between: complete it.
-			if len(m.palette) == 1 {
-				m.acceptCompletion()
-				return false, nil
-			}
-			m.paletteSel = (m.paletteSel + 1) % len(m.palette)
-			return false, nil
-		case keyDown:
-			m.paletteSel = (m.paletteSel + 1) % len(m.palette)
-			return false, nil
-		case keyShiftTab, keyUp:
+		switch msg.Type {
+		case tea.KeyUp, tea.KeyCtrlP:
 			m.paletteSel = (m.paletteSel - 1 + len(m.palette)) % len(m.palette)
-			return false, nil
-		case keyEnter:
-			// A fully typed command runs; a partial one completes first. Making
-			// Enter always complete would mean pressing it twice for every
-			// command, which is what it felt like.
-			typed := strings.TrimPrefix(strings.TrimSpace(m.ed.text()), "/")
-			if !commandExists(typed) {
-				m.acceptCompletion()
-				return false, nil
-			}
+			return m, nil
+		case tea.KeyDown, tea.KeyCtrlN:
+			m.paletteSel = (m.paletteSel + 1) % len(m.palette)
+			return m, nil
+		case tea.KeyTab:
+			m.acceptCompletion()
+			return m, nil
+		case tea.KeyEsc:
 			m.palette = nil
-		case keyEscape:
-			m.palette = nil
-			return false, nil
+			return m, nil
 		}
 	}
 
-	switch k.kind {
-	case keyCtrlC:
+	switch msg.Type {
+	case tea.KeyCtrlC:
 		if m.busy {
 			m.interrupt()
-			return false, nil
+			return m, nil
 		}
-		if m.ed.text() != "" {
-			m.ed.clear()
-			m.palette = nil
-			return false, nil
-		}
-		return true, nil
+		return m, tea.Quit
 
-	case keyCtrlD:
-		if m.ed.text() == "" {
-			return true, nil
-		}
-		m.ed.deleteForward()
+	case tea.KeyCtrlD:
+		return m, tea.Quit
 
-	case keyCtrlL:
-		m.mu.Lock()
+	case tea.KeyCtrlL:
 		m.blocks = nil
-		m.mu.Unlock()
-		m.scroll = 0
 		m.greet()
+		m.refreshTranscript()
+		return m, nil
 
-	case keyEnter:
-		text := strings.TrimSpace(m.ed.text())
+	case tea.KeyCtrlR:
+		m.showReasoning = !m.showReasoning
+		m.setStatus("reasoning " + onOff(m.showReasoning))
+		m.refreshTranscript()
+		return m, nil
+
+	case tea.KeyPgUp:
+		m.vp.HalfViewUp()
+		return m, nil
+	case tea.KeyPgDown:
+		m.vp.HalfViewDown()
+		return m, nil
+
+	case tea.KeyEnter:
+		text := strings.TrimSpace(m.ta.Value())
 		if text == "" {
-			return false, nil
+			return m, nil
+		}
+		if len(m.palette) > 0 {
+			typed := strings.TrimPrefix(strings.Fields(text)[0], "/")
+			if !commandExists(typed) {
+				m.acceptCompletion()
+				return m, nil
+			}
+			m.palette = nil
 		}
 		if m.busy {
-			m.setStatus("still working — press Ctrl+C to interrupt")
-			return false, nil
+			m.setStatus("still working — Ctrl+C to interrupt")
+			return m, nil
 		}
-		m.ed.pushHistory(text)
-		m.ed.clear()
-		m.palette = nil
-		m.scroll = 0
-
+		m.ta.Reset()
+		m.vp.GotoBottom()
 		if strings.HasPrefix(text, "/") {
-			quit := m.runCommand(ctx, text)
-			return quit, nil
+			quit, cmd := m.runCommand(text)
+			m.refreshTranscript()
+			if quit {
+				return m, tea.Quit
+			}
+			return m, cmd
 		}
-		m.send(ctx, text)
-
-	case keyNewline:
-		m.ed.insert('\n')
-
-	case keyBackspace:
-		m.ed.backspace()
-		m.updatePalette()
-	case keyDelete:
-		m.ed.deleteForward()
-	case keyLeft:
-		m.ed.left()
-	case keyRight:
-		m.ed.right()
-	case keyHome, keyCtrlA:
-		m.ed.cursor = m.ed.lineStart()
-	case keyEnd, keyCtrlE:
-		m.ed.cursor = m.ed.lineEnd()
-	case keyCtrlU:
-		m.ed.killToStart()
-		m.updatePalette()
-	case keyCtrlK:
-		m.ed.killToEnd()
-	case keyCtrlW:
-		m.ed.deleteWord()
-		m.updatePalette()
-
-	case keyUp:
-		// Recall history only from a single-line buffer; otherwise move within it.
-		if !strings.Contains(m.ed.text(), "\n") {
-			m.ed.historyPrev()
-		} else {
-			m.scrollBy(-1)
+		if m.demo {
+			m.ta.Reset()
+			m.demoReply(text)
+			m.refreshTranscript()
+			m.vp.GotoBottom()
+			return m, nil
 		}
-	case keyDown:
-		if !strings.Contains(m.ed.text(), "\n") {
-			m.ed.historyNext()
-		} else {
-			m.scrollBy(1)
-		}
-
-	case keyPageUp:
-		m.scrollBy(-(m.transcriptHeight() / 2))
-	case keyPageDown:
-		m.scrollBy(m.transcriptHeight() / 2)
-
-	case keyTab:
-		m.updatePalette()
-		if len(m.palette) == 1 {
-			m.acceptCompletion()
-		}
-
-	case keyEscape:
-		m.palette = nil
-
-	case keyRune:
-		m.ed.insert(k.r)
-		m.updatePalette()
+		return m, m.startTurn(text)
 	}
-	return false, nil
+
+	// Normal editing.
+	var cmd tea.Cmd
+	m.ta, cmd = m.ta.Update(msg)
+	m.updatePalette()
+	return m, cmd
 }
 
-func (m *Model) scrollBy(delta int) {
-	m.scroll += -delta
-	if m.scroll < 0 {
-		m.scroll = 0
+// startTurn runs one agent turn, bridging its events onto the Bubble Tea loop.
+func (m *Model) startTurn(text string) tea.Cmd {
+	m.blocks = append(m.blocks, block{kind: blockUser, text: text})
+	m.busy = true
+	m.refreshTranscript()
+
+	runCtx, cancel := context.WithCancel(context.Background())
+	m.cancel = cancel
+	m.msgCh = make(chan tea.Msg, 128)
+	ch := m.msgCh
+	sess := m.sessionID
+
+	go func() {
+		_, err := m.ag.Run(runCtx, agent.Request{SessionID: sess, Message: text, Platform: "tui"},
+			func(e agent.Event) error {
+				select {
+				case ch <- evMsg{e}:
+				case <-runCtx.Done():
+					return runCtx.Err()
+				}
+				return nil
+			})
+		ch <- doneMsg{err: err}
+	}()
+	return tea.Batch(m.listen(), m.spin.Tick)
+}
+
+// listen pulls the next bridged agent message.
+func (m *Model) listen() tea.Cmd {
+	ch := m.msgCh
+	return func() tea.Msg {
+		if ch == nil {
+			return nil
+		}
+		return <-ch
 	}
 }
 
-// interrupt cancels the in-flight turn.
 func (m *Model) interrupt() {
 	if m.cancel != nil {
 		m.cancel()
 	}
-	if m.sessionID != "" {
-		m.agent.Interrupt(m.sessionID)
+	if m.sessionID != "" && m.ag != nil {
+		m.ag.Interrupt(m.sessionID)
 	}
 	m.setStatus("interrupted")
-}
-
-// send runs one agent turn, streaming events into the transcript.
-func (m *Model) send(ctx context.Context, text string) {
-	m.push(block{kind: blockUser, text: text})
-	m.busy = true
-
-	runCtx, cancel := context.WithCancel(ctx)
-	m.cancel = cancel
-
-	go func() {
-		defer func() {
-			m.closeStreaming()
-			m.busy = false
-			m.cancel = nil
-			cancel()
-			m.render()
-		}()
-
-		_, err := m.agent.Run(runCtx, agent.Request{
-			SessionID: m.sessionID,
-			Message:   text,
-			Platform:  "tui",
-		}, func(e agent.Event) error {
-			m.applyEvent(e)
-			m.render()
-			return nil
-		})
-		if err != nil && runCtx.Err() == nil {
-			m.push(block{kind: blockError, text: err.Error()})
-		}
-	}()
 }
 
 // applyEvent folds one agent event into the transcript.
@@ -424,16 +328,13 @@ func (m *Model) applyEvent(e agent.Event) {
 	case agent.EventText:
 		m.appendTo(blockAssistant, e.Delta)
 	case agent.EventReasoning:
-		if m.cfg.Display.ShowReasoning {
-			m.appendTo(blockReasoning, e.Delta)
-		}
+		m.appendTo(blockReasoning, e.Delta)
 	case agent.EventToolCall:
 		m.closeStreaming()
-		m.push(block{kind: blockTool, title: toolHeadline(e.Name, e.Arguments), streaming: true})
+		m.blocks = append(m.blocks, block{kind: blockTool, title: toolHeadline(e.Name, e.Arguments), streaming: true})
 	case agent.EventToolProgress:
 		m.appendTo(blockTool, e.Chunk)
 	case agent.EventToolResult:
-		m.mu.Lock()
 		for i := len(m.blocks) - 1; i >= 0; i-- {
 			if m.blocks[i].kind == blockTool && !m.blocks[i].done {
 				m.blocks[i].text = e.Content
@@ -443,21 +344,34 @@ func (m *Model) applyEvent(e agent.Event) {
 				break
 			}
 		}
-		m.mu.Unlock()
 	case agent.EventNotice:
-		m.push(block{kind: blockNotice, text: e.Message})
+		m.blocks = append(m.blocks, block{kind: blockNotice, text: e.Message})
 	case agent.EventError:
-		m.push(block{kind: blockError, text: e.Err})
+		m.blocks = append(m.blocks, block{kind: blockError, text: e.Err})
 	case agent.EventUsage:
-		m.setStatus("%d in / %d out tokens", e.InputTokens, e.OutputTokens)
+		m.tokensIn, m.tokensOut = e.InputTokens, e.OutputTokens
 	}
 }
 
-// toolHeadline renders a one-line summary of a tool call for the transcript.
-func toolHeadline(name, args string) string {
-	summary := summarizeArgs(name, args)
-	if summary == "" {
-		return name
+func (m *Model) appendTo(kind blockKind, text string) {
+	if n := len(m.blocks); n > 0 && m.blocks[n-1].kind == kind && m.blocks[n-1].streaming {
+		m.blocks[n-1].text += text
+		return
 	}
-	return name + "  " + summary
+	m.blocks = append(m.blocks, block{kind: kind, text: text, streaming: true})
+}
+
+func (m *Model) closeStreaming() {
+	for i := range m.blocks {
+		m.blocks[i].streaming = false
+	}
+}
+
+func (m *Model) setStatus(s string) { m.status = s }
+
+func onOff(b bool) string {
+	if b {
+		return "on"
+	}
+	return "off"
 }
