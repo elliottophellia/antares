@@ -28,6 +28,10 @@ type Skill struct {
 	Body        string    `json:"-"`
 	UpdatedAt   time.Time `json:"updated_at"`
 	UsageCount  int       `json:"usage_count"`
+	// Pack marks a skill from the bundled security library: searchable and
+	// loadable, but kept out of the prompt catalogue so thousands of them do
+	// not bury the conversation.
+	Pack bool `json:"pack,omitempty"`
 }
 
 // frontMatter is the YAML header of a skill file.
@@ -42,15 +46,34 @@ type frontMatter struct {
 
 // Manager loads and caches skills from the configured directories.
 type Manager struct {
-	mu     sync.RWMutex
-	dirs   []string
-	skills map[string]*Skill
-	usage  map[string]int
+	mu       sync.RWMutex
+	dirs     []string
+	packDirs []string
+	skills   map[string]*Skill
+	usage    map[string]int
 }
 
 // NewManager builds a manager over the given directories.
 func NewManager(dirs []string) *Manager {
 	return &Manager{dirs: dirs, skills: map[string]*Skill{}, usage: map[string]int{}}
+}
+
+// SetPackDirs marks directories whose skills are the bundled security library:
+// searchable but not in the prompt catalogue.
+func (m *Manager) SetPackDirs(dirs []string) {
+	m.mu.Lock()
+	m.packDirs = dirs
+	m.mu.Unlock()
+}
+
+// isPack reports whether a path is under a pack directory.
+func (m *Manager) isPack(path string) bool {
+	for _, d := range m.packDirs {
+		if d != "" && strings.HasPrefix(path, d) {
+			return true
+		}
+	}
+	return false
 }
 
 // Reload rescans every configured directory.
@@ -95,8 +118,9 @@ func (m *Manager) Reload() error {
 	}
 
 	m.mu.Lock()
-	for name, s := range found {
-		s.UsageCount = m.usage[name]
+	for name, sk := range found {
+		sk.UsageCount = m.usage[name]
+		sk.Pack = m.isPack(sk.Path)
 	}
 	m.skills = found
 	m.mu.Unlock()
@@ -291,7 +315,7 @@ func (m *Manager) PromptBlock(limit int) string {
 	var b strings.Builder
 	n := 0
 	for _, s := range list {
-		if !s.Enabled {
+		if !s.Enabled || s.Pack {
 			continue
 		}
 		if limit > 0 && n >= limit {
@@ -305,6 +329,50 @@ func (m *Manager) PromptBlock(limit int) string {
 		n++
 	}
 	return b.String()
+}
+
+// Search finds skills by keyword across name, description, and tags. This is how
+// the security library is used: not injected, but reached for on demand.
+func (m *Manager) Search(query string, limit int) []Skill {
+	q := strings.ToLower(strings.TrimSpace(query))
+	list := m.List()
+	if limit <= 0 {
+		limit = 30
+	}
+	var out []Skill
+	for _, s := range list {
+		hay := strings.ToLower(s.Name + " " + s.Description + " " + strings.Join(s.Tags, " ") + " " + strings.Join(s.Triggers, " "))
+		if q == "" || matchesAll(hay, q) {
+			out = append(out, s)
+			if len(out) >= limit {
+				break
+			}
+		}
+	}
+	return out
+}
+
+// matchesAll reports whether every word of the query is in the haystack.
+func matchesAll(hay, query string) bool {
+	for _, w := range strings.Fields(query) {
+		if !strings.Contains(hay, w) {
+			return false
+		}
+	}
+	return true
+}
+
+// PackCount reports how many skills came from the bundled library.
+func (m *Manager) PackCount() int {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	n := 0
+	for _, s := range m.skills {
+		if s.Pack {
+			n++
+		}
+	}
+	return n
 }
 
 // Count reports how many skills are enabled.

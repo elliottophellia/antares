@@ -59,6 +59,7 @@ type SubAgentRequest struct {
 // SkillLibrary is the subset of the skills manager that tools need.
 type SkillLibrary interface {
 	List() []SkillInfo
+	Search(query string, limit int) []SkillInfo
 	Read(name string) (SkillInfo, string, bool)
 	Write(name, description, body string, tags []string) error
 	MarkUsed(name string)

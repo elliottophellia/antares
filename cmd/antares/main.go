@@ -27,6 +27,7 @@ import (
 	"github.com/enowdev/antares/internal/rag"
 	"github.com/enowdev/antares/internal/roles"
 	"github.com/enowdev/antares/internal/server"
+	"github.com/enowdev/antares/internal/skillpack"
 	"github.com/enowdev/antares/internal/skills"
 	"github.com/enowdev/antares/internal/store"
 	"github.com/enowdev/antares/internal/tools"
@@ -191,7 +192,18 @@ func bootstrap(ctx context.Context) (*runtimeServices, error) {
 		}
 	}
 
-	skillMgr := skills.NewManager(cfg.Skills.Dirs)
+	// The security skill library ships in the binary and unpacks once into its
+	// own directory — searchable on demand, kept out of the prompt catalogue.
+	packDir := config.Path("security-skills")
+	if n, err := skillpack.Install(packDir); err != nil {
+		slog.Warn("could not unpack the security skill library", "error", err)
+	} else if n > 0 {
+		slog.Info("unpacked the security skill library", "count", n)
+	}
+
+	skillDirs := append(append([]string{}, cfg.Skills.Dirs...), "~/.antares/security-skills")
+	skillMgr := skills.NewManager(expandAll(skillDirs))
+	skillMgr.SetPackDirs([]string{packDir})
 	if err := skillMgr.Reload(); err != nil {
 		slog.Warn("some skills failed to load", "error", err)
 	}
@@ -373,7 +385,10 @@ func (rt *runtimeServices) reload() error {
 	}
 	rt.agent.SetRAG(ragProvider)
 
-	rt.skills = skills.NewManager(cfg.Skills.Dirs)
+	packDir := config.Path("security-skills")
+	skillDirs := append(append([]string{}, cfg.Skills.Dirs...), "~/.antares/security-skills")
+	rt.skills = skills.NewManager(expandAll(skillDirs))
+	rt.skills.SetPackDirs([]string{packDir})
 	if err := rt.skills.Reload(); err != nil {
 		slog.Warn("some skills failed to load", "error", err)
 	}

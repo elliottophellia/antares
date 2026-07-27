@@ -13,9 +13,23 @@ func (a skillAdapter) List() []tools.SkillInfo {
 	items := a.m.List()
 	out := make([]tools.SkillInfo, 0, len(items))
 	for _, s := range items {
-		if !s.Enabled {
+		// Pack skills are not listed — there are thousands. They are reached
+		// with Search instead.
+		if !s.Enabled || s.Pack {
 			continue
 		}
+		out = append(out, tools.SkillInfo{
+			Name: s.Name, Description: s.Description,
+			Tags: s.Tags, Triggers: s.Triggers, Enabled: s.Enabled,
+		})
+	}
+	return out
+}
+
+func (a skillAdapter) Search(query string, limit int) []tools.SkillInfo {
+	items := a.m.Search(query, limit)
+	out := make([]tools.SkillInfo, 0, len(items))
+	for _, s := range items {
 		out = append(out, tools.SkillInfo{
 			Name: s.Name, Description: s.Description,
 			Tags: s.Tags, Triggers: s.Triggers, Enabled: s.Enabled,

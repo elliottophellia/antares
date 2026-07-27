@@ -12,14 +12,15 @@ type skillTool struct{}
 
 func (skillTool) Name() string { return "skill" }
 func (skillTool) Description() string {
-	return "Work with your skill library. `list` shows what you know, `read` loads a procedure before " +
-		"following it, and `save` records a reusable procedure you just worked out. " +
-		"Save a skill after solving something non-obvious that is likely to come up again."
+	return "Work with your skill library. `list` shows your everyday skills, `search` finds one by keyword " +
+		"across the whole library including thousands of security testing procedures, `read` loads a procedure " +
+		"before following it, and `save` records a reusable procedure you just worked out. Search for the " +
+		"technique you need — 'jwt', 'ssrf', 'kerberos' — then read it."
 }
 func (skillTool) Schema() map[string]any {
 	return schema(map[string]any{
-		"action":      propEnum("What to do.", "list", "read", "save"),
-		"name":        prop("string", "Skill name (required for read and save)."),
+		"action":      propEnum("What to do.", "list", "search", "read", "save"),
+		"name":        prop("string", "Skill name to read or save; or the keywords to search for."),
 		"description": prop("string", "For save: one line describing when this skill applies."),
 		"body":        prop("string", "For save: the procedure itself, in Markdown. Be concrete — exact commands, paths, and gotchas."),
 		"tags":        map[string]any{"type": "array", "description": "Optional tags.", "items": map[string]any{"type": "string"}},
@@ -59,6 +60,23 @@ func (skillTool) Execute(_ context.Context, in Input) Result {
 			}
 			fmt.Fprintf(&b, "- %s%s: %s\n", s.Name, status, s.Description)
 		}
+		return Text(b.String())
+
+	case "search", "find":
+		q := strings.TrimSpace(args.Name)
+		if q == "" {
+			q = strings.TrimSpace(args.Description)
+		}
+		hits := lib.Search(q, 30)
+		if len(hits) == 0 {
+			return Text(fmt.Sprintf("No skills match %q.", q))
+		}
+		var b strings.Builder
+		fmt.Fprintf(&b, "%d skill(s) matching %q:\n\n", len(hits), q)
+		for _, s := range hits {
+			fmt.Fprintf(&b, "- %s: %s\n", s.Name, s.Description)
+		}
+		b.WriteString("\nLoad one with action=read.")
 		return Text(b.String())
 
 	case "read", "get":
