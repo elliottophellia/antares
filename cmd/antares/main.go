@@ -16,6 +16,7 @@ import (
 	"golang.org/x/term"
 
 	"github.com/enowdev/antares/internal/agent"
+	"github.com/enowdev/antares/internal/commands"
 	"github.com/enowdev/antares/internal/config"
 	"github.com/enowdev/antares/internal/cron"
 	"github.com/enowdev/antares/internal/gateway"
@@ -208,6 +209,12 @@ func (rt *runtimeServices) handleGatewayMessage(ctx context.Context, msg gateway
 		sessionID = ""
 	}
 
+	// A slash command is answered here rather than being sent to the model, so
+	// /status in Telegram means what it means in the terminal.
+	if name, args, ok := commands.Parse(msg.Text); ok {
+		return rt.runGatewayCommand(ctx, key, sessionID, name, args)
+	}
+
 	var reply strings.Builder
 	res, err := rt.agent.Run(ctx, agent.Request{
 		SessionID: sessionID,
@@ -237,6 +244,53 @@ func (rt *runtimeServices) handleGatewayMessage(ctx context.Context, msg gateway
 		return res.Reply, nil
 	}
 	return reply.String(), nil
+}
+
+// runGatewayCommand answers a slash command typed in a chat platform. The few
+// commands that only a screen can carry out are translated into something a
+// message thread can actually do.
+func (rt *runtimeServices) runGatewayCommand(ctx context.Context, kvKey, sessionID, name, args string) (string, error) {
+	res, err := commands.Run(ctx, rt.commandDeps(), commands.Input{
+		Name:      name,
+		Args:      args,
+		SessionID: sessionID,
+		Surface:   commands.SurfaceGateway,
+	})
+	if err != nil {
+		return err.Error(), nil
+	}
+	switch res.Action.Kind {
+	case "new", "clear":
+		// Forgetting the session id is what "start fresh" means here: the next
+		// message opens a new one.
+		_ = rt.db.DeleteKV(ctx, kvKey)
+		return "Started a fresh session.", nil
+	case "stop":
+		if sessionID != "" {
+			rt.agent.Interrupt(sessionID)
+		}
+		return "Stopped.", nil
+	}
+	if res.Output == "" {
+		return "Done.", nil
+	}
+	return res.Output, nil
+}
+
+// commandDeps gives the shared command layer the runtime's services.
+func (rt *runtimeServices) commandDeps() commands.Deps {
+	rt.mu.Lock()
+	cfg := rt.cfg
+	rt.mu.Unlock()
+	return commands.Deps{
+		Config:  func() *config.Config { return cfg },
+		Agent:   rt.agent,
+		Store:   rt.db,
+		Skills:  rt.skills,
+		MCP:     rt.mcp,
+		Reload:  rt.reload,
+		Version: version.Version,
+	}
 }
 
 // runCronJob executes a scheduled prompt in its own throwaway session.

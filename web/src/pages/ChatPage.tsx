@@ -1,7 +1,17 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
-import { ArrowUp, Brain, CaretDown, Check, Copy, Plus, Stop, Warning } from '@phosphor-icons/react'
-import { get, streamPost, type StreamEvent } from '@/lib/api'
+import {
+  ArrowUp,
+  Brain,
+  CaretDown,
+  Check,
+  Copy,
+  Plus,
+  Stop,
+  Terminal,
+  Warning,
+} from '@phosphor-icons/react'
+import { get, post, streamPost, type StreamEvent } from '@/lib/api'
 import { useStickyScroll } from '@/lib/hooks'
 import { useI18n, useTimeAgo, type MessageKey } from '@/lib/i18n'
 import { cn } from '@/lib/utils'
@@ -10,6 +20,12 @@ import { Textarea } from '@/components/ui/primitives'
 import { SkeletonMessage } from '@/components/ui/skeleton'
 import { Markdown } from '@/components/chat/Markdown'
 import { ToolCallCard } from '@/components/chat/ToolCallCard'
+import {
+  SlashPalette,
+  useCommands,
+  useMatches,
+  type CommandSpec,
+} from '@/components/chat/SlashPalette'
 
 export interface ToolCallView {
   id: string
@@ -74,9 +90,17 @@ function hydrate(detail: SessionDetail): ChatMessage[] {
     }
     if (m.tool_calls) {
       try {
-        const parsed = JSON.parse(m.tool_calls) as Array<{ id: string; name: string; arguments: string }>
+        const parsed = JSON.parse(m.tool_calls) as Array<{
+          id: string
+          name: string
+          arguments: string
+        }>
         msg.toolCalls = parsed.map((c) => {
-          const view: ToolCallView = { id: c.id, name: c.name, args: c.arguments }
+          const view: ToolCallView = {
+            id: c.id,
+            name: c.name,
+            args: c.arguments,
+          }
           pending.set(c.id, view)
           return view
         })
@@ -108,6 +132,10 @@ export default function ChatPage() {
   const [error, setError] = useState<string>()
   const [title, setTitle] = useState('')
 
+  const commands = useCommands()
+  const matches = useMatches(input, commands)
+  const [paletteSel, setPaletteSel] = useState(0)
+
   const abortRef = useRef<(() => void) | null>(null)
   const scrollRef = useStickyScroll(messages)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
@@ -131,6 +159,8 @@ export default function ChatPage() {
     // t is stable per language; refetching on language change is harmless.
   }, [sessionId, t])
 
+  useEffect(() => setPaletteSel(0), [input])
+
   // Grow the composer with its content, up to ~8 rows.
   useEffect(() => {
     const el = textareaRef.current
@@ -145,11 +175,91 @@ export default function ChatPage() {
     setStreaming(false)
   }, [])
 
+  /** Append a locally-produced message without touching the server. */
+  const pushSystem = useCallback((content: string) => {
+    setMessages((prev) => [
+      ...prev,
+      { id: `cmd_${Date.now()}_${prev.length}`, role: 'system', content },
+    ])
+  }, [])
+
+  /**
+   * Slash commands are answered by the server rather than the model, so /status
+   * costs nothing and returns instantly. A few of them only the browser can
+   * carry out; those come back as an action.
+   */
+  const runCommand = useCallback(
+    async (line: string) => {
+      setInput('')
+      setError(undefined)
+      setMessages((prev) => [...prev, { id: `you_${Date.now()}`, role: 'user', content: line }])
+      try {
+        const r = await post<{
+          ok: boolean
+          error?: string
+          output?: string
+          action?: { kind?: string; value?: string }
+        }>('/commands/run', {
+          input: line,
+          session_id: sessionId ?? '',
+          surface: 'web',
+        })
+
+        if (!r.ok) {
+          pushSystem(r.error ?? t('chat.somethingWrong'))
+          return
+        }
+
+        switch (r.action?.kind) {
+          case 'new':
+          case 'clear':
+            stop()
+            setMessages([])
+            setTitle('')
+            navigate('/')
+            return
+          case 'resume':
+            if (r.action.value) navigate(`/c/${r.action.value}`)
+            return
+          case 'setup':
+            navigate('/config')
+            return
+          case 'stop':
+            stop()
+            break
+          case 'copy': {
+            const last = [...messages].reverse().find((m) => m.role === 'assistant')
+            if (last) await navigator.clipboard.writeText(last.content).catch(() => {})
+            pushSystem(last ? t('chat.copied') : t('chat.nothingToCopy'))
+            return
+          }
+          case 'retry': {
+            const last = [...messages].reverse().find((m) => m.role === 'user')
+            if (last) setInput(last.content)
+            return
+          }
+        }
+        if (r.output) pushSystem(r.output)
+      } catch (e) {
+        setError((e as Error).message)
+      }
+    },
+    [sessionId, messages, navigate, pushSystem, stop, t],
+  )
+
   const send = useCallback(() => {
     const text = input.trim()
     if (!text || streaming) return
+    if (text.startsWith('/') && text.length > 1) {
+      void runCommand(text)
+      return
+    }
 
-    const userMsg: ChatMessage = { id: `local_${Date.now()}`, role: 'user', content: text }
+    const userMsg: ChatMessage = {
+      id: `local_${Date.now()}`,
+      role: 'user',
+      content: text,
+    }
     const assistantId = `local_${Date.now()}_a`
     setMessages((prev) => [...prev, userMsg, { id: assistantId, role: 'assistant', content: '' }])
     setInput('')
@@ -171,10 +281,16 @@ export default function ChatPage() {
             if (typeof event.title === 'string' && event.title) setTitle(event.title)
             break
           case 'text':
-            patchAssistant((m) => ({ ...m, content: m.content + String(event.delta ?? '') }))
+            patchAssistant((m) => ({
+              ...m,
+              content: m.content + String(event.delta ?? ''),
+            }))
             break
           case 'reasoning':
-            patchAssistant((m) => ({ ...m, reasoning: (m.reasoning ?? '') + String(event.delta ?? '') }))
+            patchAssistant((m) => ({
+              ...m,
+              reasoning: (m.reasoning ?? '') + String(event.delta ?? ''),
+            }))
             break
           case 'tool_call':
             patchAssistant((m) => ({
@@ -195,7 +311,10 @@ export default function ChatPage() {
               ...m,
               toolCalls: (m.toolCalls ?? []).map((c) =>
                 c.id === event.id
-                  ? { ...c, progress: (c.progress ?? '') + String(event.chunk ?? event.message ?? '') }
+                  ? {
+                      ...c,
+                      progress: (c.progress ?? '') + String(event.chunk ?? event.message ?? ''),
+                    }
                   : c,
               ),
             }))
@@ -205,7 +324,12 @@ export default function ChatPage() {
               ...m,
               toolCalls: (m.toolCalls ?? []).map((c) =>
                 c.id === event.id
-                  ? { ...c, result: String(event.content ?? ''), isError: !!event.is_error, running: false }
+                  ? {
+                      ...c,
+                      result: String(event.content ?? ''),
+                      isError: !!event.is_error,
+                      running: false,
+                    }
                   : c,
               ),
             }))
@@ -218,7 +342,10 @@ export default function ChatPage() {
             }))
             break
           case 'error':
-            patchAssistant((m) => ({ ...m, error: String(event.error ?? t('chat.somethingWrong')) }))
+            patchAssistant((m) => ({
+              ...m,
+              error: String(event.error ?? t('chat.somethingWrong')),
+            }))
             break
         }
       },
@@ -232,9 +359,48 @@ export default function ChatPage() {
         abortRef.current = null
       },
     )
-  }, [input, streaming, sessionId, navigate, t])
+  }, [input, streaming, sessionId, navigate, runCommand, t])
+
+  const complete = (c: CommandSpec) => {
+    // Commands that take arguments keep the composer open on a trailing space;
+    // ones that do not are ready to send.
+    setInput(`/${c.name}${c.args ? ' ' : ''}`)
+    textareaRef.current?.focus()
+  }
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (matches.length > 0) {
+      if (e.key === 'ArrowDown') {
+        e.preventDefault()
+        setPaletteSel((i) => (i + 1) % matches.length)
+        return
+      }
+      if (e.key === 'ArrowUp') {
+        e.preventDefault()
+        setPaletteSel((i) => (i - 1 + matches.length) % matches.length)
+        return
+      }
+      if (e.key === 'Tab') {
+        e.preventDefault()
+        complete(matches[paletteSel])
+        return
+      }
+      if (e.key === 'Escape') {
+        e.preventDefault()
+        setInput('')
+        return
+      }
+      // Enter completes a partial name but sends one that is already whole,
+      // so typing a full command and pressing Enter does what it looks like.
+      if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
+        const typed = input.slice(1).toLowerCase()
+        if (!commands.some((c) => c.name === typed)) {
+          e.preventDefault()
+          complete(matches[paletteSel])
+          return
+        }
+      }
+    }
     if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
       e.preventDefault()
       send()
@@ -249,18 +415,21 @@ export default function ChatPage() {
   }
 
   const composer = (
-    <Composer
-      ref={textareaRef}
-      value={input}
-      onChange={setInput}
-      onKeyDown={onKeyDown}
-      onSend={send}
-      onStop={stop}
-      streaming={streaming}
-      placeholder={t('chat.placeholder')}
-      sendLabel={t('chat.send')}
-      stopLabel={t('chat.stop')}
-    />
+    <>
+      <SlashPalette matches={matches} selected={paletteSel} onPick={complete} />
+      <Composer
+        ref={textareaRef}
+        value={input}
+        onChange={setInput}
+        onKeyDown={onKeyDown}
+        onSend={send}
+        onStop={stop}
+        streaming={streaming}
+        placeholder={t('chat.placeholder')}
+        sendLabel={t('chat.send')}
+        stopLabel={t('chat.stop')}
+      />
+    </>
   )
 
   const isEmpty = !loading && messages.length === 0
@@ -285,7 +454,9 @@ export default function ChatPage() {
               <h1 className="text-2xl font-semibold tracking-tight sm:text-3xl">
                 {t('chat.welcomeTitle')}
               </h1>
-              <p className="mx-auto max-w-lg text-sm text-muted-foreground">{t('chat.welcomeDesc')}</p>
+              <p className="mx-auto max-w-lg text-sm text-muted-foreground">
+                {t('chat.welcomeDesc')}
+              </p>
             </div>
 
             {composer}
@@ -394,7 +565,13 @@ const Composer = ({
       className="max-h-50 min-h-9 resize-none border-0 bg-transparent px-2 py-1.5 shadow-none focus-visible:border-0"
     />
     {streaming ? (
-      <Button size="icon" variant="destructive" onClick={onStop} aria-label={stopLabel} className="shrink-0 rounded-full">
+      <Button
+        size="icon"
+        variant="destructive"
+        onClick={onStop}
+        aria-label={stopLabel}
+        className="shrink-0 rounded-full"
+      >
         <Stop weight="fill" />
       </Button>
     ) : (
@@ -457,6 +634,22 @@ function MessageBubble({ message }: { message: ChatMessage }) {
     )
   }
 
+  // Slash-command output is not the model talking. Setting it apart keeps the
+  // transcript honest about what came from where.
+  if (message.role === 'system') {
+    return (
+      <div className="fade-up rounded-[var(--radius-md)] border border-border bg-muted/40 px-3.5 py-3">
+        <div className="mb-1.5 flex items-center gap-1.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+          <Terminal className="size-3" />
+          {t('chat.command')}
+        </div>
+        <div className="text-xs">
+          <Markdown content={message.content} />
+        </div>
+      </div>
+    )
+  }
+
   return (
     <div className="group space-y-2 fade-up">
       {message.reasoning ? (
@@ -467,7 +660,9 @@ function MessageBubble({ message }: { message: ChatMessage }) {
           >
             <Brain className="size-3.5" />
             {t('chat.reasoning')}
-            <CaretDown className={cn('ml-auto size-3 transition-transform', showReasoning && 'rotate-180')} />
+            <CaretDown
+              className={cn('ml-auto size-3 transition-transform', showReasoning && 'rotate-180')}
+            />
           </button>
           {showReasoning ? (
             <p className="whitespace-pre-wrap break-words px-3 pb-3 text-xs text-muted-foreground">
@@ -477,7 +672,9 @@ function MessageBubble({ message }: { message: ChatMessage }) {
         </div>
       ) : null}
 
-      {message.toolCalls?.map((call) => <ToolCallCard key={call.id} call={call} />)}
+      {message.toolCalls?.map((call) => (
+        <ToolCallCard key={call.id} call={call} />
+      ))}
 
       {message.content ? (
         <div className="text-sm leading-relaxed">
@@ -490,7 +687,11 @@ function MessageBubble({ message }: { message: ChatMessage }) {
       {message.content ? (
         <div className="flex items-center gap-2 opacity-0 transition-opacity focus-within:opacity-100 group-hover:opacity-100">
           <Button variant="ghost" size="icon-sm" onClick={copy} aria-label={t('common.copy')}>
-            {copied ? <Check className="size-3.5 text-[var(--success)]" /> : <Copy className="size-3.5" />}
+            {copied ? (
+              <Check className="size-3.5 text-[var(--success)]" />
+            ) : (
+              <Copy className="size-3.5" />
+            )}
           </Button>
           {message.tokensOut ? (
             <span className="text-[10px] text-muted-foreground">

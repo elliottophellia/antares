@@ -98,6 +98,10 @@ func (s *Server) routes() {
 	// MCP
 	m.HandleFunc("GET /api/mcp", s.handleMCPStatus)
 
+	// Slash commands, shared with the TUI and the messaging gateways.
+	m.HandleFunc("GET /api/commands", s.handleCommandList)
+	m.HandleFunc("POST /api/commands/run", s.handleCommandRun)
+
 	// Channels & pairing
 	m.HandleFunc("GET /api/channels", s.handleListChannels)
 	m.HandleFunc("POST /api/channels/{id}/toggle", s.handleToggleChannel)
