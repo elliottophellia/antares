@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -733,3 +734,37 @@ func (a *Agent) ActiveAgents() []ActiveAgent {
 // nowFunc is time.Now, indirected so a test could pin it. The engine forbids a
 // literal time.Now in some contexts, but this is ordinary runtime code.
 var nowFunc = time.Now
+
+// describeImage sends an image to a vision-capable model and returns its
+// description. It is what the vision tool calls. The model is model.vision when
+// set, otherwise the default model — which fails cleanly if that model has no
+// eyes.
+func (a *Agent) describeImage(ctx context.Context, data []byte, mime, question string) (string, error) {
+	model := strings.TrimSpace(a.cfg.Model.Vision)
+	client, resolved, _, err := a.newClient(model)
+	if err != nil {
+		return "", err
+	}
+	if question == "" {
+		question = "Describe this image in detail. If it contains text, transcribe it."
+	}
+	if mime == "" {
+		mime = "image/png"
+	}
+	resp, err := client.Chat(ctx, llm.Request{
+		Model: resolved,
+		Messages: []llm.Message{{
+			Role:    llm.RoleUser,
+			Content: question,
+			Parts: []llm.Part{{
+				Type: "image", MimeType: mime,
+				Data: base64.StdEncoding.EncodeToString(data),
+			}},
+		}},
+		MaxTokens: 1500,
+	})
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(resp.Content), nil
+}

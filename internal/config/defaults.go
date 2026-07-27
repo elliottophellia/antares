@@ -99,7 +99,8 @@ func Default() *Config {
 		Plugins: Plugins{
 			Enabled: true, Dirs: []string{"~/.antares/plugins"},
 		},
-		Roles: Roles{Dirs: []string{"~/.antares/roles"}},
+		Roles:    Roles{Dirs: []string{"~/.antares/roles"}},
+		ImageGen: ImageGen{Enabled: false, Model: "gpt-image-1", Size: "1024x1024"},
 		Skills: Skills{
 			Enabled: true, Dirs: []string{"~/.antares/skills"},
 			CreationNudgeInterval: 25, AutoCreate: true,

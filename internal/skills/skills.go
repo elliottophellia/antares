@@ -183,6 +183,19 @@ func parseFile(path string) (*Skill, error) {
 	return s, nil
 }
 
+// Everyday returns the skills for the everyday catalogue — everything except
+// the bundled library, which is thousands strong and reached by search.
+func (m *Manager) Everyday() []Skill {
+	out := m.List()
+	kept := make([]Skill, 0, len(out))
+	for _, s := range out {
+		if !s.Pack {
+			kept = append(kept, s)
+		}
+	}
+	return kept
+}
+
 // List returns all known skills, sorted by name.
 func (m *Manager) List() []Skill {
 	m.mu.RLock()

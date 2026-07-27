@@ -22,6 +22,8 @@ func init() {
 		reportFindingTool{},
 		addIntelTool{},
 		methodologyStatusTool{},
+		imageGenerateTool{},
+		visionTool{},
 	} {
 		globalRegistry.Register(t)
 	}

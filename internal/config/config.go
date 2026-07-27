@@ -19,6 +19,7 @@ type Config struct {
 	Plugins       Plugins             `yaml:"plugins" json:"plugins"`
 	Roles         Roles               `yaml:"roles" json:"roles"`
 	Security      Security            `yaml:"security" json:"security"`
+	ImageGen      ImageGen            `yaml:"image_gen" json:"image_gen"`
 	Cron          Cron                `yaml:"cron" json:"cron"`
 	Gateway       Gateway             `yaml:"gateway" json:"gateway"`
 	Delegation    Delegation          `yaml:"delegation" json:"delegation"`
@@ -224,6 +225,16 @@ type RAG struct {
 	EnowxProject  string `yaml:"enowx_project" json:"enowx_project"`
 	EnowxRerank   bool   `yaml:"enowx_rerank" json:"enowx_rerank"`
 	EnowxCompress bool   `yaml:"enowx_compress" json:"enowx_compress"`
+}
+
+// ImageGen configures text-to-image generation.
+type ImageGen struct {
+	Enabled  bool   `yaml:"enabled" json:"enabled"`
+	Provider string `yaml:"provider" json:"provider"` // a configured provider id, or "openai"
+	Model    string `yaml:"model" json:"model"`
+	BaseURL  string `yaml:"base_url" json:"base_url"`
+	APIKey   string `yaml:"api_key" json:"api_key"`
+	Size     string `yaml:"size" json:"size"`
 }
 
 // Security holds settings for the authorized-security roles.

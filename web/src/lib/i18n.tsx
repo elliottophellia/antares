@@ -235,6 +235,9 @@ const en = {
   'skills.title': 'Skills',
   'skills.desc': 'Procedures Antares learned from experience, stored as Markdown files.',
   'skills.searchPlaceholder': 'Search skills…',
+  'skills.searchLibrary': 'Search skills, including {n} in the security library…',
+  'skills.libraryHint': 'Plus {n} security testing procedures in the library — search to find one.',
+  'skills.searchingLibrary': 'Searching the full library.',
   'skills.none': 'No skills yet',
   'skills.noneDesc':
     'Antares writes its own skills after finishing complex tasks. You can also drop .md files into ~/.antares/skills.',
@@ -634,6 +637,9 @@ const id: Dict = {
   'skills.title': 'Keahlian',
   'skills.desc': 'Prosedur yang dipelajari Antares dari pengalaman, tersimpan sebagai berkas Markdown.',
   'skills.searchPlaceholder': 'Cari keahlian…',
+  'skills.searchLibrary': 'Cari skill, termasuk {n} di pustaka keamanan…',
+  'skills.libraryHint': 'Ditambah {n} prosedur uji keamanan di pustaka — cari untuk menemukannya.',
+  'skills.searchingLibrary': 'Mencari di seluruh pustaka.',
   'skills.none': 'Belum ada keahlian',
   'skills.noneDesc':
     'Antares membuat keahliannya sendiri setelah menyelesaikan tugas kompleks. Kamu juga bisa menaruh berkas .md di ~/.antares/skills.',
@@ -1025,6 +1031,9 @@ const ja: Dict = {
   'skills.title': 'スキル',
   'skills.desc': 'Antares が経験から学んだ手順。Markdown ファイルとして保存されます。',
   'skills.searchPlaceholder': 'スキルを検索…',
+  'skills.searchLibrary': 'スキルを検索（セキュリティライブラリの {n} 件を含む）…',
+  'skills.libraryHint': 'さらにライブラリに {n} 件のセキュリティ手順があります。検索して見つけてください。',
+  'skills.searchingLibrary': 'ライブラリ全体を検索しています。',
   'skills.none': 'スキルがありません',
   'skills.noneDesc':
     'Antares は複雑な作業のあと自分でスキルを書きます。~/.antares/skills に .md を置くこともできます。',
@@ -1415,6 +1424,9 @@ const zh: Dict = {
   'skills.title': '技能',
   'skills.desc': 'Antares 从实践中学到的流程，保存为 Markdown 文件。',
   'skills.searchPlaceholder': '搜索技能…',
+  'skills.searchLibrary': '搜索技能，包括安全库中的 {n} 个…',
+  'skills.libraryHint': '安全库中还有 {n} 个测试流程 —— 搜索即可找到。',
+  'skills.searchingLibrary': '正在搜索整个库。',
   'skills.none': '还没有技能',
   'skills.noneDesc':
     'Antares 会在完成复杂任务后自行编写技能。你也可以把 .md 文件放进 ~/.antares/skills。',
@@ -1806,6 +1818,9 @@ const ru: Dict = {
   'skills.title': 'Навыки',
   'skills.desc': 'Процедуры, которым Antares научился на практике; хранятся как Markdown-файлы.',
   'skills.searchPlaceholder': 'Искать навыки…',
+  'skills.searchLibrary': 'Искать навыки, включая {n} в библиотеке безопасности…',
+  'skills.libraryHint': 'Плюс {n} процедур тестирования в библиотеке — найдите поиском.',
+  'skills.searchingLibrary': 'Поиск по всей библиотеке.',
   'skills.none': 'Навыков пока нет',
   'skills.noneDesc':
     'Antares пишет навыки сам после сложных задач. Можно также положить .md в ~/.antares/skills.',

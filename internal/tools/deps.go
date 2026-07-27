@@ -88,6 +88,8 @@ type Deps struct {
 	Checkpoint func(sessionID, path, tool string)
 	// Roles lists the specialist roles available for delegation. It may be nil.
 	Roles func() []RoleInfo
+	// Vision describes an image using a vision model. It may be nil.
+	Vision func(ctx context.Context, data []byte, mime, question string) (string, error)
 	// Findings is the security engagement ledger. It may be nil.
 	Findings FindingStore
 	// Intel is the engagement's fact ledger and methodology. It may be nil.

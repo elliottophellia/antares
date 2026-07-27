@@ -575,6 +575,7 @@ func (a *Agent) executeTools(
 				Sub: a.subAgentFor(req), Skills: a.skillLibrary(),
 				Checkpoint: a.saveCheckpoint,
 				Roles:      a.roleInfos,
+				Vision:     a.describeImage,
 				Findings:   a.findings,
 				Intel:      a.intel,
 			},

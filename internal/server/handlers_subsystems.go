@@ -23,7 +23,22 @@ func (s *Server) handleListSkills(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"skills": []any{}})
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"skills": s.skills.List()})
+	// A search query looks across the whole library, including the thousands in
+	// the bundled security pack — capped, so a broad query does not ship all of
+	// them. No query returns just the everyday skills, which keeps the page from
+	// trying to render seven thousand cards.
+	if q := strings.TrimSpace(r.URL.Query().Get("q")); q != "" {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"skills":    s.skills.Search(q, 100),
+			"searching": true,
+			"library":   s.skills.PackCount(),
+		})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"skills":  s.skills.Everyday(),
+		"library": s.skills.PackCount(),
+	})
 }
 
 func (s *Server) handleToggleSkill(w http.ResponseWriter, r *http.Request) {

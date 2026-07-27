@@ -44,8 +44,12 @@ interface Skill {
 export default function SkillsPage() {
   const { t } = useI18n()
   const timeAgo = useTimeAgo()
-  const { data, loading, reload } = useApi<{ skills: Skill[] }>('/skills')
   const [filter, setFilter] = useState('')
+  const [query, setQuery] = useState('')
+  const { data, loading, reload } = useApi<{ skills: Skill[]; library?: number; searching?: boolean }>(
+    query ? `/skills?q=${encodeURIComponent(query)}` : '/skills',
+    [query],
+  )
   const [busy, setBusy] = useState('')
   const [composing, setComposing] = useState(false)
   const [browsing, setBrowsing] = useState(false)
@@ -65,6 +69,11 @@ export default function SkillsPage() {
     </>,
     [t],
   )
+
+  useEffect(() => {
+    const t = setTimeout(() => setQuery(filter.trim()), 300)
+    return () => clearTimeout(t)
+  }, [filter])
 
   const toggle = async (name: string, enabled: boolean) => {
     setBusy(name)
@@ -101,21 +110,27 @@ export default function SkillsPage() {
     }
   }
 
-  const q = filter.trim().toLowerCase()
-  const skills = (data?.skills ?? []).filter(
-    (s) => !q || s.name.toLowerCase().includes(q) || s.description.toLowerCase().includes(q),
-  )
+  const skills = data?.skills ?? []
+  const library = data?.library ?? 0
 
   return (
     <PageBody>
       <NewSkillDialog open={composing} onOpenChange={setComposing} onSaved={reload} />
       <HubDialog kind="skills" open={browsing} onOpenChange={setBrowsing} onInstalled={reload} />
 
-      <Input
-        value={filter}
-        onChange={(e) => setFilter(e.target.value)}
-        placeholder={t('skills.searchPlaceholder')}
-      />
+      <div className="space-y-1.5">
+        <Input
+          value={filter}
+          onChange={(e) => setFilter(e.target.value)}
+          placeholder={library > 0 ? t('skills.searchLibrary', { n: library }) : t('skills.searchPlaceholder')}
+        />
+        {library > 0 && !query ? (
+          <p className="text-[11px] text-muted-foreground">{t('skills.libraryHint', { n: library })}</p>
+        ) : null}
+        {data?.searching ? (
+          <p className="text-[11px] text-muted-foreground">{t('skills.searchingLibrary')}</p>
+        ) : null}
+      </div>
 
       {loading && !data ? (
         <SkeletonList count={5} />
