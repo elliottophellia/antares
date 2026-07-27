@@ -253,8 +253,9 @@ func (m *Model) renderBlock(bl block) string {
 	cw := m.vp.Width
 	switch bl.kind {
 	case blockUser:
-		return m.st.userLabel.Render("You") + "\n" +
-			m.st.userBar.Render(m.st.userText.Render(wrap(bl.text, cw-3)))
+		label := m.st.userLabel.Render(" You ")
+		box := m.st.userBox.Width(cw - 2).Render(m.st.userText.Render(wrap(bl.text, cw-6)))
+		return label + "\n" + box
 
 	case blockAssistant:
 		return m.st.asstLabel.Render("antares") + "\n" + m.markdown(bl.text, cw-1)

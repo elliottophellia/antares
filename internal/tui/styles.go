@@ -19,7 +19,7 @@ type styles struct {
 
 	// role labels + subtle rules
 	userLabel  lipgloss.Style
-	userBar    lipgloss.Style
+	userBox    lipgloss.Style
 	userText   lipgloss.Style
 	asstLabel  lipgloss.Style
 	reasonLbl  lipgloss.Style
@@ -71,7 +71,7 @@ func newStyles(t Theme) styles {
 		rule:      lipgloss.NewStyle().Foreground(t.Border),
 
 		userLabel:  lipgloss.NewStyle().Foreground(t.Accent).Bold(true),
-		userBar:    leftBar(t.Accent),
+		userBox:    lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(t.Accent).Padding(0, 1),
 		userText:   lipgloss.NewStyle().Foreground(t.Text),
 		asstLabel:  lipgloss.NewStyle().Foreground(t.Muted).Bold(true),
 		reasonLbl:  lipgloss.NewStyle().Foreground(t.Faint).Italic(true),
