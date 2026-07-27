@@ -154,6 +154,13 @@ reference the model names to click or type into. The page persists between
 tool calls, so a login holds while the agent keeps working. See
 [docs/browser.md](docs/browser.md).
 
+**Specialist roles.** The agent is a team of specialists, not one generalist —
+a reviewer that only reads, a researcher that only browses, a report writer that
+only writes. `/role` runs a conversation as one; the agent delegates a piece of
+work to the specialist suited to it. Thirteen ship, including a security set for
+authorized penetration testing, gated on a scope you control. See
+[docs/roles.md](docs/roles.md).
+
 **Slash commands.** `/status`, `/model`, `/skills`, `/goal`, and two dozen more
 work identically in the terminal, in the web chat, and in a Telegram or Discord
 thread, because all three dispatch through one definition. The web composer
@@ -273,6 +280,7 @@ credentials, and RAG backend in one pass.
 | [Configuration](docs/configuration.md) | Every setting, and where it can be set |
 | [Tools](docs/tools.md) | The tool surface and the toolsets |
 | [Browser](docs/browser.md) | Driving a real browser |
+| [Roles](docs/roles.md) | Specialist agents, delegation, and authorized security testing |
 | [Skills](docs/skills.md) | Writing, installing, and learning skills |
 | [Hub](docs/hub.md) | The skill and MCP catalogue |
 | [Plugins](docs/plugins.md) | Hooks for external programs |
