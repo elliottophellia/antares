@@ -117,6 +117,13 @@ export const ROUTES: RouteDef[] = [
     component: lazy(() => import('@/pages/ChannelsPage')),
   },
   {
+    path: '/autopilot',
+    titleKey: 'autopilot.title',
+    descKey: 'autopilot.desc',
+    icon: Robot,
+    component: lazy(() => import('@/pages/AutopilotPage')),
+  },
+  {
     path: '/mcp',
     titleKey: 'mcp.title',
     descKey: 'mcp.desc',
@@ -180,6 +187,7 @@ export const NAV_LABELS: Record<string, MessageKey> = {
   '/roles': 'nav.roles',
   '/cron': 'nav.cron',
   '/channels': 'nav.channels',
+  '/autopilot': 'nav.autopilot',
   '/mcp': 'nav.mcp',
   '/plugins': 'nav.plugins',
   '/analytics': 'nav.analytics',
