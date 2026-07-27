@@ -8,13 +8,32 @@ import (
 	"strings"
 )
 
-// geminiClient speaks Google's generateContent API.
-type geminiClient struct{ opts Options }
+// geminiClient speaks Google's generateContent API, either the public
+// Generative Language endpoint (api-key auth) or Vertex AI on GCP (OAuth
+// service-account auth, project/location URLs).
+type geminiClient struct {
+	opts    Options
+	vertex  bool
+	project string
+	region  string
+	tokens  *gcpTokenSource
+}
 
-func (c *geminiClient) Kind() string { return "gemini" }
+func (c *geminiClient) Kind() string {
+	if c.vertex {
+		return "vertex"
+	}
+	return "gemini"
+}
 
 func (c *geminiClient) headers() map[string]string {
 	h := map[string]string{}
+	if c.vertex {
+		if tok, err := c.tokens.token(); err == nil && tok != "" {
+			h["Authorization"] = "Bearer " + tok
+		}
+		return h
+	}
 	if c.opts.APIKey != "" {
 		h["x-goog-api-key"] = c.opts.APIKey
 	}
@@ -228,6 +247,14 @@ type gemResponse struct {
 
 func (c *geminiClient) endpoint(model, method string, stream bool) string {
 	model = strings.TrimPrefix(model, "models/")
+	if c.vertex {
+		u := fmt.Sprintf("%s/v1/projects/%s/locations/%s/publishers/google/models/%s:%s",
+			c.opts.BaseURL, c.project, c.region, url.PathEscape(model), method)
+		if stream {
+			u += "?alt=sse"
+		}
+		return u
+	}
 	u := c.opts.BaseURL + "/models/" + url.PathEscape(model) + ":" + method
 	if stream {
 		u += "?alt=sse"
@@ -365,6 +392,11 @@ func (c *geminiClient) Stream(ctx context.Context, req Request, emit func(Event)
 }
 
 func (c *geminiClient) Models(ctx context.Context) ([]ModelInfo, error) {
+	if c.vertex {
+		// Vertex lists publisher models through a different API; users name the
+		// model directly.
+		return nil, nil
+	}
 	var raw struct {
 		Models []struct {
 			Name             string   `json:"name"`

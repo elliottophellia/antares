@@ -82,6 +82,8 @@ func newBase(o Options) (Client, error) {
 		return &geminiClient{opts: o}, nil
 	case "bedrock", "aws", "aws-bedrock":
 		return newBedrock(o)
+	case "vertex", "vertexai", "vertex-ai", "google-vertex":
+		return newVertex(o)
 	case "openai":
 		if o.BaseURL == "" {
 			o.BaseURL = "https://api.openai.com/v1"
