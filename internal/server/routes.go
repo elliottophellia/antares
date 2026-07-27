@@ -84,6 +84,7 @@ func (s *Server) routes() {
 	m.HandleFunc("GET /api/skills", s.handleListSkills)
 	m.HandleFunc("POST /api/skills", s.handleSaveSkill)
 	m.HandleFunc("POST /api/skills/toggle", s.handleToggleSkill)
+	m.HandleFunc("GET /api/skills/library", s.handleSkillLibrary)
 	m.HandleFunc("GET /api/skills/{name}", s.handleGetSkill)
 	m.HandleFunc("DELETE /api/skills/{name}", s.handleDeleteSkill)
 

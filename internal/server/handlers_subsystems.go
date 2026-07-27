@@ -364,3 +364,23 @@ func (s *Server) handleMCPStatus(w http.ResponseWriter, r *http.Request) {
 		"servers": s.mcp.Status(cfg),
 	})
 }
+
+// handleSkillLibrary browses the bundled security skill library — paged, by
+// category — so thousands of skills are explorable without searching blind.
+func (s *Server) handleSkillLibrary(w http.ResponseWriter, r *http.Request) {
+	if s.skills == nil {
+		writeJSON(w, http.StatusOK, map[string]any{"skills": []any{}, "categories": map[string]int{}, "total": 0})
+		return
+	}
+	category := r.URL.Query().Get("category")
+	offset := queryInt(r, "offset", 0)
+	limit := queryInt(r, "limit", 50)
+	page, total := s.skills.Library(category, offset, limit)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"skills":     page,
+		"total":      total,
+		"offset":     offset,
+		"limit":      limit,
+		"categories": s.skills.Categories(),
+	})
+}

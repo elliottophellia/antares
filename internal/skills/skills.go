@@ -25,6 +25,7 @@ type Skill struct {
 	Source      string    `json:"source"`
 	Tags        []string  `json:"tags"`
 	Triggers    []string  `json:"triggers"`
+	Category    string    `json:"category,omitempty"`
 	Body        string    `json:"-"`
 	UpdatedAt   time.Time `json:"updated_at"`
 	UsageCount  int       `json:"usage_count"`
@@ -40,6 +41,7 @@ type frontMatter struct {
 	Description string   `yaml:"description"`
 	Enabled     *bool    `yaml:"enabled"`
 	Source      string   `yaml:"source"`
+	Category    string   `yaml:"category"`
 	Tags        []string `yaml:"tags"`
 	Triggers    []string `yaml:"triggers"`
 }
@@ -160,6 +162,7 @@ func parseFile(path string) (*Skill, error) {
 			}
 			s.Description = fm.Description
 			s.Tags, s.Triggers = fm.Tags, fm.Triggers
+			s.Category = fm.Category
 			if fm.Source != "" {
 				s.Source = fm.Source
 			}
@@ -373,6 +376,55 @@ func matchesAll(hay, query string) bool {
 		}
 	}
 	return true
+}
+
+// Categories lists the pack skill categories with their counts, for browsing.
+func (m *Manager) Categories() map[string]int {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	out := map[string]int{}
+	for _, s := range m.skills {
+		if !s.Pack {
+			continue
+		}
+		cat := s.Category
+		if cat == "" {
+			cat = "uncategorised"
+		}
+		out[cat]++
+	}
+	return out
+}
+
+// Library returns pack skills for browsing: filtered by category when given,
+// sorted by name, and paged. It returns the page and the total in that filter.
+func (m *Manager) Library(category string, offset, limit int) ([]Skill, int) {
+	if limit <= 0 {
+		limit = 50
+	}
+	m.mu.RLock()
+	all := make([]Skill, 0)
+	for _, s := range m.skills {
+		if !s.Pack {
+			continue
+		}
+		if category != "" && !strings.EqualFold(s.Category, category) {
+			continue
+		}
+		all = append(all, *s)
+	}
+	m.mu.RUnlock()
+
+	sort.Slice(all, func(i, j int) bool { return all[i].Name < all[j].Name })
+	total := len(all)
+	if offset >= total {
+		return nil, total
+	}
+	end := offset + limit
+	if end > total {
+		end = total
+	}
+	return all[offset:end], total
 }
 
 // PackCount reports how many skills came from the bundled library.

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { CaretDown, Plus, Sparkle, Storefront, Trash } from '@phosphor-icons/react'
+import { CaretDown, Plus, ShieldCheck, Sparkle, Storefront, Trash } from '@phosphor-icons/react'
 import { del, get, post } from '@/lib/api'
 import { useApi } from '@/lib/hooks'
 import { useI18n, useTimeAgo } from '@/lib/i18n'
@@ -210,7 +210,162 @@ export default function SkillsPage() {
           ))}
         </div>
       )}
+
+      {library > 0 && !query ? <SecurityLibrary total={library} /> : null}
     </PageBody>
+  )
+}
+
+interface LibSkill {
+  name: string
+  description: string
+  category?: string
+}
+
+/**
+ * The bundled security library is thousands of skills. This browses them by
+ * category, a page at a time, so they are explorable without knowing exactly
+ * what to search for. The list only loads when opened — the everyday page must
+ * stay fast.
+ */
+function SecurityLibrary({ total }: { total: number }) {
+  const { t } = useI18n()
+  const [open, setOpen] = useState(false)
+  const [category, setCategory] = useState('')
+  const [offset, setOffset] = useState(0)
+  const [reading, setReading] = useState<string | null>(null)
+  const [body, setBody] = useState('')
+  const LIMIT = 40
+
+  const { data, loading } = useApi<{
+    skills: LibSkill[]
+    total: number
+    categories: Record<string, number>
+  }>(
+    open ? `/skills/library?category=${encodeURIComponent(category)}&offset=${offset}&limit=${LIMIT}` : null,
+    [open, category, offset],
+  )
+
+  const read = async (name: string) => {
+    if (reading === name) {
+      setReading(null)
+      return
+    }
+    setReading(name)
+    setBody('')
+    try {
+      const r = await get<{ body: string }>(`/skills/${encodeURIComponent(name)}`)
+      setBody(r.body)
+    } catch (e) {
+      setBody((e as Error).message)
+    }
+  }
+
+  const categories = Object.entries(data?.categories ?? {}).sort((a, b) => b[1] - a[1])
+  const shownTotal = data?.total ?? total
+
+  return (
+    <Card>
+      <button
+        onClick={() => setOpen((v) => !v)}
+        className="flex w-full items-center gap-2 p-3.5 text-left"
+      >
+        <ShieldCheck className="size-4 text-primary" weight="fill" />
+        <span className="text-sm font-medium">{t('skills.libraryTitle', { n: total })}</span>
+        <CaretDown className={cn('ml-auto size-4 text-muted-foreground transition-transform', open && 'rotate-180')} />
+      </button>
+
+      {open ? (
+        <div className="border-t border-border p-3.5">
+          <div className="mb-3 flex flex-wrap gap-1.5">
+            <button
+              onClick={() => {
+                setCategory('')
+                setOffset(0)
+              }}
+              className={cn(
+                'rounded-full border px-2.5 py-1 text-[11px] transition-colors',
+                category === '' ? 'border-primary bg-primary/10 text-primary' : 'border-border text-muted-foreground hover:border-primary/40',
+              )}
+            >
+              {t('skills.allCategories')}
+            </button>
+            {categories.map(([cat, n]) => (
+              <button
+                key={cat}
+                onClick={() => {
+                  setCategory(cat)
+                  setOffset(0)
+                }}
+                className={cn(
+                  'rounded-full border px-2.5 py-1 text-[11px] transition-colors',
+                  category === cat ? 'border-primary bg-primary/10 text-primary' : 'border-border text-muted-foreground hover:border-primary/40',
+                )}
+              >
+                {cat} <span className="opacity-60">{n}</span>
+              </button>
+            ))}
+          </div>
+
+          {loading && !data ? (
+            <SkeletonList count={5} />
+          ) : (
+            <div className="space-y-1.5">
+              {(data?.skills ?? []).map((s) => (
+                <div key={s.name} className="rounded-[var(--radius-sm)] border border-border">
+                  <button onClick={() => read(s.name)} className="w-full p-2.5 text-left">
+                    <div className="flex items-center gap-2">
+                      <span className="font-mono text-xs font-medium">{s.name}</span>
+                      {s.category ? <Badge variant="outline">{s.category}</Badge> : null}
+                    </div>
+                    <p className="mt-0.5 text-[11px] text-muted-foreground">{s.description}</p>
+                  </button>
+                  {reading === s.name ? (
+                    <div className="border-t border-border p-2.5">
+                      {body === '' ? (
+                        <Skeleton className="h-24 w-full" />
+                      ) : (
+                        <pre className="max-h-96 overflow-auto whitespace-pre-wrap break-words font-mono text-[10px] leading-relaxed">
+                          {body}
+                        </pre>
+                      )}
+                    </div>
+                  ) : null}
+                </div>
+              ))}
+            </div>
+          )}
+
+          <div className="mt-3 flex items-center justify-between text-xs text-muted-foreground">
+            <span>
+              {t('skills.showingRange', {
+                from: shownTotal === 0 ? 0 : offset + 1,
+                to: Math.min(offset + LIMIT, shownTotal),
+                total: shownTotal,
+              })}
+            </span>
+            <div className="flex gap-2">
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={offset === 0}
+                onClick={() => setOffset(Math.max(0, offset - LIMIT))}
+              >
+                {t('common.previous')}
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={offset + LIMIT >= shownTotal}
+                onClick={() => setOffset(offset + LIMIT)}
+              >
+                {t('common.next')}
+              </Button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+    </Card>
   )
 }
 
