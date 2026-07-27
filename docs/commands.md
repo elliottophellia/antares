@@ -97,6 +97,24 @@ intercepted before the message reaches the model.
 
 See [the harness](harness.md) for what these actually do.
 
+### Roles and specialists
+
+| Command | What it does |
+|---|---|
+| `/roles` | List the specialist roles |
+| `/role [name]` | Run this conversation as a role |
+| `/panel <question>` | Ask several models and synthesise one answer |
+
+### Authorized security testing
+
+| Command | What it does |
+|---|---|
+| `/scope [add\|remove\|list\|check] [target]` | Manage the authorized testing scope |
+| `/findings [remove\|clear] [id]` | The current engagement's findings |
+| `/report [title]` | Compile the findings into a report |
+
+See [roles](roles.md) for what these do.
+
 ### Settings and accounting
 
 | Command | What it does |
