@@ -20,6 +20,8 @@ func init() {
 		listRolesTool{},
 		scopeCheckTool{},
 		reportFindingTool{},
+		addIntelTool{},
+		methodologyStatusTool{},
 	} {
 		globalRegistry.Register(t)
 	}

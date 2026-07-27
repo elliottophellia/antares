@@ -143,6 +143,7 @@ func init() {
 	register(Spec{Name: "scope", Args: "[add|remove|list|check] [target]", Summary: "Manage the authorized security-testing scope", Surfaces: anywhere}, cmdScope)
 	register(Spec{Name: "findings", Args: "[remove|clear] [id]", Summary: "List the current engagement's findings", Surfaces: anywhere}, cmdFindings)
 	register(Spec{Name: "report", Args: "[title]", Summary: "Compile the engagement's findings into a report", Surfaces: anywhere}, cmdReport)
+	register(Spec{Name: "engagement", Args: "[intel|clear]", Summary: "Show the security assessment's progress", Surfaces: anywhere}, cmdEngagement)
 	register(Spec{Name: "rollback", Args: "[all|path]", Summary: "Undo the file changes made in this session", Surfaces: anywhere}, cmdRollback)
 }
 

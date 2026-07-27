@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/enowdev/antares/internal/config"
+	"github.com/enowdev/antares/internal/engagement"
 	"github.com/enowdev/antares/internal/findings"
 	"github.com/enowdev/antares/internal/store"
 )
@@ -83,6 +84,8 @@ type Deps struct {
 	Roles func() []RoleInfo
 	// Findings is the security engagement ledger. It may be nil.
 	Findings FindingStore
+	// Intel is the engagement's fact ledger and methodology. It may be nil.
+	Intel IntelStore
 }
 
 // RoleInfo is the subset of a role the tools need.
@@ -96,4 +99,10 @@ type RoleInfo struct {
 // FindingStore is the subset of the findings store the tools need.
 type FindingStore interface {
 	Add(sessionID string, f findings.Finding) (findings.Finding, error)
+}
+
+// IntelStore is the subset of the engagement store the tools need.
+type IntelStore interface {
+	Add(sessionID string, in engagement.Intel) (engagement.Intel, bool, error)
+	State(sessionID string, hasScope, hasReport bool) ([]engagement.PhaseState, error)
 }

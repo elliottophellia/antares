@@ -16,6 +16,7 @@ import (
 
 	"github.com/enowdev/antares/internal/checkpoint"
 	"github.com/enowdev/antares/internal/config"
+	"github.com/enowdev/antares/internal/engagement"
 	"github.com/enowdev/antares/internal/findings"
 	"github.com/enowdev/antares/internal/llm"
 	"github.com/enowdev/antares/internal/plugin"
@@ -122,6 +123,7 @@ type Agent struct {
 	plugins  *plugin.Manager
 	roles    *roles.Registry
 	findings *findings.Store
+	intel    *engagement.Store
 
 	mu     sync.Mutex
 	active map[string]context.CancelFunc
@@ -134,6 +136,7 @@ func New(cfg *config.Config, db store.Store, reg *tools.Registry, shell *tools.S
 		checks:   checkpoint.NewStore(config.Path("checkpoints")),
 		roles:    roles.NewRegistry(nil),
 		findings: findings.NewStore(config.Path("findings")),
+		intel:    engagement.NewStore(config.Path("intel")),
 		active:   map[string]context.CancelFunc{},
 	}
 }
@@ -566,6 +569,7 @@ func (a *Agent) executeTools(
 				Checkpoint: a.saveCheckpoint,
 				Roles:      a.roleInfos,
 				Findings:   a.findings,
+				Intel:      a.intel,
 			},
 		}
 
