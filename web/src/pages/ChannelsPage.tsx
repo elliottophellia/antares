@@ -2,13 +2,16 @@ import { useEffect, useState } from 'react'
 import {
   ArrowSquareOut,
   CheckCircle,
+  ChatCircle,
   DiscordLogo,
   Eye,
   EyeSlash,
   Key,
   Plugs,
+  SlackLogo,
   TelegramLogo,
   Warning,
+  WhatsappLogo,
 } from '@phosphor-icons/react'
 import { post } from '@/lib/api'
 import { useApi } from '@/lib/hooks'
@@ -38,13 +41,23 @@ import {
 } from '@/components/ui/dialog'
 import { SkeletonList } from '@/components/ui/skeleton'
 
+interface ChannelField {
+  key: string
+  label: string
+  secret: boolean
+  placeholder?: string
+  set: boolean
+}
+
 interface Channel {
   id: string
   label: string
   enabled: boolean
   connected: boolean
+  configured: boolean
   detail: string
-  has_token: boolean
+  docs?: string
+  fields: ChannelField[]
 }
 
 interface Pairing {
@@ -64,12 +77,11 @@ interface ChannelsResponse {
 const ICONS: Record<string, React.ComponentType<{ className?: string; weight?: 'fill' }>> = {
   telegram: TelegramLogo,
   discord: DiscordLogo,
-}
-
-/** Where each platform hands out bot tokens. */
-const TOKEN_URLS: Record<string, string> = {
-  telegram: 'https://t.me/BotFather',
-  discord: 'https://discord.com/developers/applications',
+  slack: SlackLogo,
+  whatsapp: WhatsappLogo,
+  matrix: ChatCircle,
+  signal: ChatCircle,
+  feishu: ChatCircle,
 }
 
 export default function ChannelsPage() {
@@ -77,7 +89,7 @@ export default function ChannelsPage() {
   const timeAgo = useTimeAgo()
   const { data, loading, reload } = useApi<ChannelsResponse>('/channels')
   const [busy, setBusy] = useState('')
-  const [tokenFor, setTokenFor] = useState<Channel | null>(null)
+  const [configFor, setConfigFor] = useState<Channel | null>(null)
 
   const act = async (id: string, fn: () => Promise<unknown>) => {
     setBusy(id)
@@ -91,9 +103,9 @@ export default function ChannelsPage() {
 
   return (
     <PageBody>
-      <TokenDialog
-        channel={tokenFor}
-        onOpenChange={(open) => !open && setTokenFor(null)}
+      <ConfigDialog
+        channel={configFor}
+        onOpenChange={(open) => !open && setConfigFor(null)}
         onSaved={reload}
       />
 
@@ -121,7 +133,7 @@ export default function ChannelsPage() {
                               ? t('channels.connecting')
                               : t('channels.disabled')}
                         </Badge>
-                        {c.has_token ? (
+                        {c.configured ? (
                           <Badge variant="secondary">
                             <CheckCircle className="size-3" weight="fill" />
                             {t('channels.tokenSet')}
@@ -133,14 +145,14 @@ export default function ChannelsPage() {
                       <div className="mt-3 flex flex-wrap items-center gap-2">
                         <Button
                           size="sm"
-                          variant={c.has_token ? 'outline' : 'default'}
-                          onClick={() => setTokenFor(c)}
+                          variant={c.configured ? 'outline' : 'default'}
+                          onClick={() => setConfigFor(c)}
                           className="gap-1.5"
                         >
                           <Key className="size-4" />
-                          {c.has_token ? t('channels.changeToken') : t('channels.connect')}
+                          {c.configured ? t('channels.changeToken') : t('channels.connect')}
                         </Button>
-                        {!c.has_token ? (
+                        {!c.configured ? (
                           <span className="text-[11px] text-muted-foreground">
                             {t('channels.tokenNeeded')}
                           </span>
@@ -150,7 +162,7 @@ export default function ChannelsPage() {
 
                     <Switch
                       checked={c.enabled}
-                      disabled={busy === c.id || !c.has_token}
+                      disabled={busy === c.id || !c.configured}
                       onCheckedChange={(v) =>
                         act(c.id, () => post(`/channels/${c.id}/toggle`, { enabled: v }))
                       }
@@ -221,12 +233,12 @@ export default function ChannelsPage() {
 }
 
 /**
- * Token entry, in a dialog rather than inline. A secret field does not belong
- * sitting open on a page, and keeping it behind a button means the same form
- * serves both first connection and rotating a token later — which the inline
- * version could not do, since it disappeared once a token existed.
+ * Credential entry, in a dialog rather than inline. Each channel declares the
+ * fields it needs (from the server), so one form serves all of them — first
+ * connection and rotating credentials later. Secret fields are masked; a field
+ * left blank keeps its current value.
  */
-function TokenDialog({
+function ConfigDialog({
   channel,
   onOpenChange,
   onSaved,
@@ -236,44 +248,45 @@ function TokenDialog({
   onSaved: () => void
 }) {
   const { t } = useI18n()
-  const [token, setToken] = useState('')
-  const [reveal, setReveal] = useState(false)
+  const [values, setValues] = useState<Record<string, string>>({})
+  const [reveal, setReveal] = useState<Record<string, boolean>>({})
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string>()
-  const [saved, setSaved] = useState<{ name: string; handle: string } | null>(null)
-  // The server reconnects the gateway itself; a restart is only needed when it
-  // says so, so the hint has to follow the response rather than be assumed.
+  const [saved, setSaved] = useState(false)
   const [needsRestart, setNeedsRestart] = useState(false)
 
   useEffect(() => {
     if (channel) {
-      setToken('')
+      setValues({})
+      setReveal({})
       setError(undefined)
-      setSaved(null)
+      setSaved(false)
       setNeedsRestart(false)
-      setReveal(false)
     }
   }, [channel])
 
+  // A newly-configured channel is enabled at once; an already-configured one
+  // just has its credentials updated without flipping the switch.
+  const missing = (channel?.fields ?? []).some(
+    (f) => f.key !== 'listen_addr' && f.key !== 'path' && f.key !== 'user_id' && !f.set && !values[f.key]?.trim(),
+  )
+
   const save = async () => {
-    if (!channel || !token.trim()) return
+    if (!channel) return
     setBusy(true)
     setError(undefined)
     try {
-      const r = await post<{
-        ok: boolean
-        error?: string
-        bot?: { name: string; handle: string }
-        restart_required?: boolean
-      }>(
-        `/channels/${channel.id}/token`,
-        { token: token.trim() },
+      const fields: Record<string, string> = {}
+      for (const [k, v] of Object.entries(values)) if (v.trim()) fields[k] = v.trim()
+      const r = await post<{ ok: boolean; error?: string; restart_required?: boolean }>(
+        `/channels/${channel.id}/config`,
+        { fields, enabled: channel.configured ? undefined : true },
       )
       if (!r.ok) {
         setError(r.error ?? t('channels.tokenRejected'))
         return
       }
-      setSaved(r.bot ?? { name: '', handle: '' })
+      setSaved(true)
       setNeedsRestart(!!r.restart_required)
       onSaved()
     } catch (e) {
@@ -283,70 +296,71 @@ function TokenDialog({
     }
   }
 
-  const tokenURL = channel ? TOKEN_URLS[channel.id] : undefined
-
   return (
     <Dialog open={!!channel} onOpenChange={onOpenChange}>
       <DialogContent>
         <DialogHeader>
           <DialogTitle>
-            {channel?.has_token
+            {channel?.configured
               ? t('channels.changeTokenTitle', { channel: channel?.label ?? '' })
               : t('channels.connectTitle', { channel: channel?.label ?? '' })}
           </DialogTitle>
-          <DialogDescription>{t('channels.tokenDialogDesc')}</DialogDescription>
+          <DialogDescription>{channel?.detail}</DialogDescription>
         </DialogHeader>
 
         <DialogBody>
           {saved ? (
-            // Naming the bot back is the only way to confirm the right token
-            // was pasted — the string itself is unreadable.
             <div className="space-y-3">
               <div className="flex items-start gap-2 rounded-[var(--radius-sm)] border border-[var(--success)]/40 bg-[color-mix(in_oklch,var(--success)_10%,transparent)] p-3 text-xs">
-                <CheckCircle
-                  className="mt-0.5 size-4 shrink-0 text-[var(--success)]"
-                  weight="fill"
-                />
-                <span className="min-w-0">
-                  {t('channels.tokenAccepted', {
-                    bot: [saved.name, saved.handle].filter(Boolean).join(' ') || '—',
-                  })}
-                </span>
+                <CheckCircle className="mt-0.5 size-4 shrink-0 text-[var(--success)]" weight="fill" />
+                <span className="min-w-0">{t('channels.tokenSet')} — {channel?.label}</span>
               </div>
               <p className="text-[11px] leading-relaxed text-muted-foreground">
                 {needsRestart ? t('channels.restartHint') : t('channels.comingOnline')}
               </p>
             </div>
           ) : (
-            <>
-              <div className="space-y-1.5">
-                <Label htmlFor="channel-token">{t('channels.botToken')}</Label>
-                <div className="flex gap-2">
-                  <Input
-                    id="channel-token"
-                    type={reveal ? 'text' : 'password'}
-                    autoFocus
-                    value={token}
-                    onChange={(e) => setToken(e.target.value)}
-                    onKeyDown={(e) => e.key === 'Enter' && save()}
-                    placeholder={t('channels.tokenPlaceholder')}
-                    autoComplete="off"
-                  />
-                  <Button
-                    variant="outline"
-                    size="icon"
-                    onClick={() => setReveal((v) => !v)}
-                    aria-label={t('config.reveal')}
-                    className="shrink-0"
-                  >
-                    {reveal ? <EyeSlash className="size-4" /> : <Eye className="size-4" />}
-                  </Button>
-                </div>
-              </div>
+            <div className="space-y-3">
+              {(channel?.fields ?? []).map((f) => {
+                const isSecret = f.secret
+                const shown = reveal[f.key]
+                return (
+                  <div key={f.key} className="space-y-1.5">
+                    <Label htmlFor={`ch-${f.key}`} className="flex items-center gap-2">
+                      {f.label}
+                      {f.set ? (
+                        <span className="text-[10px] font-normal text-muted-foreground">· {t('channels.tokenSet').toLowerCase()}</span>
+                      ) : null}
+                    </Label>
+                    <div className="flex gap-2">
+                      <Input
+                        id={`ch-${f.key}`}
+                        type={isSecret && !shown ? 'password' : 'text'}
+                        value={values[f.key] ?? ''}
+                        onChange={(e) => setValues((v) => ({ ...v, [f.key]: e.target.value }))}
+                        onKeyDown={(e) => e.key === 'Enter' && !missing && save()}
+                        placeholder={f.placeholder ?? (f.set ? '••••••••' : '')}
+                        autoComplete="off"
+                      />
+                      {isSecret ? (
+                        <Button
+                          variant="outline"
+                          size="icon"
+                          onClick={() => setReveal((r) => ({ ...r, [f.key]: !r[f.key] }))}
+                          aria-label={t('config.reveal')}
+                          className="shrink-0"
+                        >
+                          {shown ? <EyeSlash className="size-4" /> : <Eye className="size-4" />}
+                        </Button>
+                      ) : null}
+                    </div>
+                  </div>
+                )
+              })}
 
-              {tokenURL ? (
+              {channel?.docs ? (
                 <a
-                  href={tokenURL}
+                  href={channel.docs}
                   target="_blank"
                   rel="noreferrer noopener"
                   className="inline-flex items-center gap-1.5 text-xs text-primary underline underline-offset-2"
@@ -362,7 +376,7 @@ function TokenDialog({
                   <span className="min-w-0 break-words">{error}</span>
                 </div>
               ) : null}
-            </>
+            </div>
           )}
         </DialogBody>
 
@@ -373,7 +387,7 @@ function TokenDialog({
             </Button>
           </DialogClose>
           {!saved ? (
-            <Button size="sm" onClick={save} loading={busy} disabled={!token.trim()}>
+            <Button size="sm" onClick={save} loading={busy} disabled={missing}>
               {t('channels.verifyAndSave')}
             </Button>
           ) : null}

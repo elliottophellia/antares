@@ -432,32 +432,31 @@ func (s *Server) handleListChannels(w http.ResponseWriter, r *http.Request) {
 	}
 
 	type channel struct {
-		ID        string `json:"id"`
-		Label     string `json:"label"`
-		Enabled   bool   `json:"enabled"`
-		Connected bool   `json:"connected"`
-		Detail    string `json:"detail"`
-		HasToken  bool   `json:"has_token"`
+		ID         string         `json:"id"`
+		Label      string         `json:"label"`
+		Enabled    bool           `json:"enabled"`
+		Connected  bool           `json:"connected"`
+		Configured bool           `json:"configured"`
+		HasToken   bool           `json:"has_token"` // kept for backward compatibility
+		Detail     string         `json:"detail"`
+		Docs       string         `json:"docs,omitempty"`
+		Fields     []channelField `json:"fields"`
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
-		"channels": []channel{
-			{
-				ID: "telegram", Label: "Telegram",
-				Enabled:   cfg.Gateway.Telegram.Enabled,
-				Connected: live["telegram"],
-				HasToken:  cfg.Gateway.Telegram.BotToken != "",
-				Detail:    "Telegram bot — long polling, no public domain required.",
-			},
-			{
-				ID: "discord", Label: "Discord",
-				Enabled:   cfg.Gateway.Discord.Enabled,
-				Connected: live["discord"],
-				HasToken:  cfg.Gateway.Discord.BotToken != "",
-				Detail:    "Discord bot — websocket gateway.",
-			},
-		},
-		"pairings": pairings,
-	})
+	out := make([]channel, 0, len(channelSpecs()))
+	for _, spec := range channelSpecs() {
+		fields := make([]channelField, len(spec.Fields))
+		for i, f := range spec.Fields {
+			f.Set = channelValue(cfg, spec.ID, f.Key) != ""
+			fields[i] = f
+		}
+		configured := channelConfigured(cfg, spec)
+		out = append(out, channel{
+			ID: spec.ID, Label: spec.Label, Detail: spec.Detail, Docs: spec.Docs,
+			Enabled: channelEnabled(cfg, spec.ID), Connected: live[spec.ID],
+			Configured: configured, HasToken: configured, Fields: fields,
+		})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"channels": out, "pairings": pairings})
 }
 
 // handleSetChannelToken verifies a bot token with the platform before storing

@@ -246,23 +246,16 @@ func (s *Server) handleToggleChannel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := r.PathValue("id")
-	switch id {
-	case "telegram":
-		if body.Enabled && cfg.Gateway.Telegram.BotToken == "" {
-			writeError(w, http.StatusBadRequest, errors.New("set the Telegram bot token first"))
-			return
-		}
-		cfg.Gateway.Telegram.Enabled = body.Enabled
-	case "discord":
-		if body.Enabled && cfg.Gateway.Discord.BotToken == "" {
-			writeError(w, http.StatusBadRequest, errors.New("set the Discord bot token first"))
-			return
-		}
-		cfg.Gateway.Discord.Enabled = body.Enabled
-	default:
+	spec, ok := channelSpecByID(id)
+	if !ok {
 		writeError(w, http.StatusBadRequest, errors.New("unknown channel"))
 		return
 	}
+	if body.Enabled && !channelConfigured(cfg, spec) {
+		writeError(w, http.StatusBadRequest, errors.New("configure "+spec.Label+" before enabling it"))
+		return
+	}
+	setChannelEnabled(cfg, id, body.Enabled)
 	// Enabling any channel implies the gateway itself runs.
 	if body.Enabled {
 		cfg.Gateway.Enabled = true

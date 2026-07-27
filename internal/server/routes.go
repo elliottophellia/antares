@@ -127,6 +127,7 @@ func (s *Server) routes() {
 	m.HandleFunc("GET /api/channels", s.handleListChannels)
 	m.HandleFunc("POST /api/channels/{id}/toggle", s.handleToggleChannel)
 	m.HandleFunc("POST /api/channels/{id}/token", s.handleSetChannelToken)
+	m.HandleFunc("POST /api/channels/{id}/config", s.handleSetChannelConfig)
 	m.HandleFunc("POST /api/pairing/approve", s.handleApprovePairing)
 	m.HandleFunc("POST /api/pairing/revoke", s.handleRevokePairing)
 
