@@ -85,8 +85,26 @@ func (reportFindingTool) Execute(_ context.Context, in Input) Result {
 		return Text(fmt.Sprintf("Recorded %s: %s (%s) — flagged as a duplicate of %s. It will be listed but not written up twice; triage it if that is wrong.",
 			f.ID, f.Title, f.Severity, f.DuplicateOf))
 	}
+	// Validation gate: a serious finding with no evidence is recorded anyway —
+	// nothing is dropped — but the thinness is called out so it gets the proof
+	// it needs before it reaches a report.
+	if gap := evidenceGap(f); gap != "" {
+		return Text(fmt.Sprintf("Recorded %s: %s (%s). Note: %s Add it before reporting, or triage the finding.",
+			f.ID, f.Title, f.Severity, gap))
+	}
 	return Text(fmt.Sprintf("Recorded %s: %s (%s). Compile the report when the engagement is done.",
 		f.ID, f.Title, f.Severity))
+}
+
+// evidenceGap flags a serious finding that lacks the proof a report needs.
+func evidenceGap(f findings.Finding) string {
+	if f.Severity != findings.Critical && f.Severity != findings.High {
+		return ""
+	}
+	if strings.TrimSpace(f.Reproduce) == "" && strings.TrimSpace(f.PoC) == "" {
+		return "a " + string(f.Severity) + "-severity finding has no reproduction steps or proof of concept."
+	}
+	return ""
 }
 
 // triageFindingTool sets a finding's triage status.
