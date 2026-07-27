@@ -83,6 +83,10 @@ func run() error {
 		return cmdModel(args)
 	case "setup":
 		return cmdSetup(args)
+	case "cron":
+		return cmdCron(args)
+	case "rag":
+		return cmdRag(args)
 	case "backup":
 		return cmdBackup(args)
 	case "doctor":
@@ -113,6 +117,8 @@ Usage:
   antares model [id]       Show or change the active model
   antares config get <path>
   antares config set <path> <value>
+  antares cron list|add|run|rm   Manage scheduled jobs
+  antares rag index <path>       Index files into semantic search
   antares backup           Archive everything; also list, restore, prune
   antares doctor           Check configuration and connectivity
   antares version
