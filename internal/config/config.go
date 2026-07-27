@@ -120,6 +120,10 @@ type Agent struct {
 	// (web pages, HTTP bodies, MCP results) so the model treats it as data and
 	// not as instructions — a defence against prompt injection. On by default.
 	WrapUntrustedOutput bool `yaml:"wrap_untrusted_output" json:"wrap_untrusted_output"`
+	// SmartTitles names a new conversation with a short model-written title
+	// instead of a truncation of the first message. On by default; it costs one
+	// cheap auxiliary-model call per session.
+	SmartTitles bool `yaml:"smart_titles" json:"smart_titles"`
 }
 
 // Tools controls which toolsets are exposed to the model.

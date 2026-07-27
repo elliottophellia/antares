@@ -142,7 +142,13 @@ func (a *Agent) maybeTitle(ctx context.Context, sess *store.Session, userMsg, re
 	if sess.Title != "" && sess.Title != "Percakapan baru" && !strings.HasPrefix(sess.Title, userMsg[:minInt(len(userMsg), 20)]) {
 		return
 	}
-	title := summariseTitle(userMsg, reply)
+	title := ""
+	if a.cfg.Agent.SmartTitles {
+		title = a.llmTitle(ctx, userMsg, reply)
+	}
+	if title == "" {
+		title = summariseTitle(userMsg, reply)
+	}
 	if title == "" || title == sess.Title {
 		return
 	}
@@ -150,6 +156,45 @@ func (a *Agent) maybeTitle(ctx context.Context, sess *store.Session, userMsg, re
 	if err := a.db.UpdateSession(ctx, sess); err != nil {
 		slog.Debug("update session title failed", "error", err)
 	}
+}
+
+// llmTitle asks the auxiliary model for a short, human title. It returns "" on
+// any error so the caller falls back to the heuristic — a title is never worth
+// failing a turn over.
+func (a *Agent) llmTitle(ctx context.Context, userMsg, reply string) string {
+	client, model, _, err := a.newAuxClient()
+	if err != nil {
+		return ""
+	}
+	msg := strings.TrimSpace(userMsg)
+	if r := strings.TrimSpace(reply); r != "" {
+		msg += "\n\nAssistant replied: " + trimForModel(r, 500)
+	}
+	if msg == "" {
+		return ""
+	}
+	tctx, cancel := context.WithTimeout(ctx, 12*time.Second)
+	defer cancel()
+	resp, err := client.Chat(tctx, llm.Request{
+		Model:     model,
+		System:    "Write a 3–6 word title for this conversation. Plain text, no quotes, no trailing punctuation, in the user's language.",
+		Messages:  []llm.Message{{Role: llm.RoleUser, Content: msg}},
+		MaxTokens: 24,
+	})
+	if err != nil || resp == nil {
+		return ""
+	}
+	title := strings.TrimSpace(resp.Content)
+	title = strings.Trim(title, "\"'`")
+	title = strings.ReplaceAll(title, "\n", " ")
+	if r := []rune(title); len(r) > 70 {
+		title = strings.TrimSpace(string(r[:70]))
+	}
+	// Guard against a model that ignored the instruction and wrote a paragraph.
+	if strings.Count(title, " ") > 10 || title == "" {
+		return ""
+	}
+	return title
 }
 
 // summariseTitle derives a short label without spending a model call.
