@@ -129,11 +129,6 @@ func (s *Server) applyReload() error {
 
 func (s *Server) handleModelOptions(w http.ResponseWriter, r *http.Request) {
 	cfg := s.config()
-	names := make([]string, 0, len(cfg.Providers))
-	for name := range cfg.Providers {
-		names = append(names, name)
-	}
-	sort.Strings(names)
 
 	type providerInfo struct {
 		ID      string `json:"id"`
@@ -146,14 +141,45 @@ func (s *Server) handleModelOptions(w http.ResponseWriter, r *http.Request) {
 		Local   bool   `json:"local"`
 		BaseURL string `json:"base_url"`
 		Active  bool   `json:"active"`
+		// Setup metadata, so the connect form can render the right fields.
+		Hint            string `json:"hint,omitempty"`
+		KeyHint         string `json:"key_hint,omitempty"`
+		KeyURL          string `json:"key_url,omitempty"`
+		KeyLabel        string `json:"key_label,omitempty"`
+		Note            string `json:"note,omitempty"`
+		NeedsRegion     bool   `json:"needs_region,omitempty"`
+		NeedsAPIVersion bool   `json:"needs_api_version,omitempty"`
+		NeedsBaseURL    bool   `json:"needs_base_url,omitempty"`
 	}
-	providers := make([]providerInfo, 0, len(names))
+
+	// Every provider from the catalogue (configured or not), so the new kinds
+	// can be set up from here — then any custom providers only in the config.
+	seen := map[string]bool{}
+	providers := make([]providerInfo, 0)
+	for _, sp := range setupProviderCatalogue(cfg) {
+		p := cfg.Providers[sp.ID]
+		providers = append(providers, providerInfo{
+			ID: sp.ID, Label: sp.Label, Kind: sp.Kind,
+			Enabled: p.Enabled, HasKey: p.APIKey != "", Local: sp.Local,
+			BaseURL: firstNonEmpty(p.BaseURL, sp.BaseURL), Active: sp.ID == cfg.Model.Provider,
+			Hint: sp.Hint, KeyHint: sp.KeyHint, KeyURL: sp.KeyURL, KeyLabel: sp.KeyLabel,
+			Note: sp.Note, NeedsRegion: sp.NeedsRegion, NeedsAPIVersion: sp.NeedsAPIVersion,
+			NeedsBaseURL: sp.NeedsBaseURL,
+		})
+		seen[sp.ID] = true
+	}
+	names := make([]string, 0, len(cfg.Providers))
+	for name := range cfg.Providers {
+		if !seen[name] {
+			names = append(names, name)
+		}
+	}
+	sort.Strings(names)
 	for _, name := range names {
 		p := cfg.Providers[name]
-		local := isLocalEndpoint(p.BaseURL)
 		providers = append(providers, providerInfo{
 			ID: name, Label: firstNonEmpty(p.Label, name), Kind: p.Kind, Enabled: p.Enabled,
-			HasKey: p.APIKey != "", Local: local, BaseURL: p.BaseURL,
+			HasKey: p.APIKey != "", Local: isLocalEndpoint(p.BaseURL), BaseURL: p.BaseURL,
 			Active: name == cfg.Model.Provider,
 		})
 	}

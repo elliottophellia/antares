@@ -27,6 +27,15 @@ type setupProvider struct {
 	Local   bool     `json:"local"`
 	Models  []string `json:"models,omitempty"`
 	HasKey  bool     `json:"has_key"`
+	// KeyLabel overrides the "API key" label (e.g. "Service account JSON").
+	KeyLabel string `json:"key_label,omitempty"`
+	// Note is an extra line shown under the form (e.g. how creds are supplied).
+	Note string `json:"note,omitempty"`
+	// NeedsRegion / NeedsAPIVersion request the extra inputs those kinds use.
+	NeedsRegion     bool `json:"needs_region,omitempty"`
+	NeedsAPIVersion bool `json:"needs_api_version,omitempty"`
+	// NeedsBaseURL forces the endpoint field (e.g. the Azure resource URL).
+	NeedsBaseURL bool `json:"needs_base_url,omitempty"`
 }
 
 func setupProviderCatalogue(cfg *config.Config) []setupProvider {
@@ -71,6 +80,38 @@ func setupProviderCatalogue(cfg *config.Config) []setupProvider {
 			ID: "lmstudio", Label: "LM Studio", Kind: "openai-compatible",
 			Hint:    "Runs on this machine. No key needed.",
 			BaseURL: "http://127.0.0.1:1234/v1", Local: true,
+		},
+		{
+			ID: "azure", Label: "Azure OpenAI", Kind: "azure",
+			Hint:    "GPT on your Azure resource.",
+			KeyHint: "your Azure API key", KeyURL: "https://portal.azure.com",
+			NeedsBaseURL: true, NeedsAPIVersion: true,
+			Note: "Base URL is the resource endpoint (https://<resource>.openai.azure.com). The model is your deployment name.",
+		},
+		{
+			ID: "bedrock", Label: "AWS Bedrock", Kind: "bedrock",
+			Hint:        "Claude on AWS Bedrock.",
+			NeedsRegion: true,
+			Note:        "Credentials come from AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY in the environment. Model is a Bedrock id, e.g. anthropic.claude-3-5-sonnet-20241022-v2:0.",
+		},
+		{
+			ID: "vertex", Label: "Google Vertex AI", Kind: "vertex",
+			Hint:     "Gemini on GCP.",
+			KeyLabel: "Service account JSON (or path)", NeedsRegion: true,
+			KeyURL: "https://console.cloud.google.com/vertex-ai",
+			Note:   "Paste the service-account key JSON (or a path to it). Project comes from the key or GOOGLE_CLOUD_PROJECT.",
+		},
+		{
+			ID: "copilot", Label: "GitHub Copilot", Kind: "copilot",
+			Hint:     "Copilot models via GitHub.",
+			KeyLabel: "GitHub token",
+			Note:     "Run `antares auth copilot` in a terminal to sign in, then paste the token it prints.",
+		},
+		{
+			ID: "codex", Label: "OpenAI Responses (Codex)", Kind: "codex",
+			Hint:    "The Responses API and reasoning models.",
+			KeyHint: "sk-…", KeyURL: "https://platform.openai.com/api-keys",
+			BaseURL: "https://api.openai.com/v1",
 		},
 		{
 			ID: "custom", Label: "Something else", Kind: "openai-compatible",
@@ -333,8 +374,10 @@ func (s *Server) handleSetupComplete(w http.ResponseWriter, r *http.Request) {
 // values are not addressable through reflection.
 func (s *Server) handleSetProviderKey(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		APIKey  string `json:"api_key"`
-		BaseURL string `json:"base_url"`
+		APIKey     string `json:"api_key"`
+		BaseURL    string `json:"base_url"`
+		Region     string `json:"region"`
+		APIVersion string `json:"api_version"`
 	}
 	if err := decodeBody(r, &body); err != nil {
 		writeError(w, http.StatusBadRequest, err)
@@ -366,8 +409,11 @@ func (s *Server) handleSetProviderKey(w http.ResponseWriter, r *http.Request) {
 		entry.Kind = chosen.Kind
 	}
 	baseURL := firstNonEmpty(body.BaseURL, entry.BaseURL, chosen.BaseURL)
+	region := firstNonEmpty(body.Region, entry.Region)
+	apiVersion := firstNonEmpty(body.APIVersion, entry.APIVersion)
 	key := strings.TrimSpace(body.APIKey)
-	if key == "" && !isLocalEndpoint(baseURL) {
+	// Bedrock takes its credentials from the AWS environment, so no key here.
+	if key == "" && entry.Kind != "bedrock" && !isLocalEndpoint(baseURL) {
 		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": "An API key is required."})
 		return
 	}
@@ -375,6 +421,7 @@ func (s *Server) handleSetProviderKey(w http.ResponseWriter, r *http.Request) {
 	// Reject a bad key here rather than saving it and failing on the next turn.
 	client, err := llm.New(llm.Options{
 		Kind: entry.Kind, BaseURL: baseURL, APIKey: key,
+		Region: region, APIVersion: apiVersion,
 		ProviderID: id, Timeout: 30 * time.Second,
 	})
 	if err != nil {
@@ -392,6 +439,8 @@ func (s *Server) handleSetProviderKey(w http.ResponseWriter, r *http.Request) {
 
 	entry.APIKey = key
 	entry.BaseURL = baseURL
+	entry.Region = region
+	entry.APIVersion = apiVersion
 	entry.Enabled = true
 	if entry.Label == "" {
 		entry.Label = chosen.Label

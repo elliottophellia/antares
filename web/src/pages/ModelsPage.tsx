@@ -67,6 +67,14 @@ interface ProviderInfo {
   local: boolean
   base_url: string
   active: boolean
+  hint?: string
+  key_hint?: string
+  key_url?: string
+  key_label?: string
+  note?: string
+  needs_region?: boolean
+  needs_api_version?: boolean
+  needs_base_url?: boolean
 }
 
 interface ModelsResponse {
@@ -381,6 +389,9 @@ function ProviderDialog({
   const [query, setQuery] = useState('')
   const [target, setTarget] = useState<ProviderInfo | null>(null)
   const [key, setKey] = useState('')
+  const [baseURL, setBaseURL] = useState('')
+  const [region, setRegion] = useState('')
+  const [apiVersion, setApiVersion] = useState('')
   const [reveal, setReveal] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string>()
@@ -397,6 +408,9 @@ function ProviderDialog({
   // Stepping back and into a different provider must not carry a key across.
   useEffect(() => {
     setKey('')
+    setBaseURL(target?.base_url ?? '')
+    setRegion('')
+    setApiVersion('')
     setError(undefined)
     setReveal(false)
   }, [target])
@@ -417,14 +431,27 @@ function ProviderDialog({
     onOpenChange(false)
   }
 
+  // Bedrock authenticates from the AWS environment, so it needs no key here.
+  const keyRequired = !!target && target.kind !== 'bedrock' && !target.local
+  const canConnect =
+    !!target &&
+    (!keyRequired || key.trim() !== '') &&
+    (!target.needs_base_url || baseURL.trim() !== '') &&
+    (!target.needs_region || region.trim() !== '')
+
   const connect = async () => {
-    if (!target || !key.trim()) return
+    if (!target || !canConnect) return
     setBusy(true)
     setError(undefined)
     try {
       const r = await post<{ ok: boolean; error?: string }>(
         `/providers/${encodeURIComponent(target.id)}/key`,
-        { api_key: key.trim() },
+        {
+          api_key: key.trim(),
+          base_url: baseURL.trim(),
+          region: region.trim(),
+          api_version: apiVersion.trim(),
+        },
       )
       if (!r.ok) {
         setError(r.error ?? t('models.connectFailed'))
@@ -440,7 +467,7 @@ function ProviderDialog({
     }
   }
 
-  const keyURL = target ? KEY_URLS[target.id] : undefined
+  const keyURL = target ? (target.key_url ?? KEY_URLS[target.id]) : undefined
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -470,30 +497,75 @@ function ProviderDialog({
         <DialogBody>
           {target ? (
             <>
-              <div className="space-y-1.5">
-                <Label htmlFor="provider-key">{t('setup.apiKey')}</Label>
-                <div className="flex gap-2">
+              {target.needs_base_url ? (
+                <div className="space-y-1.5">
+                  <Label htmlFor="provider-baseurl">{t('models.baseUrl')}</Label>
                   <Input
-                    id="provider-key"
-                    type={reveal ? 'text' : 'password'}
-                    autoFocus
-                    value={key}
-                    onChange={(e) => setKey(e.target.value)}
-                    onKeyDown={(e) => e.key === 'Enter' && connect()}
-                    placeholder="sk-…"
+                    id="provider-baseurl"
+                    value={baseURL}
+                    onChange={(e) => setBaseURL(e.target.value)}
+                    placeholder="https://<resource>.openai.azure.com"
                     autoComplete="off"
                   />
-                  <Button
-                    variant="outline"
-                    size="icon"
-                    onClick={() => setReveal((v) => !v)}
-                    aria-label={t('config.reveal')}
-                    className="shrink-0"
-                  >
-                    {reveal ? <EyeSlash className="size-4" /> : <Eye className="size-4" />}
-                  </Button>
                 </div>
-              </div>
+              ) : null}
+
+              {keyRequired ? (
+                <div className="space-y-1.5">
+                  <Label htmlFor="provider-key">{target.key_label ?? t('setup.apiKey')}</Label>
+                  <div className="flex gap-2">
+                    <Input
+                      id="provider-key"
+                      type={reveal ? 'text' : 'password'}
+                      autoFocus
+                      value={key}
+                      onChange={(e) => setKey(e.target.value)}
+                      onKeyDown={(e) => e.key === 'Enter' && canConnect && connect()}
+                      placeholder={target.key_hint ?? 'sk-…'}
+                      autoComplete="off"
+                    />
+                    <Button
+                      variant="outline"
+                      size="icon"
+                      onClick={() => setReveal((v) => !v)}
+                      aria-label={t('config.reveal')}
+                      className="shrink-0"
+                    >
+                      {reveal ? <EyeSlash className="size-4" /> : <Eye className="size-4" />}
+                    </Button>
+                  </div>
+                </div>
+              ) : null}
+
+              {target.needs_region ? (
+                <div className="space-y-1.5">
+                  <Label htmlFor="provider-region">{t('models.region')}</Label>
+                  <Input
+                    id="provider-region"
+                    value={region}
+                    onChange={(e) => setRegion(e.target.value)}
+                    placeholder="us-east-1"
+                    autoComplete="off"
+                  />
+                </div>
+              ) : null}
+
+              {target.needs_api_version ? (
+                <div className="space-y-1.5">
+                  <Label htmlFor="provider-apiversion">{t('models.apiVersion')}</Label>
+                  <Input
+                    id="provider-apiversion"
+                    value={apiVersion}
+                    onChange={(e) => setApiVersion(e.target.value)}
+                    placeholder="2024-10-21"
+                    autoComplete="off"
+                  />
+                </div>
+              ) : null}
+
+              {target.note ? (
+                <p className="text-[11px] leading-relaxed text-muted-foreground">{target.note}</p>
+              ) : null}
 
               {keyURL ? (
                 <a
@@ -581,7 +653,7 @@ function ProviderDialog({
             </Button>
           </DialogClose>
           {target ? (
-            <Button size="sm" onClick={connect} loading={busy} disabled={!key.trim()}>
+            <Button size="sm" onClick={connect} loading={busy} disabled={!canConnect}>
               {t('models.connect')}
             </Button>
           ) : null}
