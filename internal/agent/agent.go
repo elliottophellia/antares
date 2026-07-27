@@ -253,7 +253,14 @@ func (a *Agent) Run(ctx context.Context, req Request, emit Emit) (*Result, error
 		lastReply string
 		turn      int
 		toolCalls int
+		verified  int
+		judged    int
 	)
+	repeats := newRepeatTracker(cfg.Agent.RepeatLimit)
+	goal, hasGoal := a.GetGoal(ctx, sess.ID)
+	if hasGoal && (goal.Paused || goal.Done) {
+		hasGoal = false
+	}
 
 	for turn = 1; turn <= maxTurns; turn++ {
 		if err := runCtx.Err(); err != nil {
@@ -318,6 +325,12 @@ func (a *Agent) Run(ctx context.Context, req Request, emit Emit) (*Result, error
 		}
 
 		if len(resp.ToolCalls) == 0 {
+			// The model thinks it is finished. Before believing it, check the
+			// work, then check whether a standing goal is actually met.
+			if follow := a.followUp(runCtx, req, sess, history, lastReply, goal, hasGoal, &verified, &judged, emit); follow != "" {
+				history = append(history, llm.Message{Role: llm.RoleUser, Content: follow})
+				continue
+			}
 			break
 		}
 
@@ -328,6 +341,22 @@ func (a *Agent) Run(ctx context.Context, req Request, emit Emit) (*Result, error
 				Content: "Tool-call budget reached. Summarise what you have found and stop calling tools.",
 			})
 			continue
+		}
+
+		if stuck := repeats.record(resp.ToolCalls); len(stuck) > 0 {
+			if repeats.exceeded() {
+				_ = emit(Event{Type: EventNotice, Message: "stopped: the same tool call kept repeating"})
+				lastReply = "I was repeating the same step without making progress, so I stopped. " +
+					"Tell me what to try differently."
+				break
+			}
+			_ = emit(Event{Type: EventNotice, Message: "repeating " + strings.Join(stuck, ", ")})
+			history = append(history, llm.Message{
+				Role: llm.RoleUser,
+				Content: "You have called " + strings.Join(stuck, " and ") +
+					" with the same arguments several times and it is not getting you anywhere. " +
+					"Do not call it again. Either try a different approach, or say what is blocking you.",
+			})
 		}
 
 		results := a.executeTools(runCtx, resp.ToolCalls, byName, req, sess, emit)
@@ -342,6 +371,16 @@ func (a *Agent) Run(ctx context.Context, req Request, emit Emit) (*Result, error
 					slog.Warn("persist tool result failed", "error", err)
 				}
 			}
+		}
+
+		// Notes typed while this run was already going land here, which is the
+		// first point the model can act on them without discarding work.
+		for _, note := range drainSteering(sess.ID) {
+			_ = emit(Event{Type: EventNotice, Message: "steering: " + note})
+			history = append(history, llm.Message{
+				Role:    llm.RoleUser,
+				Content: "A new instruction arrived while you were working: " + note,
+			})
 		}
 	}
 

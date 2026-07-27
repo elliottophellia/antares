@@ -57,6 +57,7 @@ func Default() *Config {
 			MaxTurns: 200, MaxToolCalls: 32, ReasoningEffort: "medium",
 			Personality: "default", Workspace: "~/antares-workspace",
 			Timezone: "Local", Language: "auto", IdleTimeoutSecs: 900,
+			RepeatLimit: 3, VerifyReplies: false, VerifyMax: 2, GoalMaxIterations: 10,
 		},
 		Tools: Tools{
 			Toolset: "default", ApprovalMode: "auto", MaxOutputChars: 60000,

@@ -111,7 +111,7 @@ func InstallSkill(ctx context.Context, id, dir string) (Entry, string, error) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return Entry{}, "", err
 	}
-	path := filepath.Join(dir, safeFileName(entry.Name)+".md")
+	path := filepath.Join(dir, SafeFileName(entry.Name)+".md")
 	body := ensureFrontMatter(entry)
 	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
 		return Entry{}, "", err
@@ -168,7 +168,9 @@ func checkSkillSafety(body string) error {
 	return nil
 }
 
-func safeFileName(name string) string {
+// SafeFileName turns a skill name into a filename that cannot escape its
+// directory or surprise a filesystem.
+func SafeFileName(name string) string {
 	out := strings.Map(func(r rune) rune {
 		switch {
 		case r >= 'a' && r <= 'z', r >= '0' && r <= '9', r == '-', r == '_':

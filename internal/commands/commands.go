@@ -128,6 +128,11 @@ func init() {
 	register(Spec{Name: "quit", Summary: "Leave the TUI", Surfaces: []Surface{SurfaceTUI}, Client: true}, clientAction("quit"))
 	register(Spec{Name: "setup", Summary: "Open the setup wizard", Surfaces: []Surface{SurfaceTUI, SurfaceWeb}, Client: true}, clientAction("setup")) //nolint:misspell
 	register(Spec{Name: "reasoning", Args: "[on|off]", Summary: "Toggle reasoning display", Surfaces: anywhere}, cmdReasoning)
+
+	// The harness: work that outlives a single turn.
+	register(Spec{Name: "goal", Args: "[text|status|pause|resume|clear]", Summary: "Set a goal to keep working on across turns", Surfaces: anywhere}, cmdGoal)
+	register(Spec{Name: "steer", Args: "<instruction>", Summary: "Redirect the run that is already going", Surfaces: anywhere}, cmdSteer)
+	register(Spec{Name: "learn", Args: "[focus]", Summary: "Turn this session into a reusable skill", Surfaces: anywhere}, cmdLearn)
 }
 
 // Catalogue returns the commands offered on a surface, sorted by name. Passing

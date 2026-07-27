@@ -33,6 +33,14 @@ func (a *Agent) buildSystemPrompt(ctx context.Context, req Request, sess *store.
 - Match the user's language. If they write Indonesian, answer in Indonesian.
 `)
 
+	// A standing goal is the whole frame for the turn, so it goes near the top.
+	if g, ok := a.GetGoal(ctx, sess.ID); ok && !g.Done && !g.Paused {
+		b.WriteString("\n## Standing goal\n\n")
+		b.WriteString("You are working towards this until it is met. Every turn should move it forward:\n\n")
+		b.WriteString(g.Text)
+		b.WriteString("\n")
+	}
+
 	b.WriteString("\n## Environment\n\n")
 	fmt.Fprintf(&b, "- Date: %s\n", time.Now().Format("Monday, 2 January 2006, 15:04 MST"))
 	fmt.Fprintf(&b, "- Platform: %s/%s\n", runtime.GOOS, runtime.GOARCH)

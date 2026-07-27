@@ -1,0 +1,448 @@
+package agent
+
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
+	"log/slog"
+	"strings"
+	"sync"
+
+	"github.com/enowdev/antares/internal/llm"
+	"github.com/enowdev/antares/internal/store"
+)
+
+// The harness is everything around the model call that makes a long run
+// survivable: catching a loop that has stopped making progress, letting a
+// person redirect a run already in flight, checking the work before claiming
+// it is done, and carrying a goal across turns.
+
+// ---- steering ----------------------------------------------------------------
+
+// steering holds notes typed while a turn was already running.
+type steering struct {
+	mu    sync.Mutex
+	byKey map[string][]string
+}
+
+var steer = steering{byKey: map[string][]string{}}
+
+// Steer queues a note for a run in progress. It is delivered after the current
+// batch of tools finishes, which is the first moment the model can act on it
+// without discarding work already underway.
+//
+// It reports false when nothing is running for that session, so a caller can
+// fall back to sending an ordinary message.
+func (a *Agent) Steer(sessionID, note string) bool {
+	note = strings.TrimSpace(note)
+	if note == "" || sessionID == "" {
+		return false
+	}
+	a.mu.Lock()
+	_, running := a.active[sessionID]
+	a.mu.Unlock()
+	if !running {
+		return false
+	}
+	steer.mu.Lock()
+	steer.byKey[sessionID] = append(steer.byKey[sessionID], note)
+	steer.mu.Unlock()
+	return true
+}
+
+// drainSteering takes whatever has been queued for a session.
+func drainSteering(sessionID string) []string {
+	steer.mu.Lock()
+	defer steer.mu.Unlock()
+	notes := steer.byKey[sessionID]
+	delete(steer.byKey, sessionID)
+	return notes
+}
+
+// ---- repetition guard --------------------------------------------------------
+
+// repeatTracker counts identical tool calls within one run. A model that has
+// lost the thread will call the same tool with the same arguments over and
+// over; left alone it burns the entire turn budget on it.
+type repeatTracker struct {
+	seen  map[string]int
+	limit int
+}
+
+func newRepeatTracker(limit int) *repeatTracker {
+	if limit <= 0 {
+		limit = 3
+	}
+	return &repeatTracker{seen: map[string]int{}, limit: limit}
+}
+
+// record fingerprints a batch of calls and returns the ones that have now been
+// repeated too often.
+func (r *repeatTracker) record(calls []llm.ToolCall) []string {
+	var tripped []string
+	for _, c := range calls {
+		sum := sha256.Sum256([]byte(c.Name + "\x00" + normaliseArgs(c.Arguments)))
+		key := hex.EncodeToString(sum[:8])
+		r.seen[key]++
+		if r.seen[key] == r.limit {
+			tripped = append(tripped, c.Name)
+		}
+	}
+	return tripped
+}
+
+// exceeded reports a call repeated far past the limit, where nudging has
+// already failed and the run should stop.
+func (r *repeatTracker) exceeded() bool {
+	for _, n := range r.seen {
+		if n >= r.limit*2 {
+			return true
+		}
+	}
+	return false
+}
+
+// normaliseArgs makes two calls compare equal when only key order or spacing
+// differs, so a re-serialised identical call is still recognised as a repeat.
+func normaliseArgs(raw string) string {
+	var v any
+	if json.Unmarshal([]byte(raw), &v) != nil {
+		return strings.TrimSpace(raw)
+	}
+	b, err := json.Marshal(v)
+	if err != nil {
+		return strings.TrimSpace(raw)
+	}
+	return string(b)
+}
+
+// ---- verification ------------------------------------------------------------
+
+// verdict is what the critic says about a finished reply.
+type verdict struct {
+	Complete bool   `json:"complete"`
+	Missing  string `json:"missing"`
+}
+
+const verifyPrompt = `You are checking another assistant's work before it is shown to the user.
+
+Judge only whether the request was actually carried out. Be strict about work
+that was described but not done, and about parts of a multi-part request that
+were quietly dropped. Do not comment on style, and do not ask for extra work
+beyond what was requested.
+
+Reply with JSON and nothing else:
+{"complete": true}
+or
+{"complete": false, "missing": "<one sentence naming what is still undone>"}`
+
+// verify asks a cheap model whether the request was actually satisfied. It
+// returns nil when verification is off, unavailable, or the reply passes.
+func (a *Agent) verify(ctx context.Context, request, reply string, transcript []llm.Message) *verdict {
+	if !a.cfg.Agent.VerifyReplies || strings.TrimSpace(reply) == "" {
+		return nil
+	}
+	client, model, _, err := a.newAuxClient()
+	if err != nil {
+		slog.Debug("verification unavailable", "error", err)
+		return nil
+	}
+
+	// The critic sees the request, the answer, and what tools actually ran —
+	// claims of work done are the thing most worth checking.
+	var actions strings.Builder
+	for _, m := range transcript {
+		for _, c := range m.ToolCalls {
+			fmt.Fprintf(&actions, "- %s %s\n", c.Name, truncate(normaliseArgs(c.Arguments), 200))
+		}
+	}
+	if actions.Len() == 0 {
+		actions.WriteString("(no tools were used)\n")
+	}
+
+	user := fmt.Sprintf("REQUEST\n%s\n\nTOOLS RUN\n%s\nANSWER\n%s",
+		truncate(request, 4000), truncate(actions.String(), 4000), truncate(reply, 6000))
+
+	resp, err := client.Chat(ctx, llm.Request{
+		Model:       model,
+		System:      verifyPrompt,
+		Messages:    []llm.Message{{Role: llm.RoleUser, Content: user}},
+		Temperature: 0,
+		MaxTokens:   200,
+	})
+	if err != nil {
+		slog.Debug("verification failed", "error", err)
+		return nil
+	}
+
+	var v verdict
+	if err := json.Unmarshal([]byte(extractJSON(resp.Content)), &v); err != nil {
+		// An unparseable verdict is not evidence of a problem.
+		return nil
+	}
+	if v.Complete || strings.TrimSpace(v.Missing) == "" {
+		return nil
+	}
+	return &v
+}
+
+// extractJSON pulls the first JSON object out of a reply that may be wrapped
+// in prose or a code fence.
+func extractJSON(s string) string {
+	s = strings.TrimSpace(s)
+	if i := strings.Index(s, "{"); i >= 0 {
+		if j := strings.LastIndex(s, "}"); j > i {
+			return s[i : j+1]
+		}
+	}
+	return s
+}
+
+// ---- standing goals ----------------------------------------------------------
+
+// Goal is an objective that outlives a single turn.
+type Goal struct {
+	Text       string `json:"text"`
+	Iterations int    `json:"iterations"`
+	Max        int    `json:"max"`
+	Paused     bool   `json:"paused"`
+	Done       bool   `json:"done"`
+	Note       string `json:"note,omitempty"`
+}
+
+func goalKey(sessionID string) string { return "goal:" + sessionID }
+
+// GetGoal reads the standing goal for a session, if there is one.
+func (a *Agent) GetGoal(ctx context.Context, sessionID string) (*Goal, bool) {
+	if a.db == nil || sessionID == "" {
+		return nil, false
+	}
+	raw, err := a.db.GetKV(ctx, goalKey(sessionID))
+	if err != nil || raw == "" {
+		return nil, false
+	}
+	var g Goal
+	if json.Unmarshal([]byte(raw), &g) != nil {
+		return nil, false
+	}
+	return &g, true
+}
+
+// SetGoal stores or replaces the standing goal.
+func (a *Agent) SetGoal(ctx context.Context, sessionID string, g *Goal) error {
+	if a.db == nil || sessionID == "" {
+		return fmt.Errorf("no session to attach a goal to")
+	}
+	if g == nil {
+		return a.db.DeleteKV(ctx, goalKey(sessionID))
+	}
+	raw, err := json.Marshal(g)
+	if err != nil {
+		return err
+	}
+	return a.db.SetKV(ctx, goalKey(sessionID), string(raw))
+}
+
+const judgePrompt = `You are judging whether a standing goal has been met.
+
+You will see the goal and what the assistant just did and said. Decide whether
+the goal is now complete, or whether there is a concrete next step left.
+
+Be honest: a plan is not completion, and an intention to do something is not
+doing it. But do not invent extra work — if the goal is met, say so.
+
+Reply with JSON and nothing else:
+{"done": true}
+or
+{"done": false, "next": "<one specific instruction for the next step>"}`
+
+type judgement struct {
+	Done bool   `json:"done"`
+	Next string `json:"next"`
+}
+
+// judgeGoal decides whether a standing goal is finished, and what to do next
+// when it is not.
+func (a *Agent) judgeGoal(ctx context.Context, g *Goal, reply string, transcript []llm.Message) judgement {
+	client, model, _, err := a.newAuxClient()
+	if err != nil {
+		// Without a judge the loop must not run forever.
+		return judgement{Done: true}
+	}
+
+	var actions strings.Builder
+	for _, m := range transcript {
+		for _, c := range m.ToolCalls {
+			fmt.Fprintf(&actions, "- %s %s\n", c.Name, truncate(normaliseArgs(c.Arguments), 160))
+		}
+	}
+	user := fmt.Sprintf("GOAL\n%s\n\nWHAT WAS DONE\n%s\nWHAT WAS SAID\n%s",
+		truncate(g.Text, 2000), truncate(actions.String(), 4000), truncate(reply, 4000))
+
+	resp, err := client.Chat(ctx, llm.Request{
+		Model:       model,
+		System:      judgePrompt,
+		Messages:    []llm.Message{{Role: llm.RoleUser, Content: user}},
+		Temperature: 0,
+		MaxTokens:   300,
+	})
+	if err != nil {
+		return judgement{Done: true}
+	}
+	var j judgement
+	if json.Unmarshal([]byte(extractJSON(resp.Content)), &j) != nil {
+		return judgement{Done: true}
+	}
+	if !j.Done && strings.TrimSpace(j.Next) == "" {
+		// "Not done" with nothing to do next is the same as done.
+		return judgement{Done: true}
+	}
+	return j
+}
+
+// ---- learning ----------------------------------------------------------------
+
+const distilPrompt = `Turn this conversation into a reusable skill: a written procedure the
+assistant can follow next time a similar task comes up.
+
+Write Markdown with YAML front matter:
+---
+name: <short-kebab-case-name>
+description: <one sentence saying what it does and when to use it>
+tags: [<one or two words>]
+---
+
+Then the procedure itself. Write what to do, in order, with the specific
+commands, paths, and gotchas that actually came up. Skip anything that was
+particular to this one conversation — a skill is for next time, not a diary of
+this time.
+
+If nothing general was learned, reply with exactly: NOTHING`
+
+// Distil writes a skill from a session's transcript. It returns the Markdown,
+// or an empty string when there was nothing worth keeping.
+func (a *Agent) Distil(ctx context.Context, sessionID, hint string) (string, error) {
+	if a.db == nil {
+		return "", fmt.Errorf("no database to read the session from")
+	}
+	messages, err := a.db.ListMessages(ctx, sessionID, 200, 0)
+	if err != nil {
+		return "", err
+	}
+	if len(messages) == 0 {
+		return "", fmt.Errorf("this session has nothing in it yet")
+	}
+
+	var b strings.Builder
+	for _, m := range messages {
+		switch m.Role {
+		case store.RoleUser:
+			fmt.Fprintf(&b, "USER: %s\n", truncate(m.Content, 1500))
+		case store.RoleAssistant:
+			if m.Content != "" {
+				fmt.Fprintf(&b, "ASSISTANT: %s\n", truncate(m.Content, 1500))
+			}
+		case store.RoleTool:
+			fmt.Fprintf(&b, "TOOL %s: %s\n", m.ToolName, truncate(m.Content, 400))
+		}
+	}
+	if hint != "" {
+		fmt.Fprintf(&b, "\nThe user asked that the skill focus on: %s\n", hint)
+	}
+
+	client, model, _, err := a.newAuxClient()
+	if err != nil {
+		return "", err
+	}
+	resp, err := client.Chat(ctx, llm.Request{
+		Model:       model,
+		System:      distilPrompt,
+		Messages:    []llm.Message{{Role: llm.RoleUser, Content: truncate(b.String(), 40000)}},
+		Temperature: 0.2,
+		MaxTokens:   2000,
+	})
+	if err != nil {
+		return "", err
+	}
+	out := strings.TrimSpace(resp.Content)
+	if out == "" || strings.HasPrefix(out, "NOTHING") {
+		return "", nil
+	}
+	// Models like to wrap the whole file in a fence.
+	out = strings.TrimPrefix(out, "```markdown")
+	out = strings.TrimPrefix(out, "```md")
+	out = strings.TrimPrefix(out, "```")
+	out = strings.TrimSuffix(strings.TrimSpace(out), "```")
+	return strings.TrimSpace(out), nil
+}
+
+// followUp decides whether a run that looks finished should keep going. It
+// returns the instruction to append, or an empty string to stop.
+//
+// Two checks in order: did the reply actually do what was asked, and is a
+// standing goal satisfied. Each is bounded, because a critic that is never
+// satisfied would otherwise loop forever.
+func (a *Agent) followUp(
+	ctx context.Context,
+	req Request,
+	sess *store.Session,
+	history []llm.Message,
+	reply string,
+	goal *Goal,
+	hasGoal bool,
+	verified, judged *int,
+	emit Emit,
+) string {
+	// A sub-agent's work is checked by whoever delegated it, and a quiet run
+	// has no one to report to.
+	if req.Quiet || req.Depth > 0 {
+		return ""
+	}
+
+	maxChecks := a.cfg.Agent.VerifyMax
+	if maxChecks <= 0 {
+		maxChecks = 2
+	}
+	if *verified < maxChecks {
+		if v := a.verify(ctx, req.Message, reply, history); v != nil {
+			*verified++
+			_ = emit(Event{Type: EventNotice, Message: "checking: " + v.Missing})
+			return "Before finishing: " + v.Missing +
+				" Do that now, or explain why it cannot be done."
+		}
+	}
+
+	if !hasGoal || goal == nil {
+		return ""
+	}
+	maxIter := goal.Max
+	if maxIter <= 0 {
+		maxIter = a.cfg.Agent.GoalMaxIterations
+	}
+	if maxIter <= 0 {
+		maxIter = 10
+	}
+	if goal.Iterations >= maxIter || *judged >= maxIter {
+		_ = emit(Event{Type: EventNotice, Message: "goal paused: iteration limit reached"})
+		goal.Paused = true
+		goal.Note = "Paused after reaching the iteration limit."
+		_ = a.SetGoal(ctx, sess.ID, goal)
+		return ""
+	}
+
+	j := a.judgeGoal(ctx, goal, reply, history)
+	*judged++
+	goal.Iterations++
+	if j.Done {
+		goal.Done = true
+		goal.Note = "Met."
+		_ = a.SetGoal(ctx, sess.ID, goal)
+		_ = emit(Event{Type: EventNotice, Message: "goal met"})
+		return ""
+	}
+	_ = a.SetGoal(ctx, sess.ID, goal)
+	_ = emit(Event{Type: EventNotice, Message: "goal: " + j.Next})
+	return "The standing goal is not met yet. " + j.Next
+}

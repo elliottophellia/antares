@@ -25,7 +25,7 @@ func Seed(dir string) (int, error) {
 
 	written := 0
 	for _, e := range BundledSkills() {
-		path := filepath.Join(dir, safeFileName(e.Name)+".md")
+		path := filepath.Join(dir, SafeFileName(e.Name)+".md")
 		if _, err := os.Stat(path); err == nil {
 			continue
 		}

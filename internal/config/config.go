@@ -95,6 +95,17 @@ type Agent struct {
 	Language          string   `yaml:"language" json:"language"`
 	IdleTimeoutSecs   int      `yaml:"idle_timeout_seconds" json:"idle_timeout_seconds"`
 	StopSequences     []string `yaml:"stop_sequences" json:"stop_sequences"`
+
+	// RepeatLimit is how many identical tool calls are tolerated before the
+	// agent is told to change approach. Zero uses the default.
+	RepeatLimit int `yaml:"repeat_limit" json:"repeat_limit"`
+	// VerifyReplies runs a cheap second model over a finished answer to catch
+	// work that was described but not done.
+	VerifyReplies bool `yaml:"verify_replies" json:"verify_replies"`
+	// VerifyMax bounds how many times one turn can be sent back for more work.
+	VerifyMax int `yaml:"verify_max" json:"verify_max"`
+	// GoalMaxIterations bounds a standing goal so it cannot run forever.
+	GoalMaxIterations int `yaml:"goal_max_iterations" json:"goal_max_iterations"`
 }
 
 // Tools controls which toolsets are exposed to the model.
