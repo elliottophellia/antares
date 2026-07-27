@@ -47,10 +47,30 @@ tools:
     preset: chrome-131
     proxy: ""                # http://host:3128 or socks5://host:1080
     timeout_seconds: 30
+    wrap_terminal: true      # route terminal curl/wget through this too
 ```
 
 HTTP/1.1, HTTP/2, and HTTP/3 are negotiated automatically, along with cookies
 and redirects.
+
+## curl and wget in the terminal
+
+The agent often reaches for `curl` or `wget` out of habit. With
+`wrap_terminal` on (the default), those commands in the terminal are routed
+through the same fingerprinted client — no change in how they are called.
+
+It works by putting small `curl` and `wget` shims on the shell's PATH. Each
+shim re-invokes Antares, which parses the common flags (`-X`, `-H`, `-d`,
+`--json`, `-o`, `-I`, `-u`, `-A`, `-b`, bundled short flags, and more) and makes
+the request with the browser fingerprint. Anything a shim does not fully
+understand — a multipart upload (`-F`), a unix socket, an FTP URL, `--resolve` —
+is handed to the **real** `curl`/`wget` untouched, so nothing that worked before
+breaks.
+
+This is a convenience layer over `http_request`, which remains the direct,
+structured way to call an API. Turn it off with `wrap_terminal: false`; the
+terminal then uses the system's own `curl`/`wget`. On Windows the shims are not
+installed and the terminal always uses the system binaries.
 
 ## Approval
 

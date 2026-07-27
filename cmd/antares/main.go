@@ -20,6 +20,7 @@ import (
 	"github.com/enowdev/antares/internal/config"
 	"github.com/enowdev/antares/internal/cron"
 	"github.com/enowdev/antares/internal/gateway"
+	"github.com/enowdev/antares/internal/httpshim"
 	"github.com/enowdev/antares/internal/hub"
 	"github.com/enowdev/antares/internal/logx"
 	"github.com/enowdev/antares/internal/mcp"
@@ -44,6 +45,17 @@ func main() {
 
 func run() error {
 	args := os.Args[1:]
+
+	// The curl/wget PATH shims re-invoke this binary. Handle it before any
+	// heavier bootstrap so an intercepted request stays fast.
+	if len(args) >= 1 && args[0] == "_httpshim" {
+		tool := ""
+		var rest []string
+		if len(args) >= 2 {
+			tool, rest = args[1], args[2:]
+		}
+		os.Exit(httpshim.Run(tool, rest))
+	}
 
 	// Bare `antares` opens the TUI when there is a terminal to draw on, and
 	// falls back to serving when there is not (systemd, Docker, cron).
@@ -177,6 +189,16 @@ func bootstrap(ctx context.Context) (*runtimeServices, error) {
 	}
 
 	shell := tools.NewShellManager(cfg.Terminal)
+	// Route terminal curl/wget through the fingerprinted HTTP client, unless
+	// switched off. If the shim cannot be written, the terminal keeps the real
+	// curl/wget — the http_request tool is still there.
+	if cfg.Tools.HTTP.WrapTerminal {
+		if dir, err := httpshim.Install(); err != nil {
+			slog.Debug("http shim unavailable", "error", err)
+		} else {
+			shell.EnableHTTPShim(dir, cfg.Tools.HTTP.Preset, cfg.Tools.HTTP.Proxy)
+		}
+	}
 	ragProvider, err := rag.New(cfg, db)
 	if err != nil {
 		slog.Warn("RAG disabled", "error", err)

@@ -65,7 +65,7 @@ func (a *Agent) buildSystemPrompt(ctx context.Context, req Request, sess *store.
 			b.WriteString("- Delegate self-contained research or parallel work with delegate_task; the sub-agent cannot see this conversation, so its prompt must stand alone.\n")
 		}
 		if hasTool(active, "http_request") {
-			b.WriteString("- For HTTP requests and API calls, use http_request rather than curl or wget in the terminal: it presents a real browser's TLS and HTTP/2 fingerprint, so endpoints behind bot-detection answer instead of refusing at the handshake.\n")
+			b.WriteString("- For HTTP requests and API calls, prefer http_request: it presents a real browser's TLS and HTTP/2 fingerprint, so endpoints behind bot-detection answer, and it returns the status, headers, and body as structured output. (curl and wget in the terminal are routed through the same fingerprinted client, so they work too.)\n")
 		}
 	}
 

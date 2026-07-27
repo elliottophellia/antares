@@ -141,6 +141,10 @@ type HTTP struct {
 	Proxy string `yaml:"proxy" json:"proxy"`
 	// TimeoutSeconds bounds a single request; 0 uses the built-in default.
 	TimeoutSeconds int `yaml:"timeout_seconds" json:"timeout_seconds"`
+	// WrapTerminal puts curl/wget shims on the terminal's PATH so those
+	// commands go through the fingerprinted client too, falling back to the
+	// real binary for anything the shim cannot handle. On by default.
+	WrapTerminal bool `yaml:"wrap_terminal" json:"wrap_terminal"`
 }
 
 // WebSearch configures the search backend used by the web_search tool.

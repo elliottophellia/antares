@@ -25,11 +25,29 @@ type ShellManager struct {
 	cfg      config.Terminal
 	// sandboxOnce keeps a confinement warning from repeating on every shell.
 	sandboxOnce sync.Once
+	// httpShim, when set, routes curl/wget through the fingerprinted client by
+	// prepending a shim directory to the shell's PATH.
+	httpShim httpShimEnv
+}
+
+// httpShimEnv holds the environment a shell needs to use the HTTP shims.
+type httpShimEnv struct {
+	dir    string
+	preset string
+	proxy  string
 }
 
 // NewShellManager builds a manager for the given terminal config.
 func NewShellManager(cfg config.Terminal) *ShellManager {
 	return &ShellManager{sessions: map[string]*shellSession{}, cfg: cfg}
+}
+
+// EnableHTTPShim makes new shells route curl/wget through the fingerprinted
+// client. dir is the directory holding the shim scripts.
+func (m *ShellManager) EnableHTTPShim(dir, preset, proxy string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.httpShim = httpShimEnv{dir: dir, preset: preset, proxy: proxy}
 }
 
 type shellSession struct {
@@ -66,6 +84,32 @@ func (l *lockedBuffer) snapshot() string {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	return l.b.String()
+}
+
+// withShimEnv prepends the shim directory to PATH and adds the variables the
+// shims read. The existing PATH entry is rewritten in place so the shim
+// directory is searched first.
+func withShimEnv(env []string, shim httpShimEnv) []string {
+	sep := string(os.PathListSeparator)
+	out := make([]string, 0, len(env)+3)
+	replaced := false
+	for _, kv := range env {
+		if strings.HasPrefix(kv, "PATH=") {
+			out = append(out, "PATH="+shim.dir+sep+strings.TrimPrefix(kv, "PATH="))
+			replaced = true
+			continue
+		}
+		out = append(out, kv)
+	}
+	if !replaced {
+		out = append(out, "PATH="+shim.dir+sep+os.Getenv("PATH"))
+	}
+	out = append(out,
+		"ANTARES_SHIM_DIR="+shim.dir,
+		"ANTARES_HTTP_PRESET="+shim.preset,
+		"ANTARES_HTTP_PROXY="+shim.proxy,
+	)
+	return out
 }
 
 func defaultShell(configured string) (string, []string) {
@@ -136,7 +180,11 @@ func (m *ShellManager) session(id, workspace string) (*shellSession, error) {
 		}
 		cmd = built
 		cmd.Dir = workspace
-		cmd.Env = append(os.Environ(), "ANTARES_SESSION="+id, "TERM=dumb", "PAGER=cat", "GIT_PAGER=cat")
+		env := append(os.Environ(), "ANTARES_SESSION="+id, "TERM=dumb", "PAGER=cat", "GIT_PAGER=cat")
+		if m.httpShim.dir != "" {
+			env = withShimEnv(env, m.httpShim)
+		}
+		cmd.Env = env
 	}
 
 	stdin, err := cmd.StdinPipe()
