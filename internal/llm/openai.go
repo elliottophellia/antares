@@ -12,13 +12,22 @@ import (
 // openAIClient speaks the /chat/completions dialect used by OpenAI and the
 // large family of compatible servers (OpenRouter, LM Studio, vLLM, Ollama…).
 type openAIClient struct {
-	opts   Options
-	vendor string // openai|compat
+	opts    Options
+	vendor  string // openai|compat|azure|copilot
+	copilot *copilotTokenSource
 }
 
 func (c *openAIClient) Kind() string { return "openai" }
 
 func (c *openAIClient) headers() map[string]string {
+	if c.vendor == "copilot" {
+		// Copilot needs a freshly-exchanged token plus editor headers.
+		tok, err := c.copilot.token()
+		if err != nil {
+			return map[string]string{}
+		}
+		return copilotHeaders(tok)
+	}
 	h := map[string]string{}
 	if c.opts.APIKey != "" {
 		if c.vendor == "azure" {

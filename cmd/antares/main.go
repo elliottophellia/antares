@@ -83,6 +83,8 @@ func run() error {
 		return cmdModel(args)
 	case "setup":
 		return cmdSetup(args)
+	case "auth", "login":
+		return cmdAuth(args)
 	case "cron":
 		return cmdCron(args)
 	case "rag":

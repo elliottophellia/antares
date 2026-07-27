@@ -84,6 +84,12 @@ func newBase(o Options) (Client, error) {
 		return newBedrock(o)
 	case "vertex", "vertexai", "vertex-ai", "google-vertex":
 		return newVertex(o)
+	case "copilot", "github-copilot", "githubcopilot":
+		if o.BaseURL == "" {
+			o.BaseURL = "https://api.githubcopilot.com"
+		}
+		return &openAIClient{opts: o, vendor: "copilot",
+			copilot: &copilotTokenSource{ghToken: o.APIKey, client: o.HTTPClient}}, nil
 	case "openai":
 		if o.BaseURL == "" {
 			o.BaseURL = "https://api.openai.com/v1"
