@@ -214,6 +214,14 @@ export default function ChatPage() {
   // Its messages are already live on screen, so the hydrate effect must not
   // re-fetch and overwrite them before the turn is persisted.
   const localSessionRef = useRef<string | null>(null)
+  // The current session id, tracked in a ref so a message always posts to the
+  // right session even before the URL param has caught up. Without this, the
+  // first reply creates a session but the next message — sent before the param
+  // re-render lands — posts with an empty id and starts a second session.
+  const sessionIdRef = useRef<string | undefined>(sessionId)
+  useEffect(() => {
+    sessionIdRef.current = sessionId
+  }, [sessionId])
   const scrollRef = useStickyScroll(messages)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
 
@@ -306,7 +314,7 @@ export default function ChatPage() {
           action?: { kind?: string; value?: string }
         }>('/commands/run', {
           input: line,
-          session_id: sessionId ?? '',
+          session_id: sessionIdRef.current ?? '',
           surface: 'web',
         })
 
@@ -380,10 +388,15 @@ export default function ChatPage() {
 
     abortRef.current = streamPost(
       '/chat',
-      { session_id: sessionId ?? '', message: text, images: attached, role },
+      { session_id: sessionIdRef.current ?? '', message: text, images: attached, role },
       (event: StreamEvent) => {
         switch (event.type) {
           case 'session':
+            if (typeof event.id === 'string' && event.id) {
+              // Adopt the real session id at once, so the next message posts to
+              // it rather than opening another session.
+              sessionIdRef.current = event.id
+            }
             if (!sessionId && typeof event.id === 'string') {
               // Remember this id so the hydrate effect the navigation triggers
               // does not overwrite the messages we are streaming right now.
