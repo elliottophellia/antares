@@ -113,6 +113,10 @@ func init() {
 	register(Spec{Name: "mcp", Args: "[search|install] [id]", Summary: "Show, search, or install MCP servers", Surfaces: anywhere}, cmdMCP)
 	register(Spec{Name: "config", Args: "[path] [value]", Summary: "Read or set a config value", Surfaces: anywhere}, cmdConfig)
 	register(Spec{Name: "sessions", Summary: "List recent sessions", Surfaces: anywhere}, cmdSessions)
+	register(Spec{Name: "title", Args: "[name]", Summary: "Show or rename this conversation", Surfaces: anywhere}, cmdTitle)
+	register(Spec{Name: "fork", Args: "[name]", Summary: "Copy this conversation to try another direction", Surfaces: []Surface{SurfaceTUI, SurfaceWeb}}, cmdFork)
+	register(Spec{Name: "undo", Summary: "Remove the last exchange", Surfaces: anywhere}, cmdUndo)
+	register(Spec{Name: "export", Args: "[markdown|json]", Summary: "Write this conversation to a file", Surfaces: anywhere}, cmdExport)
 	register(Spec{Name: "usage", Args: "[days]", Summary: "Token and cost summary", Surfaces: anywhere}, cmdUsage)
 	register(Spec{Name: "cost", Args: "[days]", Summary: "Alias for /usage", Surfaces: anywhere}, cmdUsage)
 
