@@ -185,9 +185,9 @@ var Toolsets = map[string][]string{
 	},
 	"research": {
 		"read_file", "web_search", "web_fetch", "browser", "grep", "todo", "memory",
-		"session_search", "rag_search", "skill", "scope_check",
+		"session_search", "rag_search", "skill", "scope_check", "report_finding",
 	},
-	"browser": {"browser", "web_search", "web_fetch", "read_file", "write_file", "todo", "scope_check"},
+	"browser": {"browser", "web_search", "web_fetch", "read_file", "write_file", "todo", "scope_check", "report_finding"},
 	"default": {
 		"read_file", "write_file", "edit_file", "list_files", "glob", "grep",
 		"terminal", "web_search", "web_fetch", "browser", "todo", "memory",

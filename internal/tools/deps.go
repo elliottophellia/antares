@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/enowdev/antares/internal/config"
+	"github.com/enowdev/antares/internal/findings"
 	"github.com/enowdev/antares/internal/store"
 )
 
@@ -80,6 +81,8 @@ type Deps struct {
 	Checkpoint func(sessionID, path, tool string)
 	// Roles lists the specialist roles available for delegation. It may be nil.
 	Roles func() []RoleInfo
+	// Findings is the security engagement ledger. It may be nil.
+	Findings FindingStore
 }
 
 // RoleInfo is the subset of a role the tools need.
@@ -88,4 +91,9 @@ type RoleInfo struct {
 	Summary  string
 	Category string
 	Danger   bool
+}
+
+// FindingStore is the subset of the findings store the tools need.
+type FindingStore interface {
+	Add(sessionID string, f findings.Finding) (findings.Finding, error)
 }

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/enowdev/antares/internal/checkpoint"
+	"github.com/enowdev/antares/internal/findings"
 	"github.com/enowdev/antares/internal/llm"
 	"github.com/enowdev/antares/internal/plugin"
 	"github.com/enowdev/antares/internal/roles"
@@ -667,3 +668,6 @@ func (a *Agent) roleInfos() []tools.RoleInfo {
 	}
 	return out
 }
+
+// Findings exposes the engagement ledger.
+func (a *Agent) Findings() *findings.Store { return a.findings }

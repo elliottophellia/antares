@@ -16,6 +16,7 @@ import (
 
 	"github.com/enowdev/antares/internal/checkpoint"
 	"github.com/enowdev/antares/internal/config"
+	"github.com/enowdev/antares/internal/findings"
 	"github.com/enowdev/antares/internal/llm"
 	"github.com/enowdev/antares/internal/plugin"
 	"github.com/enowdev/antares/internal/roles"
@@ -111,15 +112,16 @@ type Result struct {
 
 // Agent owns the shared services a run needs.
 type Agent struct {
-	cfg     *config.Config
-	db      store.Store
-	reg     *tools.Registry
-	shell   *tools.ShellManager
-	rag     tools.RAGProvider
-	skills  *skills.Manager
-	checks  *checkpoint.Store
-	plugins *plugin.Manager
-	roles   *roles.Registry
+	cfg      *config.Config
+	db       store.Store
+	reg      *tools.Registry
+	shell    *tools.ShellManager
+	rag      tools.RAGProvider
+	skills   *skills.Manager
+	checks   *checkpoint.Store
+	plugins  *plugin.Manager
+	roles    *roles.Registry
+	findings *findings.Store
 
 	mu     sync.Mutex
 	active map[string]context.CancelFunc
@@ -129,9 +131,10 @@ type Agent struct {
 func New(cfg *config.Config, db store.Store, reg *tools.Registry, shell *tools.ShellManager, ragProvider tools.RAGProvider) *Agent {
 	return &Agent{
 		cfg: cfg, db: db, reg: reg, shell: shell, rag: ragProvider,
-		checks: checkpoint.NewStore(config.Path("checkpoints")),
-		roles:  roles.NewRegistry(nil),
-		active: map[string]context.CancelFunc{},
+		checks:   checkpoint.NewStore(config.Path("checkpoints")),
+		roles:    roles.NewRegistry(nil),
+		findings: findings.NewStore(config.Path("findings")),
+		active:   map[string]context.CancelFunc{},
 	}
 }
 
@@ -562,6 +565,7 @@ func (a *Agent) executeTools(
 				Sub: a.subAgentFor(req), Skills: a.skillLibrary(),
 				Checkpoint: a.saveCheckpoint,
 				Roles:      a.roleInfos,
+				Findings:   a.findings,
 			},
 		}
 

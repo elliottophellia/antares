@@ -19,6 +19,7 @@ func init() {
 		browserTool{},
 		listRolesTool{},
 		scopeCheckTool{},
+		reportFindingTool{},
 	} {
 		globalRegistry.Register(t)
 	}
