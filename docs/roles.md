@@ -116,3 +116,51 @@ Antares does not ship exploit payloads, offensive tooling, or evasion
 techniques. It gives the security roles the same tools every role has — a
 browser, a shell, web access — under authorization and scope, and the structure
 to turn what they find into a report.
+
+## Running an assessment
+
+A penetration test is a sequence, not one action: map the surface, enumerate
+what is on it, test each thing, then report. Antares tracks that sequence so an
+agent does not find one bug and write the report while three services sit
+untested.
+
+As the security roles work, they record what they find with `add_intel` — a
+host, a subdomain, a service, an endpoint, a technology. The methodology reads
+that ledger to decide which of five phases actually has the evidence to be
+called complete:
+
+```
+/engagement            the phases, their evidence, and what to do next
+/engagement intel      the facts recorded so far
+```
+
+`methodology_status` shows the same to the agent mid-run, so it orients itself
+before deciding what to test next. A phase with findings but skipped
+prerequisites — a vulnerability recorded before the surface was enumerated — is
+flagged as built on sand.
+
+The phases:
+
+| Phase | Complete when it has |
+|---|---|
+| Scope & Authorization | an authorized scope |
+| Reconnaissance | hosts or subdomains |
+| Enumeration | services, endpoints, or technologies |
+| Vulnerability Testing | confirmed findings |
+| Reporting | a compiled report |
+
+## Delegation
+
+The primary agent hands a self-contained piece of work to a specialist with
+`delegate_task`, naming a `role`. The sub-agent runs as that specialist, with
+its own instructions and tools, and returns only its final answer — research
+that would flood the main conversation happens elsewhere.
+
+For work on a git repository, pass `isolate`: the sub-agent gets its own git
+worktree off the current HEAD. Several sub-agents can then edit the same
+repository in parallel without conflicting — each has a private working
+directory sharing the one object store. When a sub-agent finishes, an unchanged
+worktree is removed and one with work in it is left on its branch for review.
+
+This needs git. Without it, or outside a repository, the sub-agent shares the
+workspace instead — reported, not fatal.

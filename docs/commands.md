@@ -112,6 +112,7 @@ See [the harness](harness.md) for what these actually do.
 | `/scope [add\|remove\|list\|check] [target]` | Manage the authorized testing scope |
 | `/findings [remove\|clear] [id]` | The current engagement's findings |
 | `/report [title]` | Compile the findings into a report |
+| `/engagement [intel]` | The assessment's phase progress |
 
 See [roles](roles.md) for what these do.
 
