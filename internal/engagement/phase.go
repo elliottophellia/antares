@@ -44,7 +44,7 @@ var Phases = []Phase{
 	{
 		Name:     "recon",
 		Title:    "Reconnaissance",
-		Summary:  "Map the attack surface: hosts, subdomains, and exposed information.",
+		Summary:  "Probe the given target directly first, then map the wider attack surface: hosts, subdomains, and exposed services.",
 		Requires: []string{"scope"},
 		Produces: []IntelType{IntelHost, IntelSubdomain},
 		Roles:    []string{"security-recon"},
