@@ -15,3 +15,4 @@ internal/server/dist/*
 *.db-shm
 .env
 .env.local
+/antares

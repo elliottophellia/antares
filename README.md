@@ -151,8 +151,9 @@ semantic retrieval, task lists, skill authoring, and sub-agent delegation.
 protocol — no driver binary and no Node. Pages are described rather than
 screenshotted: a snapshot lists what a person could act on, each with a
 reference the model names to click or type into. The page persists between
-tool calls, so a login holds while the agent keeps working. See
-[docs/browser.md](docs/browser.md).
+tool calls, so a login holds while the agent keeps working. For sites behind a
+bot-detection challenge, a stealth mode launches a source-patched, signature-
+verified Chromium that passes them. See [docs/browser.md](docs/browser.md).
 
 **Specialist roles.** The agent is a team of specialists, not one generalist —
 a reviewer that only reads, a researcher that only browses, a report writer that

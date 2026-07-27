@@ -84,6 +84,10 @@ tools:
     headed: false                   # needs a display to be of any use
     width: 1280
     height: 800
+    stealth: false                  # anti-detection Chromium for guarded sites
+    proxy: ""                       # http://host:3128 or socks5://host:1080
+    timezone: ""                    # e.g. America/New_York
+    locale: ""                      # e.g. en-US
 ```
 
 **`executable`** — leave empty and Antares looks for Chrome, Chromium, Brave, or
@@ -111,6 +115,54 @@ restart. Point it at a throwaway directory if you would rather they did not.
 **`headed`** — shows the window. On a headless server this fails; there is
 nothing to show it on.
 
+## Stealth mode
+
+Some sites gate access behind bot-detection challenges — Cloudflare Turnstile
+and the like. A stock headless Chrome gives itself away: `navigator.webdriver`
+reads true, the canvas and WebGL fingerprints are the standard ones, and the
+challenge fails in milliseconds.
+
+Turn `stealth` on and the tool launches a source-patched Chromium built to pass
+those checks instead of the system browser. `navigator.webdriver` reads false,
+the fingerprint surfaces are seeded to look like an ordinary machine, and the
+platform is spoofed. Everything else — snapshot, click, type, the persisted
+page — works exactly the same.
+
+```yaml
+tools:
+  browser:
+    stealth: true
+    proxy: socks5://127.0.0.1:1080   # optional
+    timezone: America/New_York       # optional fingerprint spoof
+    locale: en-US
+```
+
+The patched binary is not bundled. On first use it is downloaded, its
+`SHA256SUMS` manifest is checked against a pinned Ed25519 signature, the archive
+is verified by SHA-256 and unpacked with traversal guards, and the result is
+cached under `~/.cloakbrowser`. A download that cannot be signature-verified is
+refused rather than used. The binary carries its own upstream license, separate
+from Antares.
+
+To use a copy you already have and skip the download, point Antares at it:
+
+```bash
+export ANTARES_STEALTH_BINARY=/path/to/chrome   # or CLOAKBROWSER_BINARY_PATH
+```
+
+Other overrides: `ANTARES_STEALTH_CACHE` (cache directory),
+`ANTARES_STEALTH_VERSION` (pin a version), and `ANTARES_STEALTH_DOWNLOAD_URL`
+(a self-hosted mirror). The `CLOAKBROWSER_*` equivalents are honoured too, so a
+binary the upstream tooling already fetched is reused.
+
+Stealth has no effect when `remote_url` is set — that attaches to a browser you
+started yourself, so the choice of binary was already made.
+
+**Use it for access, not abuse.** Stealth mode is for reaching sites you are
+authorised to use that happen to sit behind a challenge — your own accounts,
+authorised testing targets, research within scope. It is not a licence to break
+a site's terms.
+
 ## Toolsets
 
 `browser` is in the `default`, `research`, and `browser` toolsets. The last one
@@ -122,8 +174,9 @@ antares config set tools.toolset browser
 
 ## What it will not do
 
-There is no captcha solving and no bot-detection evasion. When a site blocks the
-agent it stops and says so.
+There is no captcha solving. Bot-detection challenges are handled by turning on
+[stealth mode](#stealth-mode), not by solving puzzles; a site that still blocks
+the agent after that makes it stop and say so.
 
 Downloads are not handled. A file the agent needs is better fetched with
 `web_fetch` or `curl` through the terminal, where the path is explicit.

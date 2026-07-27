@@ -13,6 +13,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/enowdev/antares/internal/stealth"
 )
 
 // Session is one browser with one active page. Keeping the page alive between
@@ -69,10 +71,6 @@ func (s *Session) Start(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		bin, err := FindExecutable(s.opts.Executable)
-		if err != nil {
-			return err
-		}
 		dir := s.opts.UserDataDir
 		if dir == "" {
 			dir, err = os.MkdirTemp("", "antares-browser-")
@@ -80,6 +78,9 @@ func (s *Session) Start(ctx context.Context) error {
 				return err
 			}
 		}
+		// Flags the caller owns regardless of which binary launches: the debug
+		// port, the profile dir, and the window. The stealth build supplies its
+		// own fingerprint/sandbox flags on top of these.
 		args := []string{
 			"--remote-debugging-port=" + strconv.Itoa(port),
 			"--user-data-dir=" + dir,
@@ -93,6 +94,27 @@ func (s *Session) Start(ctx context.Context) error {
 		}
 		if s.opts.Headless {
 			args = append([]string{"--headless=new", "--disable-gpu", "--hide-scrollbars"}, args...)
+		}
+
+		var bin string
+		if s.opts.Stealth {
+			bin, err = stealth.EnsureBinary(ctx, "")
+			if err != nil {
+				return fmt.Errorf("could not obtain the stealth browser: %w", err)
+			}
+			// Prepend the anti-detection flags so the patched binary applies
+			// them; the caller-owned flags above still win where they overlap.
+			stealthArgs := stealth.Options{
+				Proxy:    s.opts.Proxy,
+				Timezone: s.opts.Timezone,
+				Locale:   s.opts.Locale,
+			}.Args()
+			args = append(stealthArgs, args...)
+		} else {
+			bin, err = FindExecutable(s.opts.Executable)
+			if err != nil {
+				return err
+			}
 		}
 		cmd := exec.Command(bin, args...)
 		cmd.Stdout, cmd.Stderr = nil, nil

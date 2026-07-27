@@ -43,6 +43,10 @@ func sessionFor(key string, cfg *config.Config) *browser.Session {
 		if b.Height > 0 {
 			opts.Height = b.Height
 		}
+		opts.Stealth = b.Stealth
+		opts.Proxy = b.Proxy
+		opts.Timezone = b.Timezone
+		opts.Locale = b.Locale
 	}
 	s := browser.New(opts)
 	browserSessions.byKey[key] = s

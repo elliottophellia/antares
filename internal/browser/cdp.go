@@ -190,6 +190,19 @@ type Options struct {
 	// RemoteURL attaches to an already-running Chrome instead of starting one,
 	// e.g. "http://127.0.0.1:9222".
 	RemoteURL string
+	// Stealth launches a source-patched anti-detection Chromium (downloaded and
+	// verified on first use) instead of the system Chrome, so pages guarded by
+	// bot-detection challenges (Cloudflare Turnstile and the like) load. It has
+	// no effect when RemoteURL is set — that attaches to a browser already
+	// running.
+	Stealth bool
+	// Proxy routes the stealth browser through a proxy, e.g.
+	// "http://host:3128" or "socks5://host:1080".
+	Proxy string
+	// Timezone and Locale spoof the stealth browser's fingerprint, e.g.
+	// "America/New_York" and "en-US".
+	Timezone string
+	Locale   string
 }
 
 // candidates lists the binaries to try, most standard first.

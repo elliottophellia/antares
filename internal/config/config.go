@@ -143,6 +143,18 @@ type Browser struct {
 	Headed bool `yaml:"headed" json:"headed"`
 	Width  int  `yaml:"width" json:"width"`
 	Height int  `yaml:"height" json:"height"`
+	// Stealth launches a source-patched anti-detection Chromium (downloaded and
+	// verified on first use) instead of the system Chrome, so pages guarded by
+	// bot-detection challenges — Cloudflare Turnstile and the like — load. The
+	// binary is fetched once and cached; it carries its own upstream license.
+	Stealth bool `yaml:"stealth" json:"stealth"`
+	// Proxy routes the stealth browser through a proxy, e.g. "http://host:3128"
+	// or "socks5://host:1080".
+	Proxy string `yaml:"proxy" json:"proxy"`
+	// Timezone and Locale spoof the stealth fingerprint, e.g. "America/New_York"
+	// and "en-US".
+	Timezone string `yaml:"timezone" json:"timezone"`
+	Locale   string `yaml:"locale" json:"locale"`
 }
 
 type WebSearch struct {
