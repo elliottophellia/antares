@@ -57,7 +57,10 @@ func run() error {
 		return cmdServe()
 	case "tui", "chat-ui":
 		return cmdTUI()
-	case "chat":
+	case "chat", "repl", "cli":
+		if command == "repl" || command == "cli" {
+			args = append([]string{"-i"}, args...)
+		}
 		return cmdChat(args)
 	case "config":
 		return cmdConfig(args)
@@ -88,6 +91,8 @@ Usage:
   antares tui              Open the terminal UI explicitly
   antares setup            Configure Antares (web or terminal wizard)
   antares chat <message>   Send one message and print the reply
+  antares chat -i          A plain line-based conversation (no full-screen UI)
+  antares repl             The same thing, spelled differently
   antares model [id]       Show or change the active model
   antares config get <path>
   antares config set <path> <value>
@@ -450,38 +455,6 @@ func orDash(s string) string {
 		return "—"
 	}
 	return s
-}
-
-func cmdChat(args []string) error {
-	message := strings.TrimSpace(strings.Join(args, " "))
-	if message == "" {
-		return errors.New("usage: antares chat <message>")
-	}
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
-
-	rt, err := bootstrap(ctx)
-	if err != nil {
-		return err
-	}
-	defer rt.close()
-
-	_, err = rt.agent.Run(ctx, agent.Request{Message: message, Platform: "cli"}, func(e agent.Event) error {
-		switch e.Type {
-		case agent.EventText:
-			fmt.Print(e.Delta)
-		case agent.EventToolCall:
-			fmt.Printf("\n  → %s\n", e.Name)
-		case agent.EventNotice:
-			fmt.Printf("\n  ℹ %s\n", e.Message)
-		case agent.EventError:
-			fmt.Printf("\n  ✗ %s\n", e.Err)
-		case agent.EventDone:
-			fmt.Println()
-		}
-		return nil
-	})
-	return err
 }
 
 func cmdConfig(args []string) error {

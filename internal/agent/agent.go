@@ -34,6 +34,7 @@ const (
 	EventToolResult   EventType = "tool_result"
 	EventUsage        EventType = "usage"
 	EventNotice       EventType = "notice"
+	EventApproval     EventType = "approval"
 	EventError        EventType = "error"
 	EventDone         EventType = "done"
 )
@@ -469,6 +470,22 @@ func (a *Agent) executeTools(
 				isError: true,
 			}
 			_ = safeEmit(Event{Type: EventToolResult, ID: call.ID, Name: call.Name, Content: outcomes[i].message.Content, IsError: true})
+			return
+		}
+
+		// A tool that changes something may need a person to say yes first.
+		if refusal := a.checkApproval(ctx, call, tool, sess.ID, safeEmit); refusal != nil {
+			outcomes[i] = toolOutcome{
+				message: llm.Message{
+					Role: llm.RoleTool, ToolCallID: call.ID, Name: call.Name,
+					Content: refusal.Content,
+				},
+				isError: true,
+			}
+			_ = safeEmit(Event{
+				Type: EventToolResult, ID: call.ID, Name: call.Name,
+				Content: refusal.Content, IsError: true,
+			})
 			return
 		}
 

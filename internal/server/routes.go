@@ -98,6 +98,10 @@ func (s *Server) routes() {
 	// MCP
 	m.HandleFunc("GET /api/mcp", s.handleMCPStatus)
 
+	// Approvals for tools that change something.
+	m.HandleFunc("GET /api/approvals", s.handleApprovals)
+	m.HandleFunc("POST /api/approvals/{id}", s.handleResolveApproval)
+
 	// Hub: browse and install skills and MCP servers.
 	m.HandleFunc("GET /api/hub/skills", s.handleHubSkills)
 	m.HandleFunc("POST /api/hub/skills/install", s.handleHubInstallSkill)
