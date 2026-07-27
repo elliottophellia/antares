@@ -284,6 +284,7 @@ credentials, and RAG backend in one pass.
 | [MCP](docs/mcp.md) | External Model Context Protocol servers |
 | [HTTP API](docs/api.md) | Every endpoint |
 | [Deployment](docs/deployment.md) | Running it as a service |
+| [Backups](docs/backups.md) | Archiving and restoring everything |
 | [Architecture](docs/architecture.md) | How the pieces fit |
 | [Development](docs/development.md) | Building and testing |
 

@@ -69,6 +69,8 @@ func run() error {
 		return cmdModel(args)
 	case "setup":
 		return cmdSetup(args)
+	case "backup":
+		return cmdBackup(args)
 	case "doctor":
 		return cmdDoctor()
 	case "version", "--version", "-v":
@@ -97,6 +99,7 @@ Usage:
   antares model [id]       Show or change the active model
   antares config get <path>
   antares config set <path> <value>
+  antares backup           Archive everything; also list, restore, prune
   antares doctor           Check configuration and connectivity
   antares version
 
