@@ -80,3 +80,27 @@ func TestBackgroundListNewestFirst(t *testing.T) {
 		t.Fatalf("expected 2 tasks, got %d", len(list))
 	}
 }
+
+func TestContinueRunningTaskRejected(t *testing.T) {
+	a := &Agent{bg: newBGManager()}
+	insert(a.bg, "task_run", "", "busy")
+	if _, err := a.continueTask("task_run", "hi"); err == nil {
+		t.Fatal("continuing a running task should error")
+	}
+}
+
+func TestContinueUnknownTask(t *testing.T) {
+	a := &Agent{bg: newBGManager()}
+	if _, err := a.continueTask("nope", "hi"); err == nil {
+		t.Fatal("continuing an unknown task should error")
+	}
+}
+
+func TestContinueFinishedWithoutSession(t *testing.T) {
+	a := &Agent{bg: newBGManager()}
+	insert(a.bg, "task_done", "", "done")
+	a.bg.finish("task_done", &Result{Reply: "x"}, nil, nil) // no SessionID
+	if _, err := a.continueTask("task_done", "more"); err == nil {
+		t.Fatal("a task with no session cannot be continued")
+	}
+}

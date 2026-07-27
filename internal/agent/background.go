@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"sync"
 	"time"
@@ -16,8 +17,11 @@ import (
 // results when they are ready. That is what these tasks are for.
 
 type bgTask struct {
-	info   tools.TaskInfo
-	cancel context.CancelFunc
+	info      tools.TaskInfo
+	cancel    context.CancelFunc
+	sessionID string // the sub-agent's session, so it can be continued
+	depth     int
+	userID    string
 }
 
 // bgManager holds every background task for the process, keyed by id.
@@ -45,6 +49,7 @@ func (h *bgHook) Start(req tools.SubAgentRequest) string {
 func (h *bgHook) Status(id string) (tools.TaskInfo, bool) { return h.a.bg.status(id) }
 func (h *bgHook) List(parent string) []tools.TaskInfo     { return h.a.bg.list(parent) }
 func (h *bgHook) Stop(id string) bool                     { return h.a.bg.stop(id) }
+func (h *bgHook) Send(id, message string) (string, error) { return h.a.continueTask(id, message) }
 
 // startBackground launches a sub-agent in its own goroutine and returns its id
 // immediately. The task keeps running after the parent turn ends.
@@ -54,18 +59,20 @@ func (a *Agent) startBackground(parent Request, req tools.SubAgentRequest) strin
 	// finishes — but cancellable via Stop.
 	ctx, cancel := context.WithCancel(context.Background())
 
+	depth := parent.Depth + 1
 	task := &bgTask{
 		info: tools.TaskInfo{
 			ID: id, Role: req.Role, Task: truncTask(req.Prompt),
 			Status: "running", StartedAt: time.Now(),
 		},
 		cancel: cancel,
+		depth:  depth,
+		userID: parent.UserID,
 	}
 	a.bg.mu.Lock()
 	a.bg.tasks[id] = task
 	a.bg.mu.Unlock()
 
-	depth := parent.Depth + 1
 	untrack := trackSubAgent(req.Role, req.Prompt, parent.SessionID)
 
 	go func() {
@@ -78,6 +85,8 @@ func (a *Agent) startBackground(parent Request, req tools.SubAgentRequest) strin
 		}
 		workspace := firstNonEmpty(req.Workspace, a.cfg.Agent.Workspace)
 
+		// Not Quiet: the sub-agent keeps a real session, so the task can be
+		// continued later with the task tool's send action.
 		res, err := a.Run(ctx, Request{
 			Message:     req.Prompt,
 			SystemExtra: req.SystemExtra,
@@ -88,7 +97,6 @@ func (a *Agent) startBackground(parent Request, req tools.SubAgentRequest) strin
 			MaxTurns:    maxTurns,
 			Platform:    "background",
 			UserID:      parent.UserID,
-			Quiet:       true,
 			Depth:       depth,
 		}, nil)
 
@@ -96,6 +104,52 @@ func (a *Agent) startBackground(parent Request, req tools.SubAgentRequest) strin
 	}()
 
 	return id
+}
+
+// continueTask sends a follow-up to a finished task, running another turn on the
+// same sub-session so the coordinator can iterate with a worker. It runs
+// synchronously and returns the new reply.
+func (a *Agent) continueTask(id, message string) (string, error) {
+	a.bg.mu.Lock()
+	t, ok := a.bg.tasks[id]
+	if !ok {
+		a.bg.mu.Unlock()
+		return "", fmt.Errorf("no task %q", id)
+	}
+	if t.info.Status == "running" {
+		a.bg.mu.Unlock()
+		return "", fmt.Errorf("task %s is still running — wait for it before sending a follow-up", id)
+	}
+	if t.sessionID == "" {
+		a.bg.mu.Unlock()
+		return "", fmt.Errorf("task %s has no session to continue", id)
+	}
+	sid, depth, uid := t.sessionID, t.depth, t.userID
+	t.info.Status = "running"
+	a.bg.mu.Unlock()
+
+	res, err := a.Run(context.Background(), Request{
+		SessionID: sid,
+		Message:   message,
+		Platform:  "background",
+		UserID:    uid,
+		Depth:     depth,
+	}, nil)
+
+	a.bg.mu.Lock()
+	defer a.bg.mu.Unlock()
+	t.info.EndedAt = time.Now()
+	if err != nil {
+		t.info.Status = "error"
+		t.info.Error = err.Error()
+		return "", err
+	}
+	t.info.Status = "done"
+	if res != nil {
+		t.info.Output = res.Reply
+		return res.Reply, nil
+	}
+	return "", nil
 }
 
 // finish records a task's outcome. A cancelled context means Stop was called.
@@ -107,6 +161,9 @@ func (m *bgManager) finish(id string, res *Result, err, ctxErr error) {
 		return
 	}
 	t.info.EndedAt = time.Now()
+	if res != nil && res.SessionID != "" {
+		t.sessionID = res.SessionID
+	}
 	switch {
 	case ctxErr != nil && t.info.Status == "stopped":
 		// left as stopped

@@ -65,6 +65,9 @@ type BackgroundTasks interface {
 	Status(id string) (TaskInfo, bool)
 	List(parent string) []TaskInfo
 	Stop(id string) bool
+	// Send continues a finished task with a follow-up, running another turn on
+	// its session and returning the new reply.
+	Send(id, message string) (string, error)
 }
 
 // TaskInfo is a snapshot of a background task.
