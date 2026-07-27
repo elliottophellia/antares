@@ -260,11 +260,16 @@ func (s *Server) handleToggleChannel(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
-		"ok":               true,
-		"restart_required": true,
-		"note":             "Restart Antares to apply the change to the running gateway.",
-	})
+	out := map[string]any{"ok": true}
+	// Reconnect right away rather than making someone restart the process for a
+	// switch they just flipped.
+	if s.gateway != nil {
+		if err := s.gateway.Sync(id); err != nil {
+			out["restart_required"] = true
+			out["note"] = err.Error()
+		}
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 func (s *Server) handleApprovePairing(w http.ResponseWriter, r *http.Request) {

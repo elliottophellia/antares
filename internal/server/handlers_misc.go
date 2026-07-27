@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/enowdev/antares/internal/config"
+	"github.com/enowdev/antares/internal/gateway"
 	"github.com/enowdev/antares/internal/logx"
 	"github.com/enowdev/antares/internal/rag"
 	"github.com/enowdev/antares/internal/store"
@@ -459,6 +460,10 @@ func (s *Server) handleListChannels(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// handleSetChannelToken verifies a bot token with the platform before storing
+// it, so a bad paste fails here rather than inside a reconnect loop nobody is
+// watching. It also names the bot back, which is the only way to confirm you
+// pasted the token you meant to.
 func (s *Server) handleSetChannelToken(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Token string `json:"token"`
@@ -467,19 +472,28 @@ func (s *Server) handleSetChannelToken(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
+	id := r.PathValue("id")
+	if id != "telegram" && id != "discord" {
+		writeError(w, http.StatusBadRequest, errors.New("unknown channel"))
+		return
+	}
+
+	identity, err := gateway.VerifyToken(r.Context(), id, body.Token)
+	if err != nil {
+		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": err.Error()})
+		return
+	}
+
 	cfg, err := config.Reload()
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
-	switch r.PathValue("id") {
+	switch id {
 	case "telegram":
 		cfg.Gateway.Telegram.BotToken = body.Token
 	case "discord":
 		cfg.Gateway.Discord.BotToken = body.Token
-	default:
-		writeError(w, http.StatusBadRequest, errors.New("unknown channel"))
-		return
 	}
 	if err := config.Save(cfg); err != nil {
 		writeError(w, http.StatusInternalServerError, err)
@@ -489,5 +503,13 @@ func (s *Server) handleSetChannelToken(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]bool{"saved": true})
+	out := map[string]any{"ok": true, "bot": identity}
+	// Hand the new credential to the running gateway; only fall back to asking
+	// for a restart if it cannot take it.
+	if s.gateway != nil {
+		if err := s.gateway.Sync(id); err != nil {
+			out["restart_required"] = true
+		}
+	}
+	writeJSON(w, http.StatusOK, out)
 }

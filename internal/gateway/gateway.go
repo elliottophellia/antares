@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -63,6 +64,9 @@ type Manager struct {
 	mu       sync.RWMutex
 	adapters map[string]Adapter
 	cancels  map[string]context.CancelFunc
+	// baseCtx is the process lifetime, kept so Sync can start an adapter that
+	// was disabled at boot without waiting for a restart.
+	baseCtx context.Context
 }
 
 // NewManager builds a gateway manager.
@@ -74,16 +78,37 @@ func NewManager(cfg *config.Config, db store.Store, handler Handler) *Manager {
 	}
 }
 
+// SetConfig swaps in a reloaded configuration. Reload replaces the whole
+// config pointer, so without this the manager would keep reading the values it
+// was built with and Sync would reconcile against a stale file.
+func (m *Manager) SetConfig(cfg *config.Config) {
+	m.mu.Lock()
+	m.cfg = cfg
+	m.mu.Unlock()
+}
+
+// config returns the configuration currently in force.
+func (m *Manager) config() *config.Config {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.cfg
+}
+
 // Start launches every enabled platform and keeps it running until ctx ends.
 func (m *Manager) Start(ctx context.Context) {
-	if !m.cfg.Gateway.Enabled {
+	m.mu.Lock()
+	m.baseCtx = ctx
+	m.mu.Unlock()
+
+	cfg := m.config()
+	if !cfg.Gateway.Enabled {
 		slog.Debug("gateway disabled")
 		return
 	}
-	if tg := m.cfg.Gateway.Telegram; tg.Enabled && tg.BotToken != "" {
+	if tg := cfg.Gateway.Telegram; tg.Enabled && tg.BotToken != "" {
 		m.startAdapter(ctx, NewTelegram(tg, m))
 	}
-	if dc := m.cfg.Gateway.Discord; dc.Enabled && dc.BotToken != "" {
+	if dc := cfg.Gateway.Discord; dc.Enabled && dc.BotToken != "" {
 		m.startAdapter(ctx, NewDiscord(dc, m))
 	}
 }
@@ -121,6 +146,43 @@ func (m *Manager) startAdapter(ctx context.Context, a Adapter) {
 			}
 		}
 	}()
+}
+
+// Sync brings one platform in line with the current configuration: it stops a
+// running adapter and starts a fresh one when the platform should be live.
+// Without this, saving a token or flipping a switch in the dashboard only took
+// effect after restarting the process, which is a poor thing to ask of someone
+// who just pasted a token.
+func (m *Manager) Sync(platform string) error {
+	m.mu.RLock()
+	base := m.baseCtx
+	m.mu.RUnlock()
+	if base == nil {
+		return errors.New("the gateway has not started yet")
+	}
+
+	// Always tear the old connection down first: an adapter holds its token and
+	// enable flag from when it was constructed, so the only way to pick up a
+	// change is to build a new one.
+	m.Stop(platform)
+
+	cfg := m.config()
+	if !cfg.Gateway.Enabled {
+		return nil
+	}
+	switch platform {
+	case "telegram":
+		if tg := cfg.Gateway.Telegram; tg.Enabled && tg.BotToken != "" {
+			m.startAdapter(base, NewTelegram(tg, m))
+		}
+	case "discord":
+		if dc := cfg.Gateway.Discord; dc.Enabled && dc.BotToken != "" {
+			m.startAdapter(base, NewDiscord(dc, m))
+		}
+	default:
+		return fmt.Errorf("unknown platform %q", platform)
+	}
+	return nil
 }
 
 // Stop shuts down one platform.

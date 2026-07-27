@@ -290,6 +290,12 @@ func (rt *runtimeServices) reload() error {
 	}
 	rt.agent.SetSkills(rt.skills)
 
+	// The gateway holds its own pointer; without this it would keep reconciling
+	// against the configuration it was constructed with.
+	if rt.gateway != nil {
+		rt.gateway.SetConfig(cfg)
+	}
+
 	slog.Info("configuration reloaded", "model", cfg.Model.Default, "provider", cfg.Model.Provider)
 	return nil
 }

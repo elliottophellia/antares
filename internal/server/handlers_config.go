@@ -109,6 +109,9 @@ func (s *Server) applyReload() error {
 		cfg := config.Get()
 		s.SetConfig(cfg)
 		s.agent.SetConfig(cfg)
+		if s.gateway != nil {
+			s.gateway.SetConfig(cfg)
+		}
 		return nil
 	}
 	if err := s.reloadFn(); err != nil {
