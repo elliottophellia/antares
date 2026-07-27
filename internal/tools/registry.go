@@ -181,7 +181,7 @@ var Toolsets = map[string][]string{
 	"minimal": {"read_file", "list_files", "grep", "todo"},
 	"coding": {
 		"read_file", "write_file", "edit_file", "list_files", "glob", "grep",
-		"terminal", "todo", "skill", "delegate_task", "list_roles", "diagnostics",
+		"terminal", "todo", "skill", "delegate_task", "list_roles", "diagnostics", "http_request",
 	},
 	"research": {
 		"read_file", "web_search", "web_fetch", "http_request", "browser", "grep", "todo", "memory",

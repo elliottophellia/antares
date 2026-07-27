@@ -64,6 +64,9 @@ func (a *Agent) buildSystemPrompt(ctx context.Context, req Request, sess *store.
 		if hasTool(active, "delegate_task") && cfg.Delegation.Enabled {
 			b.WriteString("- Delegate self-contained research or parallel work with delegate_task; the sub-agent cannot see this conversation, so its prompt must stand alone.\n")
 		}
+		if hasTool(active, "http_request") {
+			b.WriteString("- For HTTP requests and API calls, use http_request rather than curl or wget in the terminal: it presents a real browser's TLS and HTTP/2 fingerprint, so endpoints behind bot-detection answer instead of refusing at the handshake.\n")
+		}
 	}
 
 	if a.skills != nil && cfg.Skills.Enabled {
