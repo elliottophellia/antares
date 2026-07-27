@@ -30,6 +30,7 @@ func init() {
 		transcribeTool{},
 		boardTool{},
 		computerTool{},
+		askUserTool{},
 		diagnosticsTool{},
 	} {
 		globalRegistry.Register(t)
