@@ -33,6 +33,7 @@ type chatOptions struct {
 	jsonOut     bool
 	model       string
 	toolset     string
+	role        string
 }
 
 func parseChatArgs(args []string) (chatOptions, error) {
@@ -67,6 +68,12 @@ func parseChatArgs(args []string) (chatOptions, error) {
 			}
 			i++
 			o.toolset = args[i]
+		case "-r", "--role":
+			if i+1 >= len(args) {
+				return o, errors.New("--role needs a name")
+			}
+			i++
+			o.role = args[i]
 		default:
 			if strings.HasPrefix(a, "-") && len(a) > 1 {
 				return o, fmt.Errorf("unknown flag %q — see `antares help`", a)
@@ -158,6 +165,7 @@ func (rt *runtimeServices) runOnce(ctx context.Context, opts *chatOptions, messa
 		Platform:  "cli",
 		Model:     opts.model,
 		Toolset:   opts.toolset,
+		Role:      opts.role,
 	}, func(e agent.Event) error {
 		if opts.jsonOut {
 			raw, err := json.Marshal(e)

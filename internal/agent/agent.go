@@ -3,6 +3,7 @@
 package agent
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
@@ -10,6 +11,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"os"
+	"os/exec"
 	"strings"
 	"sync"
 	"time"
@@ -674,6 +677,15 @@ func (a *Agent) subAgentFor(parent Request) tools.SubAgent {
 			return "", fmt.Errorf("maximum delegation depth (%d) reached", maxDepth)
 		}
 
+		// A top-level sub-agent may run in its own process, so a crash cannot
+		// take the parent down. Nested delegation stays in-process to avoid a
+		// fork storm; file-backed findings/intel/sessions flow either way.
+		if a.cfg.Delegation.Subprocess && depth == 1 {
+			untrack := trackSubAgent(sub.Role, sub.Prompt, parent.SessionID)
+			defer untrack()
+			return a.runSubprocess(ctx, sub)
+		}
+
 		// Isolation gives the sub-agent its own worktree so parallel workers on
 		// the same repository do not conflict. When it cannot be set up, the
 		// sub-agent shares the workspace rather than failing.
@@ -744,6 +756,55 @@ func (a *Agent) subAgentFor(parent Request) tools.SubAgent {
 		}
 		return res.Reply + note, nil
 	}
+}
+
+// runSubprocess delegates by invoking this binary as a child `antares chat`,
+// so a crash in the sub-agent is contained to the child. It reuses the parent's
+// environment (ANTARES_HOME, config), and file-backed findings/intel/sessions
+// carry state across the process boundary.
+func (a *Agent) runSubprocess(ctx context.Context, sub tools.SubAgentRequest) (string, error) {
+	self, err := os.Executable()
+	if err != nil {
+		return "", fmt.Errorf("subprocess delegation unavailable: %w", err)
+	}
+	prompt := sub.Prompt
+	if strings.TrimSpace(sub.SystemExtra) != "" {
+		prompt = sub.SystemExtra + "\n\n" + prompt
+	}
+	args := []string{"chat", "-q"}
+	if sub.Role != "" {
+		args = append(args, "--role", sub.Role)
+	}
+	if sub.Toolset != "" {
+		args = append(args, "--toolset", sub.Toolset)
+	}
+	if sub.Model != "" {
+		args = append(args, "--model", sub.Model)
+	}
+	args = append(args, prompt)
+
+	cmd := exec.CommandContext(ctx, self, args...)
+	cmd.Env = os.Environ()
+	var out, errBuf bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &out, &errBuf
+	if err := cmd.Run(); err != nil {
+		detail := strings.TrimSpace(errBuf.String())
+		if detail == "" {
+			detail = err.Error()
+		}
+		if a.roleperf != nil && sub.Role != "" {
+			a.roleperf.Record(roleperf.Outcome{Role: sub.Role, Success: false})
+		}
+		return "", fmt.Errorf("sub-agent process failed: %s", detail)
+	}
+	reply := strings.TrimSpace(out.String())
+	if a.roleperf != nil && sub.Role != "" {
+		a.roleperf.Record(roleperf.Outcome{Role: sub.Role, Success: reply != "", Kept: reply != ""})
+	}
+	if reply == "" {
+		return "(sub-agent finished without a final answer)", nil
+	}
+	return reply, nil
 }
 
 func (a *Agent) guardrailTripped(toolCalls int, emit Emit) bool {

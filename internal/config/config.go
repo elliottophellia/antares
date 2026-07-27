@@ -431,6 +431,11 @@ type Delegation struct {
 	MaxIterations int  `yaml:"max_iterations" json:"max_iterations"`
 	MaxDepth      int  `yaml:"max_depth" json:"max_depth"`
 	MaxParallel   int  `yaml:"max_parallel" json:"max_parallel"`
+	// Subprocess runs each top-level sub-agent as its own antares process
+	// instead of in-process, so a crashing sub-agent cannot take the parent
+	// down. Findings, intel, and sessions are file-backed, so state still
+	// flows. Off by default.
+	Subprocess bool `yaml:"subprocess" json:"subprocess"`
 }
 
 // CodeExecution bounds the sandboxed code tool.
