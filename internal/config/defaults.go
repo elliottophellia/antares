@@ -66,6 +66,10 @@ func Default() *Config {
 			Browser: Browser{
 				Enabled: true, Width: 1280, Height: 800,
 				UserDataDir: "~/.antares/browser",
+				// Stealth on by default: the patched Chromium passes
+				// bot-detection challenges, and it is fetched and verified once
+				// on first browser use.
+				Stealth: true,
 			},
 			Platform: map[string]string{
 				"cli": "default", "web": "default", "telegram": "default", "discord": "default",

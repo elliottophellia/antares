@@ -84,7 +84,7 @@ tools:
     headed: false                   # needs a display to be of any use
     width: 1280
     height: 800
-    stealth: false                  # anti-detection Chromium for guarded sites
+    stealth: true                   # anti-detection Chromium for guarded sites
     proxy: ""                       # http://host:3128 or socks5://host:1080
     timezone: ""                    # e.g. America/New_York
     locale: ""                      # e.g. en-US
@@ -122,16 +122,17 @@ and the like. A stock headless Chrome gives itself away: `navigator.webdriver`
 reads true, the canvas and WebGL fingerprints are the standard ones, and the
 challenge fails in milliseconds.
 
-Turn `stealth` on and the tool launches a source-patched Chromium built to pass
-those checks instead of the system browser. `navigator.webdriver` reads false,
-the fingerprint surfaces are seeded to look like an ordinary machine, and the
-platform is spoofed. Everything else — snapshot, click, type, the persisted
-page — works exactly the same.
+Stealth mode is **on by default**. The tool launches a source-patched Chromium
+built to pass those checks instead of the system browser: `navigator.webdriver`
+reads false, the fingerprint surfaces are seeded to look like an ordinary
+machine, and the platform is spoofed. Everything else — snapshot, click, type,
+the persisted page — works exactly the same. Set `stealth: false` to fall back
+to the system Chrome.
 
 ```yaml
 tools:
   browser:
-    stealth: true
+    stealth: true                    # the default
     proxy: socks5://127.0.0.1:1080   # optional
     timezone: America/New_York       # optional fingerprint spoof
     locale: en-US
