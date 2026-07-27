@@ -307,7 +307,7 @@ func (osintCensysTool) Execute(ctx context.Context, in Input) Result {
 	}
 	cred := osintKey(ctx, in, "censys", "CENSYS_CREDS")
 	if cred == "" || !strings.Contains(cred, ":") {
-		return Errorf("no Censys credentials — set them as osint:censys in the form \"id:secret\", then retry.")
+		return Errorf("no Censys credentials — add them on the API Keys page in Settings (as id:secret), then retry.")
 	}
 	auth := "Basic " + base64.StdEncoding.EncodeToString([]byte(cred))
 	var d struct {
@@ -373,7 +373,7 @@ func (osintIP2LocationTool) Execute(ctx context.Context, in Input) Result {
 	}
 	key := osintKey(ctx, in, "ip2location", "IP2LOCATION_API_KEY")
 	if key == "" {
-		return Errorf("no IP2Location key — set one as osint:ip2location, then retry.")
+		return Errorf("no IP2Location key — add it on the API Keys page in Settings, then retry.")
 	}
 	var d struct {
 		CountryName, RegionName, CityName, ISP, Domain, UsageType, ASN, As string

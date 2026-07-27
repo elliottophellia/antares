@@ -65,16 +65,14 @@ export default function KeysPage() {
               </div>
               <p className="text-sm text-muted-foreground">{k.description}</p>
               <p className="mt-1 text-[13px] text-muted-foreground">
-                <span className="text-foreground/70">How to get it:</span> {k.howto}{' '}
-                <a
-                  href={k.howto_url}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="inline-flex items-center gap-0.5 text-primary hover:underline"
-                >
-                  Open <ArrowSquareOut className="size-3" />
-                </a>
+                <span className="text-foreground/70">How to get it:</span> {k.howto}
               </p>
+              <a href={k.howto_url} target="_blank" rel="noopener noreferrer" className="mt-2 inline-block">
+                <Button variant="outline" size="sm" className="gap-1.5">
+                  Get {k.label} key
+                  <ArrowSquareOut className="size-3.5" />
+                </Button>
+              </a>
               <div className="mt-2 flex gap-2">
                 <Input
                   type="password"

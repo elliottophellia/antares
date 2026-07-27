@@ -187,7 +187,7 @@ func (osintEmailTool) Execute(ctx context.Context, in Input) Result {
 			fmt.Fprintf(&b, "Breaches: HIBP returned HTTP %d\n", status)
 		}
 	} else {
-		b.WriteString("Breaches: skipped — set an HIBP key with osint:hibp to enable.\n")
+		b.WriteString("Breaches: skipped — add an HIBP key on the API Keys page to enable.\n")
 	}
 	return Text(b.String())
 }
@@ -219,7 +219,7 @@ func (osintBreachTool) Execute(ctx context.Context, in Input) Result {
 	}
 	key := osintKey(ctx, in, "hibp", "HIBP_API_KEY")
 	if key == "" {
-		return Errorf("no HIBP API key — set one with the setting osint:hibp, then retry.")
+		return Errorf("no HIBP API key — add it on the API Keys page in Settings, then retry.")
 	}
 	var breaches []struct {
 		Name, Title, BreachDate, Domain string
@@ -276,7 +276,7 @@ func (osintVirusTotalTool) Execute(ctx context.Context, in Input) Result {
 	}
 	key := osintKey(ctx, in, "virustotal", "VT_API_KEY", "VIRUSTOTAL_API_KEY")
 	if key == "" {
-		return Errorf("no VirusTotal API key — set one with the setting osint:virustotal, then retry.")
+		return Errorf("no VirusTotal API key — add it on the API Keys page in Settings, then retry.")
 	}
 	kind, id := vtEndpoint(ind)
 	var d struct {
@@ -352,7 +352,7 @@ func (osintAbuseIPDBTool) Execute(ctx context.Context, in Input) Result {
 	}
 	key := osintKey(ctx, in, "abuseipdb", "ABUSEIPDB_API_KEY")
 	if key == "" {
-		return Errorf("no AbuseIPDB API key — set one with the setting osint:abuseipdb, then retry.")
+		return Errorf("no AbuseIPDB API key — add it on the API Keys page in Settings, then retry.")
 	}
 	var d struct {
 		Data struct {
@@ -412,7 +412,7 @@ func (osintShodanTool) Execute(ctx context.Context, in Input) Result {
 	}
 	key := osintKey(ctx, in, "shodan", "SHODAN_API_KEY")
 	if key == "" {
-		return Errorf("no Shodan API key — set one with the setting osint:shodan, then retry.")
+		return Errorf("no Shodan API key — add it on the API Keys page in Settings, then retry.")
 	}
 	var d struct {
 		Ports     []int    `json:"ports"`
