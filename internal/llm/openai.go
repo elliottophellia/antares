@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net/url"
 	"strings"
 )
 
@@ -20,13 +21,29 @@ func (c *openAIClient) Kind() string { return "openai" }
 func (c *openAIClient) headers() map[string]string {
 	h := map[string]string{}
 	if c.opts.APIKey != "" {
-		h["Authorization"] = "Bearer " + c.opts.APIKey
+		if c.vendor == "azure" {
+			// Azure authenticates with an api-key header, not a bearer token.
+			h["api-key"] = c.opts.APIKey
+		} else {
+			h["Authorization"] = "Bearer " + c.opts.APIKey
+		}
 	}
 	if strings.Contains(c.opts.BaseURL, "openrouter.ai") {
 		h["HTTP-Referer"] = "https://github.com/enowdev/antares"
 		h["X-Title"] = "Antares"
 	}
 	return h
+}
+
+// endpoint builds a request URL. Azure routes by deployment name (the model) in
+// the path and carries the api-version as a query parameter; everyone else
+// appends the path to the base URL.
+func (c *openAIClient) endpoint(path, model string) string {
+	if c.vendor == "azure" {
+		return fmt.Sprintf("%s/openai/deployments/%s%s?api-version=%s",
+			c.opts.BaseURL, url.PathEscape(model), path, url.QueryEscape(c.opts.APIVersion))
+	}
+	return c.opts.BaseURL + path
 }
 
 type oaMessage struct {
@@ -224,7 +241,7 @@ func (u *oaUsage) normalise() Usage {
 
 func (c *openAIClient) Chat(ctx context.Context, req Request) (*Response, error) {
 	var raw oaResponse
-	if err := c.opts.doJSON(ctx, "POST", c.opts.BaseURL+"/chat/completions", c.buildBody(req, false), c.headers(), &raw); err != nil {
+	if err := c.opts.doJSON(ctx, "POST", c.endpoint("/chat/completions", req.Model), c.buildBody(req, false), c.headers(), &raw); err != nil {
 		return nil, err
 	}
 	if raw.Error != nil {
@@ -252,7 +269,7 @@ func (c *openAIClient) Chat(ctx context.Context, req Request) (*Response, error)
 }
 
 func (c *openAIClient) Stream(ctx context.Context, req Request, emit func(Event) error) (*Response, error) {
-	httpResp, err := c.opts.do(ctx, "POST", c.opts.BaseURL+"/chat/completions", c.buildBody(req, true), c.headers())
+	httpResp, err := c.opts.do(ctx, "POST", c.endpoint("/chat/completions", req.Model), c.buildBody(req, true), c.headers())
 	if err != nil {
 		return nil, err
 	}
@@ -367,6 +384,11 @@ func (c *openAIClient) Stream(ctx context.Context, req Request, emit func(Event)
 }
 
 func (c *openAIClient) Models(ctx context.Context) ([]ModelInfo, error) {
+	if c.vendor == "azure" {
+		// Azure lists deployments through a management API, not /models; the
+		// user configures deployment names directly.
+		return nil, nil
+	}
 	var raw struct {
 		Data []struct {
 			ID            string `json:"id"`
@@ -423,7 +445,7 @@ func (c *openAIClient) Embed(ctx context.Context, model string, inputs []string)
 		} `json:"data"`
 	}
 	body := map[string]any{"model": model, "input": inputs}
-	if err := c.opts.doJSON(ctx, "POST", c.opts.BaseURL+"/embeddings", body, c.headers(), &raw); err != nil {
+	if err := c.opts.doJSON(ctx, "POST", c.endpoint("/embeddings", model), body, c.headers(), &raw); err != nil {
 		return nil, err
 	}
 	out := make([][]float32, len(inputs))

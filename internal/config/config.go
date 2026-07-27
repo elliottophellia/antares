@@ -74,6 +74,7 @@ type Provider struct {
 	Enabled     bool              `yaml:"enabled" json:"enabled"`
 	Label       string            `yaml:"label" json:"label"`
 	TimeoutSecs int               `yaml:"timeout_seconds" json:"timeout_seconds"`
+	APIVersion  string            `yaml:"api_version" json:"api_version"`
 }
 
 // Database picks the persistence driver.

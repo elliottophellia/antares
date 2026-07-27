@@ -84,7 +84,8 @@ func (a *Agent) resolveClient(modelOverride string) (client llm.Client, model, p
 	client, err = llm.New(llm.Options{
 		Kind: p.Kind, BaseURL: p.BaseURL, APIKey: p.APIKey,
 		Headers: p.Headers, Timeout: timeout, ProviderID: id,
-		Retries: retries,
+		Retries:    retries,
+		APIVersion: p.APIVersion,
 	})
 	if err != nil {
 		return nil, "", "", err
@@ -133,7 +134,7 @@ func (a *Agent) Models(ctx context.Context, providerID string) ([]llm.ModelInfo,
 	id, p := a.cfg.ResolveProvider(providerID)
 	client, err := llm.New(llm.Options{
 		Kind: p.Kind, BaseURL: p.BaseURL, APIKey: p.APIKey,
-		Headers: p.Headers, ProviderID: id, Timeout: 60 * time.Second,
+		Headers: p.Headers, ProviderID: id, Timeout: 60 * time.Second, APIVersion: p.APIVersion,
 	})
 	if err != nil {
 		return nil, err

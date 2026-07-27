@@ -38,6 +38,9 @@ type Options struct {
 	// RetryBaseDelay is the first backoff step; it doubles each attempt. Zero
 	// uses a sensible default.
 	RetryBaseDelay time.Duration
+	// APIVersion is the Azure OpenAI api-version query parameter. Ignored by
+	// other kinds.
+	APIVersion string
 }
 
 // New builds the adapter matching kind. Unknown kinds fall back to the
@@ -79,6 +82,14 @@ func newBase(o Options) (Client, error) {
 			o.BaseURL = "https://api.openai.com/v1"
 		}
 		return &openAIClient{opts: o, vendor: "openai"}, nil
+	case "azure", "azure-openai", "azureopenai":
+		if o.BaseURL == "" {
+			return nil, errors.New("base_url (the Azure resource endpoint, e.g. https://<resource>.openai.azure.com) is required for Azure OpenAI")
+		}
+		if o.APIVersion == "" {
+			o.APIVersion = "2024-10-21"
+		}
+		return &openAIClient{opts: o, vendor: "azure"}, nil
 	case "", "openai-compatible", "openai_compatible", "compat", "custom":
 		if o.BaseURL == "" {
 			return nil, errors.New("base_url is required for OpenAI-compatible providers")
