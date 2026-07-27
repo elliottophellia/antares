@@ -304,7 +304,7 @@ func (rt *runtimeServices) replCommand(ctx context.Context, opts *chatOptions, n
 		return true, nil
 	case "new", "clear":
 		opts.sessionID = ""
-		fmt.Println("Started a new session.\n")
+		fmt.Print("Started a new session.\n\n")
 		return false, nil
 	case "resume":
 		opts.sessionID = res.Action.Value
