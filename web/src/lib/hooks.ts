@@ -53,8 +53,9 @@ export function useApi<T>(path: string | null, deps: unknown[] = []): AsyncState
   return { data, loading, error, reload, setData }
 }
 
-/** Poll an endpoint on an interval; pauses while the tab is hidden. */
-export function usePoll<T>(path: string, intervalMs = 5000): AsyncState<T> {
+/** Poll an endpoint on an interval; pauses while the tab is hidden. A null path
+ *  disables fetching (and polling) until it becomes non-null. */
+export function usePoll<T>(path: string | null, intervalMs = 5000): AsyncState<T> {
   const state = useApi<T>(path)
   const reload = state.reload
 

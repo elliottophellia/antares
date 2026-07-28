@@ -38,14 +38,26 @@ func glamourStyle(t Theme, dark bool) ansi.StyleConfig {
 	cfg.Code.Prefix = ""
 	cfg.Code.Suffix = ""
 
-	// Headings in the accent, no filled background.
+	// Headings in the accent, no filled background, and — crucially — no literal
+	// "## "/"### " prefixes (Glamour's default), which otherwise leak into the
+	// output and look like unrendered markdown.
+	heading := func(h *ansi.StyleBlock, bold bool) {
+		h.Prefix = ""
+		h.Suffix = ""
+		h.Color = sp(accent)
+		h.BackgroundColor = nil
+		h.Bold = sp2(bold)
+	}
+	cfg.Heading.Prefix = ""
+	cfg.Heading.Suffix = ""
 	cfg.Heading.Color = sp(accent)
 	cfg.Heading.BackgroundColor = nil
-	cfg.H1.Color = sp(accent)
-	cfg.H1.BackgroundColor = nil
-	cfg.H1.Bold = sp2(true)
-	cfg.H2.Color = sp(accent)
-	cfg.H3.Color = sp(accent)
+	heading(&cfg.H1, true)
+	heading(&cfg.H2, true)
+	heading(&cfg.H3, true)
+	heading(&cfg.H4, false)
+	heading(&cfg.H5, false)
+	heading(&cfg.H6, false)
 
 	// List bullets / numbers in the accent.
 	cfg.Item.Color = sp(accent)

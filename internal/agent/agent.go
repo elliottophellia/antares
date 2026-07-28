@@ -46,9 +46,14 @@ const (
 	EventUsage        EventType = "usage"
 	EventNotice       EventType = "notice"
 	EventApproval     EventType = "approval"
+	EventReset        EventType = "reset" // discard the partial assistant turn (before a retry)
 	EventError        EventType = "error"
 	EventDone         EventType = "done"
 )
+
+// modelTurnRetries is how many times a turn is re-issued when the provider
+// returns a transient, explicitly-retryable error after streaming began.
+const modelTurnRetries = 2
 
 // Event is one streamed update. Fields are populated per Type.
 type Event struct {
@@ -295,15 +300,18 @@ func (a *Agent) Run(ctx context.Context, req Request, emit Emit) (*Result, error
 	}
 
 	var (
-		total     llm.Usage
-		lastReply string
-		turn      int
-		toolCalls int
-		verified  int
-		judged    int
-		failures  []toolFailure // errored tool calls, for post-turn learning
+		total      llm.Usage
+		lastReply  string
+		turn       int
+		toolCalls  int
+		verified   int
+		judged     int
+		usedTodo   bool // the model kept a task list this run
+		todoNudges int  // times we pushed it to finish open tasks
+		failures   []toolFailure // errored tool calls, for post-turn learning
 	)
 	repeats := newRepeatTracker(cfg.Agent.RepeatLimit)
+	todoOpenPrev := -1 // open task count at the last nudge, to detect no progress
 	goal, hasGoal := a.GetGoal(ctx, sess.ID)
 	if hasGoal && (goal.Paused || goal.Done) {
 		hasGoal = false
@@ -336,6 +344,19 @@ func (a *Agent) Run(ctx context.Context, req Request, emit Emit) (*Result, error
 		}
 
 		resp, err := a.callModel(runCtx, client, llmReq, cfg.Streaming.Enabled, emit)
+		// A transient provider glitch (e.g. truncated/malformed tool_call
+		// arguments — "please retry") can slip past the client's own retry once
+		// tokens have streamed. Retry the whole turn here, telling the UI to
+		// discard the partial reply first so nothing is shown twice.
+		for att := 0; err != nil && att < modelTurnRetries && llm.Retryable(err) && runCtx.Err() == nil; att++ {
+			_ = emit(Event{Type: EventReset})
+			_ = emit(Event{Type: EventNotice, Message: "provider glitch — retrying"})
+			select {
+			case <-runCtx.Done():
+			case <-time.After(time.Duration(att+1) * 800 * time.Millisecond):
+			}
+			resp, err = a.callModel(runCtx, client, llmReq, cfg.Streaming.Enabled, emit)
+		}
 		if err != nil {
 			if errors.Is(err, context.Canceled) {
 				_ = emit(Event{Type: EventNotice, Message: "interrupted"})
@@ -378,9 +399,30 @@ func (a *Agent) Run(ctx context.Context, req Request, emit Emit) (*Result, error
 				history = append(history, llm.Message{Role: llm.RoleUser, Content: follow})
 				continue
 			}
+			// Auto-continue: never stop with tasks still open. If the model kept
+			// a todo list this run and left items unfinished, push it to keep
+			// going instead of ending the turn to ask "should I continue?".
+			// Only nudge while it is still closing items out: if a nudge did not
+			// reduce the open count, it will not, so stop rather than spam. A
+			// hard cap bounds the total either way.
+			if !req.Quiet && req.Depth == 0 && usedTodo && todoNudges < maxTodoNudges {
+				open := a.incompleteTodos(runCtx, sess.ID)
+				if open > 0 && (todoOpenPrev < 0 || open < todoOpenPrev) {
+					todoNudges++
+					todoOpenPrev = open
+					_ = emit(Event{Type: EventNotice, Message: fmt.Sprintf("%d task(s) still open — continuing", open)})
+					history = append(history, llm.Message{Role: llm.RoleUser, Content: todoContinueMessage(open)})
+					continue
+				}
+			}
 			break
 		}
 
+		for _, tc := range resp.ToolCalls {
+			if tc.Name == "todo" {
+				usedTodo = true
+			}
+		}
 		toolCalls += len(resp.ToolCalls)
 		if a.guardrailTripped(toolCalls, emit) {
 			history = append(history, llm.Message{

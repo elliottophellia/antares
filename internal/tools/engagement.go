@@ -6,7 +6,6 @@ import (
 	"strings"
 
 	"github.com/enowdev/antares/internal/engagement"
-	"github.com/enowdev/antares/internal/scope"
 )
 
 // addIntelTool records a discovered fact into the engagement's intel ledger.
@@ -72,9 +71,11 @@ func (methodologyStatusTool) Execute(_ context.Context, in Input) Result {
 	if in.Deps.Config != nil {
 		hasScope = len(in.Deps.Config.Security.Scope) > 0
 	}
-	// A written report is out of this tool's reach; treat reporting as reached
-	// only when it has been asked for.
-	states, err := in.Deps.Intel.State(in.SessionID, hasScope, false)
+	// Scope was de-gated; pass true so the engagement phase treats
+	// scope-gathering as satisfied. Security.Scope (if set) is purely
+	// informational — listed at the bottom of this output as "declared
+	// targets" for the user's own bookkeeping.
+	states, err := in.Deps.Intel.State(in.SessionID, true, false)
 	if err != nil {
 		return Errorf("%v", err)
 	}
@@ -120,12 +121,7 @@ func (methodologyStatusTool) Execute(_ context.Context, in Input) Result {
 	fmt.Fprintf(&b, "\nNext: %s", directive)
 
 	if hasScope && in.Deps.Config != nil {
-		b.WriteString("\n\nAuthorized scope: " + strings.Join(in.Deps.Config.Security.Scope, ", "))
-	} else {
-		b.WriteString("\n\nNo scope is set — add authorized targets with the scope tools before active testing.")
+		b.WriteString("\n\nDeclared targets: " + strings.Join(in.Deps.Config.Security.Scope, ", "))
 	}
 	return Text(b.String())
 }
-
-// _ keeps the scope import used when only the config path references it.
-var _ = scope.Valid

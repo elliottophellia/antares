@@ -1,6 +1,7 @@
 package server
 
 import (
+	"errors"
 	"net/http"
 
 	"github.com/enowdev/antares/internal/board"
@@ -64,4 +65,33 @@ func (s *Server) handleBoard(w http.ResponseWriter, r *http.Request) {
 		cols = append(cols, column{Name: name, Cards: cards})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"columns": cols})
+}
+
+// handleBoardRemoveCard deletes a single card from a session's board.
+func (s *Server) handleBoardRemoveCard(w http.ResponseWriter, r *http.Request) {
+	session := r.URL.Query().Get("session")
+	id := r.URL.Query().Get("id")
+	if session == "" || id == "" {
+		writeError(w, http.StatusBadRequest, errors.New("session and id are required"))
+		return
+	}
+	if _, err := boardStore().Remove(session, id); err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+// handleBoardClear removes an entire session board.
+func (s *Server) handleBoardClear(w http.ResponseWriter, r *http.Request) {
+	session := r.URL.Query().Get("session")
+	if session == "" {
+		writeError(w, http.StatusBadRequest, errors.New("session is required"))
+		return
+	}
+	if err := boardStore().Clear(session); err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }

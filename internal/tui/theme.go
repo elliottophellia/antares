@@ -24,11 +24,12 @@ func c(light, dark string) lipgloss.AdaptiveColor {
 	return lipgloss.AdaptiveColor{Light: light, Dark: dark}
 }
 
-// themes: the default is a grey/black scheme (like OpenCode) with a restrained
-// warm-orange accent. The rest change only the accent + neutral temperature.
+// themes: the default "antares" is a grey/black scheme with a restrained
+// warm-orange accent (after the red supergiant star). The rest change only the
+// accent + neutral temperature.
 var themes = map[string]Theme{
-	"opencode": {
-		Name:   "opencode",
+	"antares": {
+		Name:   "antares",
 		Accent: c("#C2410C", "#FAB283"),
 		Text:   c("#24283B", "#CBD2E0"), Muted: c("#5C6370", "#8B93A7"), Faint: c("#9CA3AF", "#5A6172"),
 		Border: c("#E4E4E7", "#2A2E3A"), Green: c("#3F7A3F", "#9ECE6A"), Red: c("#B4413A", "#F7768E"), Yellow: c("#B45309", "#E0AF68"),
@@ -65,7 +66,13 @@ var themes = map[string]Theme{
 	},
 }
 
-const defaultTheme = "opencode"
+const defaultTheme = "antares"
+
+// ThemeNames lists the available theme names (exported for the CLI).
+func ThemeNames() []string { return themeNames() }
+
+// ThemeExists reports whether a theme name is known (exported for the CLI).
+func ThemeExists(name string) bool { _, ok := themes[name]; return ok }
 
 func themeByName(name string) Theme {
 	if t, ok := themes[name]; ok {

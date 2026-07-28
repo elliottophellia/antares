@@ -65,6 +65,24 @@ export const put = <T,>(path: string, data?: unknown) =>
   api<T>(path, { method: 'PUT', body: data === undefined ? undefined : JSON.stringify(data) })
 export const del = <T,>(path: string) => api<T>(path, { method: 'DELETE' })
 
+/** Fetch a file endpoint (with auth) and trigger a browser download. */
+export async function downloadFile(path: string, filename: string): Promise<void> {
+  const res = await fetch(`/api${path}`, { headers: { ...authHeaders() } })
+  if (!res.ok) {
+    const text = await res.text().catch(() => '')
+    throw new ApiError(res.status, text || res.statusText)
+  }
+  const blob = await res.blob()
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = filename
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+  URL.revokeObjectURL(url)
+}
+
 /* ---------- Streaming ---------- */
 
 export interface StreamEvent {

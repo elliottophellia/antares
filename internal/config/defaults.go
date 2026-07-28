@@ -63,7 +63,7 @@ func Default() *Config {
 		Tools: Tools{
 			Toolset: "default", ApprovalMode: "auto", MaxOutputChars: 60000,
 			Timeouts:  map[string]int{"terminal": 300, "web_fetch": 60, "web_search": 30},
-			WebSearch: WebSearch{Provider: "duckduckgo", MaxResults: 8},
+			WebSearch: WebSearch{Provider: "browser", MaxResults: 8},
 			Browser: Browser{
 				Enabled: true, Width: 1280, Height: 800,
 				UserDataDir: "~/.antares/browser",

@@ -28,7 +28,8 @@ func (a *Agent) buildSystemPrompt(ctx context.Context, req Request, sess *store.
 
 - Act on the request as asked. Do the whole task, not just the easy part.
 - Prefer using your tools to find out rather than guessing or asking. Read the file, run the command, search the web.
-- When a task needs several steps, keep a task list with the todo tool so progress stays visible.
+- When a task needs several steps, keep a task list with the todo tool so progress stays visible. Every todo write REPLACES the whole list, so send the full list each time and keep already-finished items marked completed — never drop items or reset their status.
+- Work the task list to the end in one turn: mark an item in_progress, finish it, mark it completed, then go straight to the next — without stopping. Do NOT end your turn or ask "should I continue?", "shall I proceed?", or "let me know if you want me to go on" between steps. Keep working until every item is completed. Stop only when the whole list is done, or when you are genuinely blocked on something only the user can resolve (a missing secret, an ambiguous requirement, an irreversible/destructive choice) — and then say exactly what you need. Needing confirmation to continue is not a real blocker; finishing the tasks is the job.
 - Report outcomes honestly. If a command failed, say so and show the output. Never claim work you did not verify.
 - Be concise. Skip preamble and restating the question; lead with the answer or the result.
 - Match the user's language. If they write Indonesian, answer in Indonesian.
@@ -71,6 +72,9 @@ func (a *Agent) buildSystemPrompt(ctx context.Context, req Request, sess *store.
 		if hasTool(active, "http_request") {
 			b.WriteString("- For HTTP requests and API calls, prefer http_request: it presents a real browser's TLS and HTTP/2 fingerprint, so endpoints behind bot-detection answer, and it returns the status, headers, and body as structured output. (curl and wget in the terminal are routed through the same fingerprinted client, so they work too.)\n")
 		}
+		if hasTool(active, "web_fetch") || hasTool(active, "http_request") {
+			b.WriteString("- When you are handed a target — a URL, host, or app to inspect or assess — go straight at it: fetch it with web_fetch, drive requests against it with http_request, and crawl, enumerate, or scan it with your terminal tools. web_search only finds background information about something you do not have; never use it to \"look up\" a target you were already given, and if a search fails, switch to probing the target directly instead of searching again.\n")
+		}
 	}
 
 	// When an assessment is under way, its methodology state is pushed into every
@@ -94,6 +98,8 @@ func (a *Agent) buildSystemPrompt(ctx context.Context, req Request, sess *store.
 			b.WriteString("\n## What you remember\n\n")
 			b.WriteString(mem)
 		}
+		// Lessons the agent learned from its own past mistakes.
+		b.WriteString(a.lessonsBlock(ctx))
 	}
 
 	if s := strings.TrimSpace(cfg.Agent.SystemPromptExtra); s != "" {
@@ -126,7 +132,11 @@ func (a *Agent) methodologyBlock(sessionID string) string {
 		return ""
 	}
 
-	hasScope := len(a.cfg.Security.Scope) > 0
+	// Scope is no longer a gate (the /scope command and scope_check tool were
+	// removed). The engagement state machine still takes a hasScope flag for
+	// its scope-gathering phase; pass true so that phase is always considered
+	// satisfied.
+	hasScope := true
 	hasReport := false
 	if a.findings != nil {
 		if f, err := a.findings.List(sessionID); err == nil && len(f) > 0 {

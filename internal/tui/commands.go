@@ -29,8 +29,9 @@ func init() {
 		{"new", "Start a fresh session", (*Model).cmdNew},
 		{"sessions", "List recent sessions", (*Model).cmdSessions},
 		{"resume", "Resume a session by id", (*Model).cmdResume},
-		{"model", "Show or set the active model", (*Model).cmdModel},
-		{"theme", "Show or set the colour theme", (*Model).cmdTheme},
+		{"model", "Pick the active model", (*Model).cmdModel},
+		{"provider", "Connect or switch a provider", (*Model).cmdProvider},
+		{"theme", "Pick the colour theme (Ctrl+T)", (*Model).cmdTheme},
 		{"reasoning", "Toggle reasoning display", (*Model).cmdReasoning},
 		{"clear", "Clear the transcript", (*Model).cmdClear},
 		{"stop", "Interrupt the current turn", (*Model).cmdStop},
@@ -78,6 +79,7 @@ func (m *Model) acceptCompletion() {
 	c := m.palette[m.paletteSel]
 	m.ta.SetValue("/" + c.Name + " ")
 	m.ta.CursorEnd()
+	m.syncCursor()
 	m.palette = nil
 }
 
@@ -118,43 +120,26 @@ func (m *Model) cmdNew(string) (bool, tea.Cmd) {
 	m.blocks = nil
 	m.greet()
 	m.setStatus("new session")
-	return false, nil
+	return false, m.welcomeTick()
 }
 
 func (m *Model) cmdClear(string) (bool, tea.Cmd) {
 	m.blocks = nil
 	m.greet()
-	return false, nil
+	return false, m.welcomeTick()
 }
 
 func (m *Model) cmdTheme(args string) (bool, tea.Cmd) {
 	if args == "" {
-		var b strings.Builder
-		b.WriteString("Themes (use /theme <name>):\n")
-		for _, n := range themeNames() {
-			mark := "  "
-			if n == m.themeName {
-				mark = "❯ "
-			}
-			b.WriteString(mark + n + "\n")
-		}
-		m.pushSystem(strings.TrimRight(b.String(), "\n"))
+		m.openThemePicker() // interactive, clickable picker
 		return false, nil
 	}
 	if _, ok := themes[args]; !ok {
-		m.pushSystem("Unknown theme " + args + ". Try /theme to list.")
+		m.pushSystem("Unknown theme " + args + ". Try /theme to pick.")
 		return false, nil
 	}
-	m.themeName = args
-	m.st = newStyles(themeByName(args))
-	m.buildRenderer(m.vp.Width - 4)
-	m.cache = nil
-	if m.cfg != nil {
-		m.cfg.Display.Theme = args
-		if m.ag != nil {
-			m.ag.SetConfig(m.cfg)
-		}
-	}
+	m.applyTheme(args)
+	m.persistTheme(args)
 	m.setStatus("theme → " + args)
 	return false, nil
 }
@@ -190,22 +175,27 @@ func (m *Model) cmdWeb(string) (bool, tea.Cmd) {
 
 func (m *Model) cmdModel(args string) (bool, tea.Cmd) {
 	if args == "" {
-		model, provider := "—", ""
-		if m.cfg != nil {
-			model, provider = m.cfg.Model.Default, m.cfg.Model.Provider
-		}
-		m.pushSystem(fmt.Sprintf("Model: %s · %s (use /model <name> to change)", model, provider))
-		return false, nil
+		return false, m.openModelPicker()
 	}
 	if m.cfg == nil {
 		return false, nil
 	}
 	m.cfg.Model.Default = args
-	if m.ag != nil {
-		m.ag.SetConfig(m.cfg)
-	}
+	m.saveConfig()
 	m.setStatus("model → " + args)
 	m.pushSystem("Model set to " + args)
+	return false, nil
+}
+
+func (m *Model) cmdProvider(args string) (bool, tea.Cmd) {
+	if args == "" {
+		m.openProviderPicker()
+		return false, nil
+	}
+	if m.cfg == nil {
+		return false, nil
+	}
+	m.selectProvider(args)
 	return false, nil
 }
 

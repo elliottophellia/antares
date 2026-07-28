@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
-import { ShieldCheck, Warning } from '@phosphor-icons/react'
-import { get } from '@/lib/api'
+import { DownloadSimple, ShieldCheck, Warning } from '@phosphor-icons/react'
+import { downloadFile, get } from '@/lib/api'
 import { useApi } from '@/lib/hooks'
 import { useI18n } from '@/lib/i18n'
 import { PageBody } from '@/components/layout/AppShell'
@@ -118,6 +118,21 @@ export default function EngagementPage() {
               </option>
             ))}
           </select>
+          <button
+            type="button"
+            disabled={!active}
+            onClick={() => {
+              const title = sessions.find((s) => s.id === active)?.title || 'Security Assessment'
+              downloadFile(
+                `/engagement/report?session=${encodeURIComponent(active)}&title=${encodeURIComponent(title)}`,
+                `report-${active}.md`,
+              ).catch(() => {})
+            }}
+            className="ml-auto inline-flex h-8 items-center gap-1 rounded-[var(--radius-sm)] border border-border px-2 text-xs text-muted-foreground transition hover:bg-muted hover:text-foreground disabled:opacity-40"
+          >
+            <DownloadSimple className="size-3.5" />
+            {t('engagement.downloadReport')}
+          </button>
         </div>
 
         {/* Methodology */}

@@ -141,7 +141,6 @@ func init() {
 	register(Spec{Name: "roles", Summary: "List the specialist roles available", Surfaces: anywhere}, cmdRoles)
 	register(Spec{Name: "team", Summary: "How the specialist roles have performed", Surfaces: anywhere}, cmdTeam)
 	register(Spec{Name: "role", Args: "[name]", Summary: "Run this conversation as a specialist role", Surfaces: anywhere}, cmdRole)
-	register(Spec{Name: "scope", Args: "[add|remove|list|check] [target]", Summary: "Manage the authorized security-testing scope", Surfaces: anywhere}, cmdScope)
 	register(Spec{Name: "findings", Args: "[remove|clear] [id]", Summary: "List the current engagement's findings", Surfaces: anywhere}, cmdFindings)
 	register(Spec{Name: "report", Args: "[title]", Summary: "Compile the engagement's findings into a report", Surfaces: anywhere}, cmdReport)
 	register(Spec{Name: "engagement", Args: "[intel|clear]", Summary: "Show the security assessment's progress", Surfaces: anywhere}, cmdEngagement)

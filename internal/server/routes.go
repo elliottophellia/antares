@@ -148,8 +148,11 @@ func (s *Server) routes() {
 
 	m.HandleFunc("GET /api/engagement/sessions", s.handleEngagementSessions)
 	m.HandleFunc("GET /api/engagement", s.handleEngagement)
+	m.HandleFunc("GET /api/engagement/report", s.handleEngagementReport)
 	m.HandleFunc("GET /api/board/sessions", s.handleBoardSessions)
 	m.HandleFunc("GET /api/board", s.handleBoard)
+	m.HandleFunc("DELETE /api/board/card", s.handleBoardRemoveCard)
+	m.HandleFunc("DELETE /api/board", s.handleBoardClear)
 	m.HandleFunc("POST /api/pairing/approve", s.handleApprovePairing)
 	m.HandleFunc("POST /api/pairing/revoke", s.handleRevokePairing)
 

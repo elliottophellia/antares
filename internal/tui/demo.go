@@ -1,8 +1,10 @@
 package tui
 
 import (
+	"github.com/charmbracelet/bubbles/cursor"
 	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/textarea"
+	"github.com/charmbracelet/lipgloss"
 
 	"github.com/enowdev/antares/internal/config"
 )
@@ -23,6 +25,8 @@ func NewDemo() *Model {
 	ta.SetHeight(1)
 	ta.Focus()
 	ta.KeyMap.InsertNewline.SetEnabled(false)
+	ta.Cursor.Style = lipgloss.NewStyle().Foreground(themeByName(defaultTheme).Accent)
+	ta.Cursor.SetMode(cursor.CursorHide)
 
 	sp := spinner.New()
 	sp.Spinner = spinner.Dot
@@ -65,6 +69,58 @@ func (m *Model) demoReply(text string) {
 		block{kind: blockReasoning, done: true, text: "This is a preview build — echoing a canned reply so the layout can be seen without a live model."},
 		block{kind: blockAssistant, done: true, text: "**Preview mode** — no model is attached.\n\nYou typed:\n\n> " + text + "\n\nEverything you see here (sidebar, Markdown, tools, reasoning) is rendered by the real TUI. Toggle reasoning with **Ctrl+R**, scroll with **PgUp/PgDn**, and try **/help**."},
 	)
+}
+
+// RenderWelcomeFrame renders the empty-state splash at a given animation frame —
+// used by the screenshot tool to preview the welcome screen.
+func RenderWelcomeFrame(w, h, frame int) string {
+	m := NewDemo()
+	m.blocks = nil
+	m.title, m.sessionID = "", ""
+	m.welcomeFrame = frame
+	m.width, m.height = w, h
+	m.ready = true
+	m.layout()
+	m.refreshTranscript()
+	return m.View()
+}
+
+// RenderThemeModalFrame renders the demo with the theme picker open — used by
+// the screenshot tool to preview the modal.
+func RenderThemeModalFrame(w, h int) string {
+	m := NewDemo()
+	m.width, m.height = w, h
+	m.ready = true
+	m.layout()
+	m.refreshTranscript()
+	m.openThemePicker()
+	return m.View()
+}
+
+// RenderProviderModalFrame previews the provider picker.
+func RenderProviderModalFrame(w, h int) string {
+	m := NewDemo()
+	m.width, m.height = w, h
+	m.ready = true
+	m.layout()
+	m.refreshTranscript()
+	m.openProviderPicker()
+	return m.View()
+}
+
+// RenderModelModalFrame previews the model picker with a seeded provider.
+func RenderModelModalFrame(w, h int) string {
+	m := NewDemo()
+	m.cfg.Providers = map[string]config.Provider{
+		"anthropic": {Kind: "anthropic", Enabled: true,
+			Models: []string{"claude-opus-5", "claude-sonnet-5", "claude-haiku-4-5"}},
+	}
+	m.width, m.height = w, h
+	m.ready = true
+	m.layout()
+	m.refreshTranscript()
+	m.openModelPicker()
+	return m.View()
 }
 
 // RenderDemoFrame renders a single demo frame at the given size — used by the

@@ -19,7 +19,6 @@ func cmdEngagement(_ context.Context, d Deps, in Input) (Result, error) {
 		return Result{}, errors.New("there is no engagement in this conversation yet")
 	}
 	store := d.Agent.Intel()
-	cfg := d.config()
 
 	verb := strings.ToLower(strings.TrimSpace(in.Args))
 	if verb == "clear" {
@@ -48,12 +47,11 @@ func cmdEngagement(_ context.Context, d Deps, in Input) (Result, error) {
 		return Result{Output: b.String()}, nil
 	}
 
-	hasScope := len(cfg.Security.Scope) > 0
-	states, err := store.State(in.SessionID, hasScope, false)
+	// Scope was de-gated; treat the scope-gathering phase as always satisfied.
+	states, err := store.State(in.SessionID, true, false)
 	if err != nil {
 		return Result{}, err
 	}
-
 	var b strings.Builder
 	b.WriteString("**Engagement progress**\n\n")
 	for _, st := range states {
@@ -69,9 +67,6 @@ func cmdEngagement(_ context.Context, d Deps, in Input) (Result, error) {
 	}
 	_, directive := engagement.NextStep(states)
 	fmt.Fprintf(&b, "\n%s\n", directive)
-	if !hasScope {
-		b.WriteString("\n_No authorized scope is set. Add one with `/scope add <target>`._")
-	}
 	b.WriteString("\n`/engagement intel` lists the facts recorded.")
 	return Result{Output: b.String()}, nil
 }

@@ -108,7 +108,7 @@ var enums = map[string][]string{
 	"logging.level":             {"debug", "info", "warn", "error"},
 	"agent.reasoning_effort":    {"none", "low", "medium", "high"},
 	"model.reasoning_effort":    {"none", "low", "medium", "high"},
-	"tools.web_search.provider": {"duckduckgo", "brave", "tavily", "searxng", "none"},
+	"tools.web_search.provider": {"browser", "brave", "tavily", "searxng", "none"},
 }
 
 var help = map[string]string{

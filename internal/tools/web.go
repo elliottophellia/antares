@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/enowdev/antares/internal/config"
 	"github.com/enowdev/antares/internal/version"
 )
 
@@ -187,7 +188,10 @@ func (webSearchTool) Execute(ctx context.Context, in Input) Result {
 	case "searxng":
 		results, err = searxngSearch(ctx, cfg.BaseURL, query, args.MaxResults)
 	default:
-		results, err = duckDuckGoSearch(ctx, query, args.MaxResults)
+		// Default (and legacy "duckduckgo") route through the stealth browser,
+		// which resolves and renders past DNS filters and bot-detection that
+		// block a plain HTTP search client.
+		results, err = browserSearch(ctx, in.SessionID, in.Deps.Config, query, args.MaxResults)
 	}
 	if err != nil {
 		return Errorf("search failed: %v", err)
@@ -316,46 +320,41 @@ func searxngSearch(ctx context.Context, base, q string, n int) ([]searchResult, 
 	return out, nil
 }
 
-var reDDGResult = regexp.MustCompile(`(?s)<a[^>]+class="result__a"[^>]*href="([^"]+)"[^>]*>(.*?)</a>.*?class="result__snippet"[^>]*>(.*?)</a>`)
+// browserSearch runs a query through the stealth browser (proxy + real
+// rendering), so it works where a plain HTTP client is blocked at the DNS
+// resolver or by bot-detection. It scrapes Bing, whose result markup is stable
+// and which does not scrub sensitive queries as aggressively as Google.
+func browserSearch(ctx context.Context, sessionID string, cfg *config.Config, q string, n int) ([]searchResult, error) {
+	s := sessionFor(sessionID, cfg)
+	if err := s.Start(ctx); err != nil {
+		return nil, fmt.Errorf("browser unavailable: %w", err)
+	}
+	if err := s.Navigate(ctx, "https://www.bing.com/search?q="+url.QueryEscape(q)); err != nil {
+		return nil, err
+	}
+	_ = s.WaitReady(ctx, 15*time.Second)
 
-// duckDuckGoSearch scrapes the keyless HTML endpoint; it is the zero-config default.
-func duckDuckGoSearch(ctx context.Context, q string, n int) ([]searchResult, error) {
-	form := url.Values{"q": {q}}
-	req, err := http.NewRequestWithContext(ctx, "POST", "https://html.duckduckgo.com/html/", strings.NewReader(form.Encode()))
+	// Pull the organic results straight from the DOM as JSON.
+	const js = `(() => {
+	  const out = [];
+	  document.querySelectorAll('li.b_algo').forEach(li => {
+	    const a = li.querySelector('h2 a');
+	    if (!a || !a.href) return;
+	    const p = li.querySelector('.b_caption p') || li.querySelector('p');
+	    out.push({ title: (a.innerText||'').trim(), url: a.href, snippet: p ? (p.innerText||'').trim() : '' });
+	  });
+	  return JSON.stringify(out);
+	})()`
+	raw, err := s.EvalString(ctx, js)
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	req.Header.Set("User-Agent", "Mozilla/5.0 (compatible; "+version.UserAgent()+")")
-
-	resp, err := webClient.Do(req)
-	if err != nil {
-		return nil, err
+	var out []searchResult
+	if err := json.Unmarshal([]byte(raw), &out); err != nil {
+		return nil, fmt.Errorf("could not parse search results: %w", err)
 	}
-	defer resp.Body.Close()
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
-	if err != nil {
-		return nil, err
-	}
-	if resp.StatusCode >= 400 {
-		return nil, fmt.Errorf("HTTP %d", resp.StatusCode)
-	}
-
-	matches := reDDGResult.FindAllStringSubmatch(string(body), n)
-	out := make([]searchResult, 0, len(matches))
-	for _, m := range matches {
-		link := m[1]
-		// DuckDuckGo wraps results in a redirect carrying the real target in uddg.
-		if parsed, err := url.Parse(link); err == nil {
-			if real := parsed.Query().Get("uddg"); real != "" {
-				link = real
-			}
-		}
-		out = append(out, searchResult{
-			Title:   strings.TrimSpace(htmlToText(m[2])),
-			URL:     link,
-			Snippet: strings.TrimSpace(htmlToText(m[3])),
-		})
+	if len(out) > n {
+		out = out[:n]
 	}
 	return out, nil
 }

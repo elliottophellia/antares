@@ -16,3 +16,4 @@ internal/server/dist/*
 .env
 .env.local
 /antares
+/tuishot

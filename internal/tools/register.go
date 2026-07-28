@@ -19,7 +19,6 @@ func init() {
 		taskTool{},
 		browserTool{},
 		listRolesTool{},
-		scopeCheckTool{},
 		reportFindingTool{},
 		triageFindingTool{},
 		addIntelTool{},
@@ -33,6 +32,34 @@ func init() {
 		askUserTool{},
 		scheduleTool{},
 		diagnosticsTool{},
+		// Native OSINT reconnaissance toolset.
+		osintDNSTool{}, osintDorksTool{}, osintWhoisTool{}, osintIPTool{}, osintUsernameTool{},
+		osintGithubTool{}, osintEmailTool{}, osintBreachTool{}, osintReputationTool{},
+		osintShodanTool{}, osintCryptoTool{},
+		// Dependency gate: report missing prerequisites, never auto-install.
+		dependenciesTool{},
+		// Native reverse-engineering toolset (radare2/Ghidra gated).
+		reInfoTool{}, reStringsTool{}, reAnalyzeTool{}, reDecompileTool{},
+		// OSINT (extended).
+		osintDomainTool{}, osintPhoneTool{}, osintScrapeTool{}, osintPasteTool{},
+		osintFootprintTool{}, osintDorksLiveTool{},
+		// Anti-detect CAPTCHA solver (reuses the stealth browser).
+		solveCaptchaTool{},
+		// Native MITM intercept proxy.
+		interceptTool{},
+		// Offensive-security script wrappers (CyberStrike port). Each spawns
+		// a bundled Python/PowerShell program; all require approval.
+		newAttackScriptTool(),
+		newAwshookTool(),
+		newAzurehookTool(),
+		newKubehookTool(),
+		newWinhookTool(),
+		newMachookTool(),
+		newCipipeTool(),
+		newEbpfTool(),
+		// Autonomous web crawler (CyberStrike port). Captures every HTTP
+		// request a target issues as the agent drives a real browser.
+		hackbrowserTool{},
 	} {
 		globalRegistry.Register(t)
 	}

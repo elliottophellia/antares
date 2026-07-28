@@ -414,8 +414,9 @@ type todoTool struct{}
 
 func (todoTool) Name() string { return "todo" }
 func (todoTool) Description() string {
-	return "Track a task list for the current session. Write the full list each time you update it. " +
-		"Use it for multi-step work so progress stays visible."
+	return "Track a task list for the current session. On every write you MUST send the ENTIRE list — " +
+		"the tool replaces it wholesale, so keep already-completed items marked \"completed\" and never drop items. " +
+		"Mark each finished item \"completed\" as you go. Use it for multi-step work so progress stays visible."
 }
 func (todoTool) Schema() map[string]any {
 	return schema(map[string]any{

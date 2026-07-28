@@ -8,7 +8,7 @@ import (
 
 // osint_dorks_live runs the generated dorks through a search engine and returns
 // the actual result links, rather than only building the query URLs. Keyless
-// (reuses the web-search DuckDuckGo backend). For authorized reconnaissance.
+// (reuses the browser-backed web search). For authorized reconnaissance.
 
 type osintDorksLiveTool struct{}
 
@@ -44,7 +44,7 @@ func (osintDorksLiveTool) Execute(ctx context.Context, in Input) Result {
 	fmt.Fprintf(&b, "Live dork results for %q:\n\n", target)
 	for _, tmpl := range dorkTemplates[:args.Max] {
 		q := fmt.Sprintf(tmpl, target)
-		results, _ := duckDuckGoSearch(ctx, q, 5)
+		results, _ := browserSearch(ctx, in.SessionID, in.Deps.Config, q, 5)
 		fmt.Fprintf(&b, "▸ %s — %d result(s)\n", q, len(results))
 		for _, r := range results {
 			fmt.Fprintf(&b, "    %s\n", r.URL)

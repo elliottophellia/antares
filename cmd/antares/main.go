@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"sort"
 	"strings"
 	"sync"
 	"syscall"
@@ -25,6 +26,7 @@ import (
 	"github.com/enowdev/antares/internal/logx"
 	"github.com/enowdev/antares/internal/mcp"
 	"github.com/enowdev/antares/internal/plugin"
+	"github.com/enowdev/antares/internal/providers"
 	"github.com/enowdev/antares/internal/rag"
 	"github.com/enowdev/antares/internal/roles"
 	"github.com/enowdev/antares/internal/server"
@@ -81,6 +83,10 @@ func run() error {
 		return cmdConfig(args)
 	case "model":
 		return cmdModel(args)
+	case "provider", "providers":
+		return cmdProvider(args)
+	case "theme":
+		return cmdTheme(args)
 	case "setup":
 		return cmdSetup(args)
 	case "autopilot":
@@ -118,7 +124,12 @@ Usage:
   antares chat <message>   Send one message and print the reply
   antares chat -i          A plain line-based conversation (no full-screen UI)
   antares repl             The same thing, spelled differently
-  antares model [id]       Show or change the active model
+  antares model [id]       Show, list, or change the active model
+  antares model list       List every configured model
+  antares provider         List providers and their connection status
+  antares provider add <id> [api-key]   Connect a provider
+  antares provider use <id>             Switch to a connected provider
+  antares theme [name]     Show or set the colour theme
   antares config get <path>
   antares config set <path> <value>
   antares cron list|add|run|rm   Manage scheduled jobs
@@ -589,6 +600,44 @@ func cmdModel(args []string) error {
 		fmt.Printf("%s (%s)\n", orDash(cfg.Model.Default), orDash(cfg.Model.Provider))
 		return nil
 	}
+	if args[0] == "list" || args[0] == "ls" {
+		provIDs := make([]string, 0, len(cfg.Providers))
+		for id := range cfg.Providers {
+			provIDs = append(provIDs, id)
+		}
+		sort.Strings(provIDs)
+		seen := map[string]bool{}
+		print := func(mid, pid string) {
+			key := pid + "\x00" + mid
+			if mid == "" || seen[key] {
+				return
+			}
+			seen[key] = true
+			mark := "  "
+			if mid == cfg.Model.Default {
+				mark = "❯ "
+			}
+			fmt.Printf("%s%-40s %s\n", mark, mid, pid)
+		}
+		for _, pid := range provIDs {
+			// static models from config
+			for _, mid := range cfg.Providers[pid].Models {
+				print(mid, pid)
+			}
+			// plus whatever the provider's /models endpoint returns live
+			if providers.Connected(cfg, pid) || cfg.Providers[pid].BaseURL != "" {
+				if ids, err := providers.FetchModels(context.Background(), cfg, pid); err == nil {
+					for _, mid := range ids {
+						print(mid, pid)
+					}
+				}
+			}
+		}
+		if len(seen) == 0 {
+			fmt.Println("No models found. Run `antares provider add <id>` to connect one.")
+		}
+		return nil
+	}
 	cfg.Model.Default = args[0]
 	if len(args) > 1 {
 		cfg.Model.Provider = args[1]
@@ -597,6 +646,108 @@ func cmdModel(args []string) error {
 		return err
 	}
 	fmt.Printf("active model: %s (%s)\n", cfg.Model.Default, cfg.Model.Provider)
+	return nil
+}
+
+func cmdProvider(args []string) error {
+	cfg, err := config.Load()
+	if err != nil {
+		return err
+	}
+	sub := "list"
+	if len(args) > 0 {
+		sub = args[0]
+	}
+	switch sub {
+	case "list", "ls":
+		for _, info := range providers.Catalog() {
+			status := "connect"
+			if providers.Connected(cfg, info.ID) {
+				status = "connected"
+			}
+			active := ""
+			if info.ID == cfg.Model.Provider {
+				active = "  (active)"
+			}
+			fmt.Printf("  %-12s %-11s %s%s\n", info.ID, status, info.Label, active)
+		}
+		// configured providers not in the catalogue
+		for id, p := range cfg.Providers {
+			if _, ok := providers.For(id); ok {
+				continue
+			}
+			active := ""
+			if id == cfg.Model.Provider {
+				active = "  (active)"
+			}
+			fmt.Printf("  %-12s %-11s %s%s\n", id, "configured", orDash(p.Label), active)
+		}
+		fmt.Println("\nUse `antares provider add <id> [api-key]` to connect, `antares provider use <id>` to switch.")
+		return nil
+
+	case "use", "switch":
+		if len(args) < 2 {
+			return fmt.Errorf("usage: antares provider use <id>")
+		}
+		id := args[1]
+		if !providers.Connected(cfg, id) {
+			return fmt.Errorf("%s is not connected — run `antares provider add %s <api-key>`", id, id)
+		}
+		providers.Activate(cfg, id, "")
+		if err := config.Save(cfg); err != nil {
+			return err
+		}
+		fmt.Printf("active provider: %s (model %s)\n", cfg.Model.Provider, cfg.Model.Default)
+		return nil
+
+	case "add", "connect":
+		if len(args) < 2 {
+			return fmt.Errorf("usage: antares provider add <id> [api-key]")
+		}
+		id := args[1]
+		key := ""
+		if len(args) > 2 {
+			key = args[2]
+		}
+		info, known := providers.For(id)
+		if known && info.NeedsKey && key == "" && !providers.Connected(cfg, id) {
+			return fmt.Errorf("%s needs an API key: antares provider add %s <api-key>", info.Label, id)
+		}
+		providers.Activate(cfg, id, key)
+		if err := config.Save(cfg); err != nil {
+			return err
+		}
+		fmt.Printf("connected %s (model %s)\n", cfg.Model.Provider, cfg.Model.Default)
+		return nil
+
+	default:
+		return fmt.Errorf("unknown provider command %q (use list|use|add)", sub)
+	}
+}
+
+func cmdTheme(args []string) error {
+	cfg, err := config.Load()
+	if err != nil {
+		return err
+	}
+	if len(args) == 0 {
+		for _, n := range tui.ThemeNames() {
+			mark := "  "
+			if n == cfg.Display.Theme {
+				mark = "❯ "
+			}
+			fmt.Printf("%s%s\n", mark, n)
+		}
+		return nil
+	}
+	if !tui.ThemeExists(args[0]) {
+		return fmt.Errorf("unknown theme %q (run `antares theme` to list)", args[0])
+	}
+	cfg.Display.Theme = args[0]
+	if err := config.Save(cfg); err != nil {
+		return err
+	}
+	fmt.Printf("theme: %s\n", args[0])
 	return nil
 }
 

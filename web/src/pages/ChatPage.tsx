@@ -345,6 +345,18 @@ export default function ChatPage() {
             tokensOut: Number(event.output_tokens ?? m.tokensOut ?? 0),
           }))
           break
+        case 'reset':
+          // The turn is being retried after a provider glitch — throw away the
+          // partial reply so the retry does not render on top of it.
+          patchAssistant((m) => ({
+            ...m,
+            content: '',
+            reasoning: undefined,
+            toolCalls: undefined,
+            segments: [],
+            error: undefined,
+          }))
+          break
         case 'error':
           patchAssistant((m) => ({
             ...m,
@@ -573,6 +585,17 @@ export default function ChatPage() {
       '/chat',
       { session_id: sessionIdRef.current ?? '', message: text, images: attached, role },
       (event: StreamEvent) => {
+        // End-of-turn: stop streaming immediately rather than waiting for the
+        // socket to close. A detached run keeps the connection open past the
+        // final event, which otherwise left the indicator and the task bar
+        // "running" forever.
+        if (event.type === 'done') {
+          setStreaming(false)
+          abortRef.current?.()
+          abortRef.current = null
+          localSessionRef.current = null
+          return
+        }
         applyEvent(assistantId, event, (id, evtTitle) => {
           if (id) {
             // Adopt the real session id at once, so the next message posts to it
@@ -819,7 +842,7 @@ export default function ChatPage() {
           against the very bottom edge of the viewport. */}
       <div className="bg-gradient-to-t from-background via-background to-transparent px-4 pt-3 pb-[max(1.5rem,env(safe-area-inset-bottom))] sm:px-6 sm:pb-[max(2rem,env(safe-area-inset-bottom))]">
         <div className="mx-auto w-full max-w-3xl">
-          <TaskBar tasks={tasks} />
+          <TaskBar tasks={tasks} live={streaming} />
           {composer}
         </div>
       </div>

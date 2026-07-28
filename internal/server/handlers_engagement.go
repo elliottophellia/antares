@@ -1,11 +1,69 @@
 package server
 
 import (
+	"errors"
+	"fmt"
 	"net/http"
+	"strings"
 
 	"github.com/enowdev/antares/internal/engagement"
 	"github.com/enowdev/antares/internal/store"
 )
+
+// handleEngagementReport renders a session's security findings (plus recorded
+// intel) as a Markdown report and serves it as a file download.
+func (s *Server) handleEngagementReport(w http.ResponseWriter, r *http.Request) {
+	sessionID := r.URL.Query().Get("session")
+	if sessionID == "" {
+		writeError(w, http.StatusBadRequest, errors.New("session is required"))
+		return
+	}
+	if s.agent.Findings() == nil {
+		writeError(w, http.StatusServiceUnavailable, errors.New("findings store is unavailable"))
+		return
+	}
+	title := strings.TrimSpace(r.URL.Query().Get("title"))
+	if title == "" {
+		title = "Security Assessment"
+	}
+	md, err := s.agent.Findings().Report(sessionID, title)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	// Append recorded intelligence so the download is the full picture.
+	if s.agent.Intel() != nil {
+		if intel, e := s.agent.Intel().List(sessionID); e == nil && len(intel) > 0 {
+			var b strings.Builder
+			b.WriteString(md)
+			b.WriteString("\n\n## Recorded intelligence\n\n")
+			for _, it := range intel {
+				if strings.TrimSpace(it.Detail) != "" {
+					fmt.Fprintf(&b, "- **%s** — %s\n", it.Value, it.Detail)
+				} else {
+					fmt.Fprintf(&b, "- %s\n", it.Value)
+				}
+			}
+			md = b.String()
+		}
+	}
+
+	name := "antares-report-" + sanitizeName(sessionID) + ".md"
+	w.Header().Set("Content-Type", "text/markdown; charset=utf-8")
+	w.Header().Set("Content-Disposition", `attachment; filename="`+name+`"`)
+	_, _ = w.Write([]byte(md))
+}
+
+func sanitizeName(s string) string {
+	return strings.Map(func(r rune) rune {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '-', r == '_':
+			return r
+		default:
+			return '_'
+		}
+	}, s)
+}
 
 // handleEngagementSessions lists the sessions that have security-engagement data
 // (findings or intel), for the page's session picker.

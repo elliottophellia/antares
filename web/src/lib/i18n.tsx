@@ -322,6 +322,7 @@ const en = {
   'engagement.next': 'Next step',
   'engagement.noFindings': 'No findings recorded.',
   'engagement.pickSession': 'Session',
+  'engagement.downloadReport': 'Download report',
   'board.title': 'Board',
   'intercept.title': 'Intercept proxy',
   'intercept.desc': 'MITM HTTP(S) proxy for authorized debugging and testing.',

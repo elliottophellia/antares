@@ -90,32 +90,14 @@ untried specialist is not a bad one.
 ## Security roles
 
 The security roles are for **authorized** testing — a penetration test on a
-target you own or have written permission to assess. They are gated on scope.
+target you own or have written permission to assess.
 
 A security test is only lawful against a target its owner authorized. The
-difference between a penetration test and an attack is that list, so the list is
-checked in code, not left to a prompt to remember.
-
-```
-/scope add example.com          authorize a target (domain, IP, or CIDR)
-/scope add *.staging.example.com
-/scope list                     what is authorized
-/scope check api.example.com    is this in scope?
-/scope remove example.com
-```
-
-The `scope_check` tool consults it, and it fails closed: an empty scope
-authorizes nothing. Set `security.require_scope` to refuse out-of-scope targets
-outright rather than warn.
-
-```yaml
-security:
-  scope:
-    - example.com
-    - "*.staging.example.com"
-    - 10.0.0.0/24
-  require_scope: true
-```
+difference between a penetration test and an attack is authorization, so the
+prompt and role instructions remind the model of this — but the engine does
+not gatekeep: there is no scope list to populate, no `scope_check` tool, and
+no `/scope` command. Point the role at the target, confirm you are
+authorized, and let it run.
 
 The security roles find, and `report_finding` records — a confirmed issue with
 its severity, reproduction, impact, and remediation goes into a per-session

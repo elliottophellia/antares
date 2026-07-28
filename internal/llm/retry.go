@@ -6,6 +6,7 @@ import (
 	"math/rand"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -150,7 +151,31 @@ func Retryable(err error) bool {
 	}
 	var ae *apiError
 	if errors.As(err, &ae) {
-		return ae.Status >= 500 && ae.Status <= 599
+		if ae.Status >= 500 && ae.Status <= 599 {
+			return true
+		}
+	}
+	// Some providers report a transient glitch as a plain error mid-stream —
+	// notably truncated/malformed tool_call arguments — and explicitly ask the
+	// caller to retry. Honour that when the message says so; permanent errors
+	// (bad key, invalid request) do not match these phrases.
+	return transientMessage(err.Error())
+}
+
+func transientMessage(msg string) bool {
+	m := strings.ToLower(msg)
+	for _, s := range []string{
+		"please retry",
+		"incomplete tool_call",
+		"malformed arguments",
+		"malformed tool_call",
+		"overloaded",
+		"please try again",
+		"temporarily unavailable",
+	} {
+		if strings.Contains(m, s) {
+			return true
+		}
 	}
 	return false
 }

@@ -94,6 +94,16 @@ func (b *Board) Remove(key, id string) (bool, error) {
 	return true, b.save(key, out)
 }
 
+// Clear removes an entire board (all cards for a key) by deleting its file.
+func (b *Board) Clear(key string) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if err := os.Remove(b.path(key)); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return nil
+}
+
 // List returns the cards grouped by column, in column order.
 func (b *Board) List(key string) map[string][]Card {
 	b.mu.Lock()

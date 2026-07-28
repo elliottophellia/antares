@@ -101,8 +101,7 @@ func cmdRole(ctx context.Context, d Deps, in Input) (Result, error) {
 
 	out := fmt.Sprintf("Now running as **%s**.\n\n%s", role.Title, role.Summary)
 	if role.Danger {
-		out += "\n\n⚠ This role does security testing. Work only against targets you are authorized to test; " +
-			"set the authorized scope with `/scope add <target>`."
+		out += "\n\n⚠ This role does security testing. Work only against targets you are authorized to test."
 	}
 	return Result{Output: out, Action: Action{Kind: "role-changed", Value: role.Name}}, nil
 }

@@ -2,6 +2,7 @@ SHELL := /bin/bash
 GO     ?= $(HOME)/.local/sdk/go/bin/go
 BUN    ?= $(HOME)/.bun/bin/bun
 AIR    ?= $(HOME)/go/bin/air
+PREFIX ?= $(HOME)/.local
 
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo 0.1.0-dev)
 COMMIT  ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo dev)
@@ -34,6 +35,10 @@ dev-api: ## Backend with hot reload
 dev-web: ## Frontend dev server with HMR
 	@cd web && $(BUN) x vite --host 0.0.0.0
 
+.PHONY: tui
+tui: ## Hot-reload the TUI preview in the foreground (real terminal)
+	@./scripts/tui-dev.sh
+
 .PHONY: install
 install: ## Install toolchain deps (no sudo)
 	@$(GO) mod download
@@ -56,6 +61,15 @@ build-web: ## Build the dashboard into internal/server/dist
 .PHONY: build-api
 build-api: ## Build the backend only (no dashboard)
 	@$(GO) build -trimpath -ldflags "$(LDFLAGS)" -o bin/antares ./cmd/antares
+
+.PHONY: install-cli
+install-cli: build ## Build (with dashboard) and install `antares` to $(PREFIX)/bin
+	@mkdir -p $(PREFIX)/bin
+	@cp bin/antares $(PREFIX)/bin/antares.new
+	@mv -f $(PREFIX)/bin/antares.new $(PREFIX)/bin/antares
+	@echo "installed $(PREFIX)/bin/antares ($(VERSION))"
+	@case ":$$PATH:" in *":$(PREFIX)/bin:"*) echo "run 'antares' from anywhere (open a new shell if it's not found yet)";; \
+	  *) echo "note: add $(PREFIX)/bin to your PATH — e.g. echo 'export PATH=\"$(PREFIX)/bin:\$$PATH\"' >> ~/.bashrc";; esac
 
 # ---- quality ----------------------------------------------------------------
 

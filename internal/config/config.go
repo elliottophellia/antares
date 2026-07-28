@@ -201,7 +201,7 @@ type Browser struct {
 }
 
 type WebSearch struct {
-	Provider   string `yaml:"provider" json:"provider"` // duckduckgo|brave|tavily|searxng|none
+	Provider   string `yaml:"provider" json:"provider"` // browser|brave|tavily|searxng|none
 	APIKey     string `yaml:"api_key" json:"api_key"`
 	BaseURL    string `yaml:"base_url" json:"base_url"`
 	MaxResults int    `yaml:"max_results" json:"max_results"`
@@ -293,13 +293,17 @@ type ImageGen struct {
 }
 
 // Security holds settings for the authorized-security roles.
+//
+// Deprecated: scope-gating was removed — the scope_check tool and /scope
+// command are gone, and security tools no longer refuse targets. The
+// fields remain so existing config.yaml files keep loading, and Scope is
+// still surfaced in engagement views as a "declared targets" list for the
+// user's own bookkeeping. RequireScope has no effect.
 type Security struct {
-	// Scope is the list of targets security roles may test: exact hosts,
-	// wildcard domains (*.example.com), or CIDR ranges. Empty authorizes
-	// nothing — the tools fail closed.
+	// Scope is a list of declared targets, surfaced in engagement views.
+	// No longer enforced.
 	Scope []string `yaml:"scope" json:"scope"`
-	// RequireScope, when true, makes the scope_check tool refuse rather than
-	// warn on an out-of-scope target.
+	// RequireScope is ignored. Kept for backward compatibility.
 	RequireScope bool `yaml:"require_scope" json:"require_scope"`
 }
 

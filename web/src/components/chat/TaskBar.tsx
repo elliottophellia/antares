@@ -15,11 +15,18 @@ export function parseTasks(rawArgs: string): TodoItem[] {
   }
 }
 
-const glyph = (status: string) =>
+// `live` is whether a turn is actively streaming. When it is not, an
+// in_progress item shows a static dot instead of a spinner, so the checklist
+// stops "running forever" once the run ends (whether it succeeded or failed).
+const glyph = (status: string, live: boolean) =>
   status === 'completed' ? (
     <CheckCircle className="size-3.5 shrink-0 text-[var(--success)]" weight="fill" />
   ) : status === 'in_progress' ? (
-    <CircleNotch className="size-3.5 shrink-0 animate-spin text-primary" />
+    live ? (
+      <CircleNotch className="size-3.5 shrink-0 animate-spin text-primary" />
+    ) : (
+      <Circle className="size-3.5 shrink-0 text-primary/60" weight="fill" />
+    )
   ) : (
     <Circle className="size-3.5 shrink-0 text-muted-foreground/40" />
   )
@@ -27,13 +34,14 @@ const glyph = (status: string) =>
 /** A sticky task bar that butts up against the top of the composer, showing the
  *  agent's current checklist — collapsed to the active item + progress, or
  *  expanded to the full list. Mirrors a mission task bar. */
-export function TaskBar({ tasks }: { tasks: TodoItem[] }) {
+export function TaskBar({ tasks, live = false }: { tasks: TodoItem[]; live?: boolean }) {
   const { t } = useI18n()
   const [open, setOpen] = useState(false)
   if (tasks.length === 0) return null
 
   const done = tasks.filter((it) => it.status === 'completed').length
-  const active = tasks.find((it) => it.status === 'in_progress')
+  // Only surface a spinning "active" item while the turn is live.
+  const active = live ? tasks.find((it) => it.status === 'in_progress') : undefined
 
   return (
     <div className="rounded-t-[var(--radius-md)] border-x border-t border-border bg-card/80 backdrop-blur">
@@ -68,7 +76,7 @@ export function TaskBar({ tasks }: { tasks: TodoItem[] }) {
         <ul className="max-h-48 space-y-1.5 overflow-y-auto border-t border-border px-3 py-2">
           {tasks.map((it, i) => (
             <li key={i} className="flex items-start gap-2 text-[12px] leading-snug">
-              <span className="mt-0.5">{glyph(it.status)}</span>
+              <span className="mt-0.5">{glyph(it.status, live)}</span>
               <span
                 className={cn(
                   'min-w-0 flex-1',

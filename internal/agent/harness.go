@@ -396,6 +396,49 @@ func (a *Agent) Distil(ctx context.Context, sessionID, hint string) (string, err
 // Two checks in order: did the reply actually do what was asked, and is a
 // standing goal satisfied. Each is bounded, because a critic that is never
 // satisfied would otherwise loop forever.
+// maxTodoNudges bounds how many times a single run may be pushed to finish its
+// open tasks, so a task list the model refuses to complete cannot loop forever.
+const maxTodoNudges = 8
+
+// incompleteTodos counts task-list items not yet marked completed for a session,
+// read from the same KV the todo tool writes to.
+func (a *Agent) incompleteTodos(ctx context.Context, sessionID string) int {
+	if a.db == nil {
+		return 0
+	}
+	raw, err := a.db.GetKV(ctx, "todo:"+sessionID)
+	if err != nil || strings.TrimSpace(raw) == "" {
+		return 0
+	}
+	var items []struct {
+		Content string `json:"content"`
+		Status  string `json:"status"`
+	}
+	if json.Unmarshal([]byte(raw), &items) != nil {
+		return 0
+	}
+	open := 0
+	for _, it := range items {
+		if strings.TrimSpace(it.Content) != "" && !strings.EqualFold(it.Status, "completed") {
+			open++
+		}
+	}
+	return open
+}
+
+// todoContinueMessage is injected when a turn would otherwise end with tasks
+// still open — the harness half of "finish everything before stopping".
+func todoContinueMessage(open int) string {
+	return fmt.Sprintf("You still have %d task(s) in your todo list that are not marked completed. "+
+		"Do not stop, and do not ask whether to continue.\n"+
+		"IMPORTANT: the todo tool REPLACES the whole list on each write. So call todo(write) with the ENTIRE list — "+
+		"every item — keeping already-finished items as \"completed\" and setting the ones you have now finished to \"completed\". "+
+		"Do not drop items or reset a completed item back to pending.\n"+
+		"Then continue the remaining work. If a task truly cannot be done, mark it \"completed\" with a short note in its content saying why "+
+		"(or, if it needs a secret/decision only the user can give, say exactly what you need). "+
+		"Keep going until every item is completed.", open)
+}
+
 func (a *Agent) followUp(
 	ctx context.Context,
 	req Request,

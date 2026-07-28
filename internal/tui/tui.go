@@ -7,17 +7,20 @@ package tui
 import (
 	"context"
 	"strings"
+	"time"
 
+	"github.com/charmbracelet/bubbles/cursor"
 	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/textarea"
+	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/glamour"
+	"github.com/charmbracelet/lipgloss"
 
 	"github.com/enowdev/antares/internal/agent"
 	"github.com/enowdev/antares/internal/config"
 	"github.com/enowdev/antares/internal/store"
-	"github.com/enowdev/antares/internal/version"
 )
 
 // blockKind distinguishes transcript entries so each renders in its own voice.
@@ -45,8 +48,9 @@ type block struct {
 
 // agent-event bridge messages.
 type (
-	evMsg   struct{ e agent.Event }
-	doneMsg struct{ err error }
+	evMsg          struct{ e agent.Event }
+	doneMsg        struct{ err error }
+	welcomeTickMsg struct{}
 )
 
 // Model is the Bubble Tea model.
@@ -81,7 +85,12 @@ type Model struct {
 	palette    []Command
 	paletteSel int
 
+	picker picker
+	input  inputModal
+
 	cache map[string]string // memoised block renders, keyed by content+width
+
+	welcomeFrame int // animation frame for the empty-state splash
 
 	demo bool
 }
@@ -96,6 +105,8 @@ func New(ag *agent.Agent, cfg *config.Config, db store.Store) *Model {
 	ta.SetHeight(1)
 	ta.Focus()
 	ta.KeyMap.InsertNewline.SetEnabled(false) // Enter sends; Ctrl+J adds a newline.
+	// Hidden caret while empty so the placeholder shows no reverse-video block.
+	ta.Cursor.SetMode(cursor.CursorHide)
 
 	sp := spinner.New()
 	sp.Spinner = spinner.Dot
@@ -108,6 +119,8 @@ func New(ag *agent.Agent, cfg *config.Config, db store.Store) *Model {
 			}
 		}
 	}
+	// A steady accent caret when the field has text.
+	ta.Cursor.Style = lipgloss.NewStyle().Foreground(themeByName(name).Accent)
 
 	return &Model{
 		ag: ag, cfg: cfg, db: db,
@@ -121,24 +134,36 @@ func New(ag *agent.Agent, cfg *config.Config, db store.Store) *Model {
 
 // Run takes over the terminal until the user quits.
 func (m *Model) Run(ctx context.Context) error {
-	p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithContext(ctx))
+	p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion(), tea.WithContext(ctx))
 	_, err := p.Run()
 	return err
 }
 
 func (m *Model) Init() tea.Cmd {
 	m.greet()
-	return tea.Batch(textarea.Blink, m.spin.Tick)
+	return tea.Batch(textarea.Blink, m.spin.Tick, m.welcomeTick())
 }
 
-func (m *Model) greet() {
-	m.blocks = append(m.blocks, block{
-		kind: blockSystem,
-		text: version.Display + " " + version.Version + " — type a message, or /help for commands.",
-	})
-	if m.cfg != nil && m.cfg.Model.Default == "" && !m.demo {
-		m.blocks = append(m.blocks, block{kind: blockNotice, text: "No model selected. Run /setup, or set model.default in the dashboard."})
+// syncCursor hides the caret while the field is empty — so the placeholder has
+// no reverse-video block — and shows a steady accent caret once the user types.
+func (m *Model) syncCursor() {
+	if strings.TrimSpace(m.ta.Value()) == "" {
+		m.ta.Cursor.SetMode(cursor.CursorHide)
+	} else {
+		m.ta.Cursor.SetMode(cursor.CursorStatic)
 	}
+}
+
+// welcomeTick drives the empty-state splash animation. It re-arms itself only
+// while the splash is showing, so it costs nothing once a conversation starts.
+func (m *Model) welcomeTick() tea.Cmd {
+	return tea.Tick(90*time.Millisecond, func(time.Time) tea.Msg { return welcomeTickMsg{} })
+}
+
+// greet resets to the empty state; the animated welcomeView is what actually
+// fills the viewport (see renderBlocks), so there is nothing to seed here.
+func (m *Model) greet() {
+	m.welcomeFrame = 0
 }
 
 func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -158,6 +183,18 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case modelsFetchedMsg:
+		m.mergeFetchedModels(msg.refs)
+		return m, nil
+
+	case welcomeTickMsg:
+		if !m.ready || !m.showWelcome() {
+			return m, nil // splash gone — stop animating
+		}
+		m.welcomeFrame++
+		m.refreshTranscript()
+		return m, m.welcomeTick()
+
 	case evMsg:
 		m.applyEvent(msg.e)
 		m.refreshTranscript()
@@ -175,6 +212,19 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.KeyMsg:
 		return m.onKey(msg)
+
+	case tea.MouseMsg:
+		if m.input.active {
+			return m, nil // keyboard-only
+		}
+		if m.picker.active {
+			m.picker.onMouse(m, msg)
+			return m, m.modalCmd()
+		}
+		// Mouse wheel scrolls the transcript; the input keeps focus.
+		var cmd tea.Cmd
+		m.vp, cmd = m.vp.Update(msg)
+		return m, cmd
 	}
 
 	// Forward anything else to the components.
@@ -188,6 +238,15 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m *Model) onKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	// Modals capture all keys while open.
+	if m.input.active {
+		return m, m.input.onKey(m, msg)
+	}
+	if m.picker.active {
+		m.picker.onKey(m, msg)
+		return m, m.modalCmd()
+	}
+
 	// Palette navigation takes priority.
 	if len(m.palette) > 0 {
 		switch msg.Type {
@@ -199,9 +258,11 @@ func (m *Model) onKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		case tea.KeyTab:
 			m.acceptCompletion()
+			m.refreshTranscript()
 			return m, nil
 		case tea.KeyEsc:
 			m.palette = nil
+			m.refreshTranscript()
 			return m, nil
 		}
 	}
@@ -221,12 +282,16 @@ func (m *Model) onKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.blocks = nil
 		m.greet()
 		m.refreshTranscript()
-		return m, nil
+		return m, m.welcomeTick()
 
 	case tea.KeyCtrlR:
 		m.showReasoning = !m.showReasoning
 		m.setStatus("reasoning " + onOff(m.showReasoning))
 		m.refreshTranscript()
+		return m, nil
+
+	case tea.KeyCtrlT:
+		m.openThemePicker()
 		return m, nil
 
 	case tea.KeyPgUp:
@@ -242,18 +307,24 @@ func (m *Model) onKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		if len(m.palette) > 0 {
-			typed := strings.TrimPrefix(strings.Fields(text)[0], "/")
-			if !commandExists(typed) {
-				m.acceptCompletion()
-				return m, nil
-			}
+			// Enter runs the highlighted command straight away — no second Enter.
+			name := m.palette[m.paletteSel].Name
 			m.palette = nil
+			m.ta.Reset()
+			m.syncCursor()
+			quit, cmd := m.runCommand("/" + name)
+			m.refreshTranscript()
+			if quit {
+				return m, tea.Quit
+			}
+			return m, cmd
 		}
 		if m.busy {
 			m.setStatus("still working — Ctrl+C to interrupt")
 			return m, nil
 		}
 		m.ta.Reset()
+		m.syncCursor()
 		m.vp.GotoBottom()
 		if strings.HasPrefix(text, "/") {
 			quit, cmd := m.runCommand(text)
@@ -273,10 +344,13 @@ func (m *Model) onKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, m.startTurn(text)
 	}
 
-	// Normal editing.
+	// Normal editing. Re-flow the transcript so the viewport resizes when the
+	// palette opens or closes — the input and sidebar stay put.
 	var cmd tea.Cmd
 	m.ta, cmd = m.ta.Update(msg)
 	m.updatePalette()
+	m.syncCursor()
+	m.refreshTranscript()
 	return m, cmd
 }
 
@@ -359,6 +433,12 @@ func (m *Model) applyEvent(e agent.Event) {
 		}
 	case agent.EventNotice:
 		m.blocks = append(m.blocks, block{kind: blockNotice, text: e.Message})
+	case agent.EventReset:
+		// A retry after a provider glitch: drop the partial reply we streamed so
+		// the retry does not stack on top of it.
+		for len(m.blocks) > 0 && m.blocks[len(m.blocks)-1].streaming {
+			m.blocks = m.blocks[:len(m.blocks)-1]
+		}
 	case agent.EventError:
 		m.blocks = append(m.blocks, block{kind: blockError, text: e.Err})
 	case agent.EventUsage:
@@ -381,6 +461,66 @@ func (m *Model) closeStreaming() {
 }
 
 func (m *Model) setStatus(s string) { m.status = s }
+
+// applyTheme switches the active theme live (styles, Markdown renderer, caret)
+// without persisting it — used for both the /theme command and modal previews.
+func (m *Model) applyTheme(name string) {
+	if _, ok := themes[name]; !ok {
+		return
+	}
+	m.themeName = name
+	m.st = newStyles(themeByName(name))
+	if m.vp.Width > 0 {
+		m.buildRenderer(m.vp.Width - 4)
+	}
+	m.cache = nil
+	m.ta.Cursor.Style = lipgloss.NewStyle().Foreground(themeByName(name).Accent)
+}
+
+// persistTheme writes the chosen theme back to config so it survives restarts.
+func (m *Model) persistTheme(name string) {
+	if m.cfg == nil {
+		return
+	}
+	m.cfg.Display.Theme = name
+	m.saveConfig()
+}
+
+// reloadConfig re-reads config from disk so the TUI reflects changes made
+// elsewhere (the dashboard, the CLI, a hand-edited file) without a restart.
+// Preserves the live theme, which is applied but only persisted on change.
+func (m *Model) reloadConfig() {
+	if m.ag == nil {
+		return // no live runtime (tests / demo) — keep the in-memory config
+	}
+	fresh, err := config.Reload()
+	if err != nil || fresh == nil {
+		return
+	}
+	m.cfg = fresh
+	m.ag.SetConfig(fresh)
+}
+
+// saveConfig applies the config to the running agent and writes it to disk.
+func (m *Model) saveConfig() {
+	if m.cfg == nil {
+		return
+	}
+	if m.ag != nil {
+		m.ag.SetConfig(m.cfg)
+	}
+	if err := config.Save(m.cfg); err != nil {
+		m.setStatus("save failed: " + err.Error())
+	}
+}
+
+// modalCmd keeps the input modal's caret blinking while it is open.
+func (m *Model) modalCmd() tea.Cmd {
+	if m.input.active {
+		return textinput.Blink
+	}
+	return nil
+}
 
 func onOff(b bool) string {
 	if b {

@@ -26,21 +26,47 @@ func (m *Model) layout() {
 		innerW = 12
 	}
 
-	headerH, inputH, statusH := 2, 3, 1
-	vpH := m.height - headerH - inputH - statusH
-	if vpH < 1 {
-		vpH = 1
-	}
-
 	if m.vp.Width == 0 {
-		m.vp = viewport.New(innerW, vpH)
+		m.vp = viewport.New(innerW, 1)
 	} else {
-		m.vp.Width, m.vp.Height = innerW, vpH
+		m.vp.Width = innerW
 	}
-	m.ta.SetWidth(innerW - 3)
+	m.resizeViewport()
+
+	// The input field is `❯ ` (2 cols) + the textarea, sitting inside a bordered,
+	// horizontally-padded box (border 2 + padding 2 = 4). Size the textarea so the
+	// field fits its box exactly — otherwise it wraps, the input grows past its
+	// reserved height, and the whole view spills off screen.
+	taW := innerW - 6
+	if taW < 8 {
+		taW = 8
+	}
+	m.ta.SetWidth(taW)
 
 	m.buildRenderer(innerW - 4)
 	m.cache = map[string]string{} // width changed — drop cached renders
+}
+
+// chromeHeight is the number of rows taken by everything around the transcript:
+// the header (title + rule), the bordered input box, the status line, and the
+// command palette when it is open. The transcript viewport gets whatever is left.
+func (m *Model) chromeHeight() int {
+	h := 2 + 3 + 1 // header + input box + status
+	if len(m.palette) > 0 {
+		h += len(m.palette) + 2 // palette rows + its border
+	}
+	return h
+}
+
+// resizeViewport gives the transcript exactly the rows left after the fixed
+// chrome, so the composed view is always exactly the terminal height. This is
+// what keeps the sidebar, header, and input sticky: only the viewport scrolls.
+func (m *Model) resizeViewport() {
+	vpH := m.height - m.chromeHeight()
+	if vpH < 1 {
+		vpH = 1
+	}
+	m.vp.Height = vpH
 }
 
 // buildRenderer (re)creates the Markdown renderer for the current theme + width.
@@ -68,6 +94,18 @@ func (m *Model) View() string {
 	if !m.ready {
 		return "starting antares…"
 	}
+	base := m.composeView()
+	if m.input.active {
+		return m.renderInputModal(base)
+	}
+	if m.picker.active {
+		return m.renderPickerModal(base)
+	}
+	return clampHeight(base, m.height)
+}
+
+// composeView is the normal (no-modal) screen: sidebar + main column.
+func (m *Model) composeView() string {
 	main := m.mainColumn()
 	if m.sidebarWidth() == 0 {
 		return main
@@ -115,7 +153,7 @@ func (m *Model) inputView() string {
 		box = m.st.inputFocus
 	}
 	field := lipgloss.JoinHorizontal(lipgloss.Top, m.st.prompt.Render("❯ "), m.ta.View())
-	return lipgloss.NewStyle().Padding(0, 1).Render(box.Width(m.vp.Width - 2).Render(field))
+	return lipgloss.NewStyle().Padding(0, 1).Render(box.Width(m.vp.Width).Render(field))
 }
 
 func (m *Model) sidebar() string {
@@ -159,7 +197,8 @@ func (m *Model) sidebar() string {
 	b.WriteString(m.st.sideLabel.Render("SHORTCUTS") + "\n")
 	rows := [][2]string{
 		{"Enter", "send"}, {"Ctrl+J", "newline"}, {"/", "commands"},
-		{"Ctrl+R", "reasoning"}, {"Ctrl+L", "clear"}, {"PgUp/Dn", "scroll"}, {"Ctrl+C", "quit"},
+		{"Ctrl+R", "reasoning"}, {"Ctrl+T", "theme"}, {"Ctrl+L", "clear"},
+		{"PgUp/Dn", "scroll"}, {"Ctrl+C", "quit"},
 	}
 	if m.height < 24 {
 		rows = rows[:4]
@@ -204,7 +243,7 @@ func (m *Model) paletteView() string {
 		}
 		rows = append(rows, marker+name+"  "+m.st.paletteDesc.Render(c.Summary))
 	}
-	return m.st.paletteBox.Width(m.vp.Width - 2).Render(strings.Join(rows, "\n"))
+	return m.st.paletteBox.Width(m.vp.Width).Render(strings.Join(rows, "\n"))
 }
 
 // refreshTranscript rebuilds the viewport content, keeping it pinned to the
@@ -214,6 +253,7 @@ func (m *Model) refreshTranscript() {
 		return
 	}
 	atBottom := m.vp.AtBottom()
+	m.resizeViewport()
 	m.vp.SetContent(m.renderBlocks())
 	if atBottom || m.busy {
 		m.vp.GotoBottom()
@@ -221,6 +261,9 @@ func (m *Model) refreshTranscript() {
 }
 
 func (m *Model) renderBlocks() string {
+	if m.showWelcome() {
+		return m.welcomeView(m.vp.Width, m.vp.Height)
+	}
 	var out []string
 	for i := range m.blocks {
 		bl := m.blocks[i]
@@ -330,6 +373,20 @@ func indent(s, prefix string) string {
 	lines := strings.Split(s, "\n")
 	for i, l := range lines {
 		lines[i] = prefix + l
+	}
+	return strings.Join(lines, "\n")
+}
+
+// clampHeight caps the composed view at the terminal height so a degenerate
+// tiny terminal can never push content past the bottom and make the alt-screen
+// scroll. In normal sizes the view is already exactly h rows, so this is a no-op.
+func clampHeight(s string, h int) string {
+	if h < 1 {
+		h = 1
+	}
+	lines := strings.Split(s, "\n")
+	if len(lines) > h {
+		lines = lines[:h]
 	}
 	return strings.Join(lines, "\n")
 }

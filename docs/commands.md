@@ -111,7 +111,6 @@ See [the harness](harness.md) for what these actually do.
 
 | Command | What it does |
 |---|---|
-| `/scope [add\|remove\|list\|check] [target]` | Manage the authorized testing scope |
 | `/findings [remove\|clear] [id]` | The current engagement's findings |
 | `/report [title]` | Compile the findings into a report |
 | `/engagement [intel]` | The assessment's phase progress |
