@@ -19,7 +19,7 @@ import {
   WhatsappLogo,
 } from '@phosphor-icons/react'
 import { del, get, post } from '@/lib/api'
-import { useApi } from '@/lib/hooks'
+import { useApi, usePoll } from '@/lib/hooks'
 import { useI18n, useTimeAgo } from '@/lib/i18n'
 import { cn } from '@/lib/utils'
 import { PageLayout } from '@/components/layout/PageLayout'
@@ -94,7 +94,10 @@ const ICONS: Record<string, React.ComponentType<{ className?: string; weight?: '
 
 export default function ChannelsPage() {
   const { t } = useI18n()
-  const { data, loading, reload } = useApi<ChannelsResponse>('/channels')
+  // Poll so connect status and new pairing requests appear without a manual
+  // refresh: connecting → connected, and a device awaiting approval, both land
+  // within a few seconds. Polling pauses while the tab is hidden.
+  const { data, loading, reload } = usePoll<ChannelsResponse>('/channels', 3000)
   const [busy, setBusy] = useState('')
   const [configFor, setConfigFor] = useState<Channel | null>(null)
   const [settingsFor, setSettingsFor] = useState<Channel | null>(null)

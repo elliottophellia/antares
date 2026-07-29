@@ -258,8 +258,14 @@ func (t *Telegram) handleMessage(ctx context.Context, m tgMessage) {
 	if err != nil {
 		reply = "⚠️ " + err.Error()
 	}
+	// An empty reply with no error is intentional silence (disallowed user,
+	// unregistered chat, relevance gate). Remove the placeholder and send
+	// nothing rather than a "(no reply)" message.
 	if strings.TrimSpace(reply) == "" {
-		reply = "(no reply)"
+		if placeholderID != "" {
+			_ = t.call(ctx, "deleteMessage", map[string]any{"chat_id": chatID, "message_id": placeholderID}, nil)
+		}
+		return
 	}
 
 	for i, chunk := range splitForTelegram(reply) {

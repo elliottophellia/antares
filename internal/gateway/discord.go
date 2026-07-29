@@ -541,8 +541,11 @@ func (d *Discord) handleMessage(ctx context.Context, m dcMessage) {
 		reply = err.Error()
 		kind = embedError
 	}
+	// An empty reply with no error is an intentional silence (a disallowed user,
+	// an unregistered channel, a message the relevance gate dropped). Send
+	// nothing at all rather than a "(no reply)" placeholder.
 	if strings.TrimSpace(reply) == "" {
-		reply = "(no reply)"
+		return
 	}
 	if e := d.sendReply(ctx, m.ChannelID, reply, kind); e != nil {
 		slog.Warn("discord: send failed", "error", e)
