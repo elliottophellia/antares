@@ -41,11 +41,13 @@ func loadDir(dir string, m map[string]Role) error {
 		if e.IsDir() || !strings.HasSuffix(strings.ToLower(e.Name()), ".md") {
 			continue
 		}
-		raw, err := os.ReadFile(filepath.Join(dir, e.Name()))
+		path := filepath.Join(dir, e.Name())
+		raw, err := os.ReadFile(path)
 		if err != nil {
 			continue
 		}
 		if role, ok := parse(string(raw), "local"); ok {
+			role.Path = path
 			m[role.Name] = role
 		}
 	}

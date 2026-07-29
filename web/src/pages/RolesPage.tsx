@@ -1,11 +1,36 @@
-import { Lightning, Spinner, UsersThree, Warning } from '@phosphor-icons/react'
-import { useEffect } from 'react'
+import { useEffect, useMemo, useState } from 'react'
+import { Lightning, PencilSimple, Plus, Spinner, TrashSimple, UsersThree, Warning } from '@phosphor-icons/react'
+import { del, get, post } from '@/lib/api'
 import { useApi } from '@/lib/hooks'
 import { useI18n } from '@/lib/i18n'
-import { PageLayout } from '@/components/layout/PageLayout'
-import { Badge, Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/primitives'
-import { SkeletonList } from '@/components/ui/skeleton'
 import { cn } from '@/lib/utils'
+import { PageLayout } from '@/components/layout/PageLayout'
+import { Button } from '@/components/ui/button'
+import {
+  Badge,
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+  Input,
+  Label,
+  Switch,
+  Tabs,
+  TabsList,
+  TabsTrigger,
+  Textarea,
+} from '@/components/ui/primitives'
+import {
+  Dialog,
+  DialogBody,
+  DialogClose,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
+import { SkeletonList } from '@/components/ui/skeleton'
 
 interface Role {
   name: string
@@ -14,6 +39,9 @@ interface Role {
   category: string
   toolset: string
   model: string
+  effort?: string
+  max_turns?: number
+  tags?: string[]
   danger?: boolean
   subrole?: boolean
   parent?: string
@@ -35,6 +63,23 @@ interface Perf {
   kept: number
 }
 
+interface RolesResponse {
+  roles: Role[]
+  scope?: string[]
+  active?: ActiveAgent[]
+  performance?: Perf[]
+  toolsets?: string[]
+  categories?: string[]
+}
+
+const CATEGORY_LABEL: Record<string, string> = {
+  general: 'General',
+  engineering: 'Engineering',
+  research: 'Research',
+  writing: 'Writing',
+  security: 'Security — authorized testing',
+}
+
 // orderWithSubroles keeps the server order for top-level roles but pulls each
 // subrole up directly beneath its master, so the nesting reads top-down.
 function orderWithSubroles(roles: Role[]): Role[] {
@@ -52,41 +97,28 @@ function orderWithSubroles(roles: Role[]): Role[] {
     out.push(r)
     for (const s of subs.get(r.name) ?? []) out.push(s)
   }
-  // Any subrole whose master is in another category still gets shown.
   for (const r of roles) {
     if (r.subrole && !out.includes(r)) out.push(r)
   }
   return out
 }
 
-const CATEGORY_LABEL: Record<string, string> = {
-  general: 'General',
-  engineering: 'Engineering',
-  research: 'Research',
-  writing: 'Writing',
-  security: 'Security — authorized testing',
-}
-
 export default function RolesPage() {
   const { t } = useI18n()
-  const { data, loading, reload } = useApi<{
-    roles: Role[]
-    scope?: string[]
-    active?: ActiveAgent[]
-    performance?: Perf[]
-  }>('/roles')
+  const { data, loading, reload } = useApi<RolesResponse>('/roles')
+  const [editing, setEditing] = useState<Role | null>(null)
+  const [creating, setCreating] = useState(false)
 
   // While sub-agents are running, refresh so the panel stays live.
   useEffect(() => {
     if (!data?.active?.length) return
-    const t = setInterval(reload, 2000)
-    return () => clearInterval(t)
+    const id = setInterval(reload, 2000)
+    return () => clearInterval(id)
   }, [data?.active?.length, reload])
 
   if (loading && !data) return <SkeletonList count={4} />
 
   const roles = data?.roles ?? []
-  // Preserve the server's category order.
   const groups: { category: string; roles: Role[] }[] = []
   const index = new Map<string, number>()
   for (const r of roles) {
@@ -97,17 +129,31 @@ export default function RolesPage() {
     groups[index.get(r.category)!].roles.push(r)
   }
 
+  const closeEditor = () => {
+    setEditing(null)
+    setCreating(false)
+  }
+  const onSaved = () => {
+    closeEditor()
+    reload()
+  }
+
   return (
     <PageLayout>
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
+      {/* Header: title + New role. */}
+      <div className="flex items-start gap-3">
+        <div className="min-w-0 flex-1">
+          <h1 className="flex items-center gap-2 text-base font-semibold">
             <UsersThree className="size-4 text-primary" weight="fill" />
             {t('roles.title')}
-          </CardTitle>
-          <CardDescription>{t('roles.intro')}</CardDescription>
-        </CardHeader>
-      </Card>
+          </h1>
+          <p className="mt-0.5 text-xs text-muted-foreground">{t('roles.intro')}</p>
+        </div>
+        <Button size="sm" className="shrink-0 gap-1.5" onClick={() => setCreating(true)}>
+          <Plus className="size-4" />
+          {t('roles.new')}
+        </Button>
+      </div>
 
       {data?.active?.length ? (
         <Card className="border-primary/40">
@@ -120,7 +166,9 @@ export default function RolesPage() {
           <CardContent className="space-y-2">
             {data.active.map((a) => (
               <div key={a.id} className="flex items-start gap-2 text-xs">
-                <Badge variant="secondary" className="shrink-0">{a.role}</Badge>
+                <Badge variant="secondary" className="shrink-0">
+                  {a.role}
+                </Badge>
                 <span className="min-w-0 flex-1 truncate text-muted-foreground">{a.task}</span>
               </div>
             ))}
@@ -159,51 +207,445 @@ export default function RolesPage() {
         </Card>
       ) : null}
 
+      {/* Role grid, grouped by category, subroles nested under their master. */}
       {groups.map((g) => (
         <div key={g.category} className="space-y-2">
           <h2 className="text-sm font-semibold">{CATEGORY_LABEL[g.category] ?? g.category}</h2>
-          <div className="space-y-2">
-            {orderWithSubroles(g.roles).map((r) => (
-              <Card
-                key={r.name}
-                className={cn('p-3.5', r.subrole && 'ml-4 border-l-2 border-l-border bg-muted/20')}
-              >
-                <div className="flex items-start gap-3">
-                  <div className="min-w-0 flex-1">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <span className="text-sm font-medium">{r.title}</span>
-                      <code className="rounded bg-muted px-1.5 py-0.5 font-mono text-[11px] text-muted-foreground">
-                        {r.name}
-                      </code>
-                      {r.subrole ? (
-                        <Badge variant="secondary">{t('roles.specialistOf', { master: r.parent ?? '' })}</Badge>
-                      ) : null}
-                      {r.danger ? (
-                        <Badge variant="warning">
-                          <Warning className="size-3" weight="fill" />
-                          {t('roles.authorized')}
-                        </Badge>
-                      ) : null}
-                      {r.source === 'local' ? <Badge variant="secondary">{t('roles.custom')}</Badge> : null}
-                    </div>
-                    <p className="mt-1 text-xs text-muted-foreground">{r.summary}</p>
-                    <div className="mt-1.5 flex flex-wrap gap-1.5">
-                      {r.toolset ? <Badge variant="outline">{t('roles.tools', { set: r.toolset })}</Badge> : null}
-                      {r.model ? <Badge variant="outline">{r.model}</Badge> : null}
-                    </div>
+          <div className="grid gap-2.5 sm:grid-cols-2 xl:grid-cols-3">
+            {orderWithSubroles(g.roles).map((r) => {
+              const editable = r.source === 'local'
+              return (
+                <button
+                  key={r.name}
+                  type="button"
+                  onClick={() => setEditing(r)}
+                  className={cn(
+                    'group rounded-[var(--radius-lg)] border border-border bg-card p-3.5 text-left transition-colors hover:border-primary/40',
+                    r.subrole && 'border-l-2 border-l-border bg-muted/20',
+                  )}
+                >
+                  <div className="flex items-start justify-between gap-2">
+                    <span className="min-w-0 truncate text-sm font-medium">{r.title}</span>
+                    {editable ? (
+                      <PencilSimple className="size-3.5 shrink-0 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100" />
+                    ) : null}
                   </div>
-                </div>
-              </Card>
-            ))}
+                  <code className="mt-0.5 inline-block rounded bg-muted px-1.5 py-0.5 font-mono text-[11px] text-muted-foreground">
+                    {r.name}
+                  </code>
+                  <p className="mt-1.5 line-clamp-2 text-xs text-muted-foreground">{r.summary}</p>
+                  <div className="mt-2 flex flex-wrap gap-1.5">
+                    {editable ? (
+                      <Badge variant="secondary">{t('roles.custom')}</Badge>
+                    ) : (
+                      <Badge variant="outline">{t('roles.builtin')}</Badge>
+                    )}
+                    {r.subrole ? (
+                      <Badge variant="secondary">
+                        {t('roles.specialistOf', { master: r.parent ?? '' })}
+                      </Badge>
+                    ) : null}
+                    {r.danger ? (
+                      <Badge variant="warning">
+                        <Warning className="size-3" weight="fill" />
+                        {t('roles.authorized')}
+                      </Badge>
+                    ) : null}
+                    {r.toolset ? (
+                      <Badge variant="outline">{t('roles.tools', { set: r.toolset })}</Badge>
+                    ) : null}
+                    {r.model ? <Badge variant="outline">{r.model}</Badge> : null}
+                  </div>
+                </button>
+              )
+            })}
           </div>
         </div>
       ))}
 
       <Card>
-        <CardContent className="pt-4 text-xs text-muted-foreground">
-          {t('roles.howto')}
-        </CardContent>
+        <CardContent className="pt-4 text-xs text-muted-foreground">{t('roles.howto')}</CardContent>
       </Card>
+
+      {(editing || creating) && (
+        <RoleEditor
+          role={editing}
+          toolsets={data?.toolsets ?? []}
+          categories={data?.categories ?? Object.keys(CATEGORY_LABEL)}
+          onClose={closeEditor}
+          onSaved={onSaved}
+        />
+      )}
     </PageLayout>
+  )
+}
+
+// ---- editor -----------------------------------------------------------------
+
+type Draft = {
+  name: string
+  title: string
+  summary: string
+  category: string
+  toolset: string
+  model: string
+  effort: string
+  danger: boolean
+  subrole: boolean
+  parent: string
+  body: string
+}
+
+const EMPTY: Draft = {
+  name: '',
+  title: '',
+  summary: '',
+  category: 'general',
+  toolset: '',
+  model: '',
+  effort: '',
+  danger: false,
+  subrole: false,
+  parent: '',
+  body: '',
+}
+
+const EFFORTS = ['', 'low', 'medium', 'high', 'xhigh']
+
+/** Assemble the raw .md (front matter + body) from a draft, for the Raw tab. */
+function toRaw(d: Draft): string {
+  const fm: string[] = [`name: ${d.name}`, `title: ${d.title}`]
+  if (d.summary) fm.push(`summary: ${d.summary}`)
+  if (d.category) fm.push(`category: ${d.category}`)
+  if (d.toolset) fm.push(`toolset: ${d.toolset}`)
+  if (d.model) fm.push(`model: ${d.model}`)
+  if (d.effort) fm.push(`effort: ${d.effort}`)
+  if (d.danger) fm.push('danger: true')
+  if (d.subrole) fm.push('subrole: true')
+  if (d.parent) fm.push(`parent: ${d.parent}`)
+  return `---\n${fm.join('\n')}\n---\n\n${d.body.trim()}\n`
+}
+
+function RoleEditor({
+  role,
+  toolsets,
+  categories,
+  onClose,
+  onSaved,
+}: {
+  role: Role | null
+  toolsets: string[]
+  categories: string[]
+  onClose: () => void
+  onSaved: () => void
+}) {
+  const { t } = useI18n()
+  const readOnly = !!role && role.source !== 'local'
+  const isNew = !role
+
+  const [d, setD] = useState<Draft>(() =>
+    role
+      ? {
+          name: role.name,
+          title: role.title,
+          summary: role.summary,
+          category: role.category || 'general',
+          toolset: role.toolset || '',
+          model: role.model || '',
+          effort: role.effort || '',
+          danger: !!role.danger,
+          subrole: !!role.subrole,
+          parent: role.parent || '',
+          body: '', // fetched below (list endpoint omits the prompt body)
+        }
+      : EMPTY,
+  )
+  const [tab, setTab] = useState<'form' | 'raw'>('form')
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState<string>()
+  const set = <K extends keyof Draft>(k: K, v: Draft[K]) => setD((p) => ({ ...p, [k]: v }))
+
+  // The list omits the prompt body; fetch the full role so editing preserves it.
+  useEffect(() => {
+    if (!role) return
+    let cancelled = false
+    get<{ body?: string }>(`/roles/${encodeURIComponent(role.name)}`)
+      .then((full) => {
+        if (!cancelled && typeof full.body === 'string') set('body', full.body)
+      })
+      .catch(() => {})
+    return () => {
+      cancelled = true
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [role])
+
+  const raw = useMemo(() => toRaw(d), [d])
+
+  const save = async () => {
+    setBusy(true)
+    setErr(undefined)
+    try {
+      await post('/roles', {
+        name: d.name,
+        title: d.title,
+        summary: d.summary,
+        category: d.category,
+        toolset: d.toolset,
+        model: d.model,
+        effort: d.effort,
+        danger: d.danger,
+        subrole: d.subrole,
+        parent: d.subrole ? d.parent : '',
+        body: d.body,
+      })
+      onSaved()
+    } catch (e) {
+      setErr((e as Error).message)
+      setBusy(false)
+    }
+  }
+
+  const remove = async () => {
+    if (!role) return
+    setBusy(true)
+    setErr(undefined)
+    try {
+      await del(`/roles/${encodeURIComponent(role.name)}`)
+      onSaved()
+    } catch (e) {
+      setErr((e as Error).message)
+      setBusy(false)
+    }
+  }
+
+  return (
+    <Dialog open onOpenChange={(o) => (!o ? onClose() : null)}>
+      <DialogContent className="max-w-2xl">
+        <DialogHeader>
+          <DialogTitle>
+            {isNew ? t('roles.new') : readOnly ? role!.title : t('roles.editRole', { name: role!.title })}
+          </DialogTitle>
+        </DialogHeader>
+
+        {readOnly ? (
+          <div className="mx-6 -mt-1 rounded-[var(--radius-sm)] border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
+            {t('roles.builtinReadonly')}
+          </div>
+        ) : (
+          <div className="px-6">
+            <Tabs value={tab} onValueChange={(v) => setTab(v as 'form' | 'raw')}>
+              <TabsList>
+                <TabsTrigger value="form">{t('roles.tabForm')}</TabsTrigger>
+                <TabsTrigger value="raw">{t('roles.tabRaw')}</TabsTrigger>
+              </TabsList>
+            </Tabs>
+          </div>
+        )}
+
+        <DialogBody className="space-y-3.5">
+          {readOnly ? (
+            <ReadOnlyView role={role!} />
+          ) : tab === 'raw' ? (
+            <div className="space-y-1.5">
+              <Label>{t('roles.rawLabel')}</Label>
+              <Textarea
+                readOnly
+                value={raw}
+                rows={16}
+                className="font-mono text-[11px] leading-relaxed"
+              />
+              <p className="text-[11px] text-muted-foreground">{t('roles.rawHint')}</p>
+            </div>
+          ) : (
+            <>
+              <div className="grid grid-cols-2 gap-3">
+                <Field label={t('roles.fName')} hint={isNew ? undefined : t('roles.nameLocked')}>
+                  <Input
+                    value={d.name}
+                    disabled={!isNew}
+                    placeholder="my-role"
+                    onChange={(e) => set('name', e.target.value)}
+                  />
+                </Field>
+                <Field label={t('roles.fTitle')}>
+                  <Input value={d.title} onChange={(e) => set('title', e.target.value)} />
+                </Field>
+              </div>
+
+              <Field label={t('roles.fSummary')}>
+                <Input value={d.summary} onChange={(e) => set('summary', e.target.value)} />
+              </Field>
+
+              <div className="grid grid-cols-2 gap-3">
+                <Field label={t('roles.fCategory')}>
+                  <NativeSelect value={d.category} onChange={(v) => set('category', v)}>
+                    {categories.map((c) => (
+                      <option key={c} value={c}>
+                        {CATEGORY_LABEL[c] ?? c}
+                      </option>
+                    ))}
+                  </NativeSelect>
+                </Field>
+                <Field label={t('roles.fToolset')}>
+                  <NativeSelect value={d.toolset} onChange={(v) => set('toolset', v)}>
+                    <option value="">{t('roles.toolsetInherit')}</option>
+                    {toolsets.map((ts) => (
+                      <option key={ts} value={ts}>
+                        {ts}
+                      </option>
+                    ))}
+                  </NativeSelect>
+                </Field>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <Field label={t('roles.fModel')} hint={t('roles.modelInherit')}>
+                  <Input
+                    value={d.model}
+                    placeholder={t('roles.modelInherit')}
+                    onChange={(e) => set('model', e.target.value)}
+                  />
+                </Field>
+                <Field label={t('roles.fEffort')}>
+                  <NativeSelect value={d.effort} onChange={(v) => set('effort', v)}>
+                    {EFFORTS.map((e) => (
+                      <option key={e || 'inherit'} value={e}>
+                        {e || t('roles.effortInherit')}
+                      </option>
+                    ))}
+                  </NativeSelect>
+                </Field>
+              </div>
+
+              <div className="flex items-center justify-between rounded-[var(--radius-sm)] border border-border px-3 py-2">
+                <div>
+                  <p className="text-xs font-medium">{t('roles.fDanger')}</p>
+                  <p className="text-[11px] text-muted-foreground">{t('roles.dangerHint')}</p>
+                </div>
+                <Switch checked={d.danger} onCheckedChange={(v) => set('danger', v)} />
+              </div>
+
+              <div className="rounded-[var(--radius-sm)] border border-border px-3 py-2">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-xs font-medium">{t('roles.fSubrole')}</p>
+                    <p className="text-[11px] text-muted-foreground">{t('roles.subroleHint')}</p>
+                  </div>
+                  <Switch checked={d.subrole} onCheckedChange={(v) => set('subrole', v)} />
+                </div>
+                {d.subrole ? (
+                  <div className="mt-2">
+                    <Input
+                      value={d.parent}
+                      placeholder={t('roles.parentPlaceholder')}
+                      onChange={(e) => set('parent', e.target.value)}
+                    />
+                  </div>
+                ) : null}
+              </div>
+
+              <Field label={t('roles.fPrompt')} hint={t('roles.promptHint')}>
+                <Textarea
+                  value={d.body}
+                  rows={10}
+                  placeholder={t('roles.promptPlaceholder')}
+                  onChange={(e) => set('body', e.target.value)}
+                  className="text-[13px] leading-relaxed"
+                />
+              </Field>
+            </>
+          )}
+
+          {err ? <p className="text-xs text-destructive">{err}</p> : null}
+        </DialogBody>
+
+        <DialogFooter className="flex items-center">
+          {!readOnly && !isNew ? (
+            <Button
+              variant="ghost"
+              size="sm"
+              disabled={busy}
+              onClick={remove}
+              className="mr-auto gap-1.5 text-destructive hover:text-destructive"
+            >
+              <TrashSimple className="size-4" />
+              {t('common.delete')}
+            </Button>
+          ) : null}
+          <DialogClose asChild>
+            <Button variant="outline" size="sm">
+              {t('common.close')}
+            </Button>
+          </DialogClose>
+          {!readOnly ? (
+            <Button size="sm" disabled={busy || !d.name.trim() || !d.title.trim()} onClick={save}>
+              {t('common.save')}
+            </Button>
+          ) : null}
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+// A builtin role can be inspected but not changed; show its facts plainly.
+function ReadOnlyView({ role }: { role: Role }) {
+  const { t } = useI18n()
+  const row = (label: string, value?: string) =>
+    value ? (
+      <div className="flex gap-2 text-xs">
+        <span className="w-24 shrink-0 text-muted-foreground">{label}</span>
+        <span className="min-w-0 flex-1 break-words">{value}</span>
+      </div>
+    ) : null
+  return (
+    <div className="space-y-1.5">
+      {row(t('roles.fName'), role.name)}
+      {row(t('roles.fSummary'), role.summary)}
+      {row(t('roles.fCategory'), CATEGORY_LABEL[role.category] ?? role.category)}
+      {row(t('roles.fToolset'), role.toolset)}
+      {row(t('roles.fModel'), role.model)}
+      {role.subrole ? row(t('roles.fSubrole'), t('roles.specialistOf', { master: role.parent ?? '' })) : null}
+    </div>
+  )
+}
+
+function Field({
+  label,
+  hint,
+  children,
+}: {
+  label: string
+  hint?: string
+  children: React.ReactNode
+}) {
+  return (
+    <div className="space-y-1">
+      <Label>{label}</Label>
+      {children}
+      {hint ? <p className="text-[11px] text-muted-foreground">{hint}</p> : null}
+    </div>
+  )
+}
+
+// A plain native <select> styled to match the Input, avoiding a new dependency.
+function NativeSelect({
+  value,
+  onChange,
+  children,
+}: {
+  value: string
+  onChange: (v: string) => void
+  children: React.ReactNode
+}) {
+  return (
+    <select
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      className="h-9 w-full rounded-[var(--radius-sm)] border border-border bg-card px-2 text-sm outline-none transition-colors focus-visible:border-ring"
+    >
+      {children}
+    </select>
   )
 }

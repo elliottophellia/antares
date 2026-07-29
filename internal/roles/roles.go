@@ -12,6 +12,9 @@ package roles
 
 import (
 	"embed"
+	"fmt"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -60,22 +63,26 @@ type Role struct {
 	Prompt string `json:"-"`
 	// Source is "builtin" or "local".
 	Source string `json:"source"`
+	// Path is the file a local role was loaded from, so it can be edited or
+	// deleted. Empty for builtin roles (embedded in the binary).
+	Path string `json:"-"`
 }
 
-// frontMatter is the YAML header of a role file.
+// frontMatter is the YAML header of a role file. omitempty keeps a saved file
+// tidy — only the fields the author actually set are written.
 type frontMatter struct {
 	Name     string   `yaml:"name"`
 	Title    string   `yaml:"title"`
-	Summary  string   `yaml:"summary"`
-	Category string   `yaml:"category"`
-	Toolset  string   `yaml:"toolset"`
-	Model    string   `yaml:"model"`
-	Effort   string   `yaml:"effort"`
-	MaxTurns int      `yaml:"max_turns"`
-	Tags     []string `yaml:"tags"`
-	Danger   bool     `yaml:"danger"`
-	Subrole  bool     `yaml:"subrole"`
-	Parent   string   `yaml:"parent"`
+	Summary  string   `yaml:"summary,omitempty"`
+	Category string   `yaml:"category,omitempty"`
+	Toolset  string   `yaml:"toolset,omitempty"`
+	Model    string   `yaml:"model,omitempty"`
+	Effort   string   `yaml:"effort,omitempty"`
+	MaxTurns int      `yaml:"max_turns,omitempty"`
+	Tags     []string `yaml:"tags,omitempty"`
+	Danger   bool     `yaml:"danger,omitempty"`
+	Subrole  bool     `yaml:"subrole,omitempty"`
+	Parent   string   `yaml:"parent,omitempty"`
 }
 
 // Registry holds the roles available to a process.
@@ -242,6 +249,101 @@ func humanize(name string) string {
 		}
 	}
 	return strings.Join(parts, " ")
+}
+
+// writeDir is the directory new/edited roles are written to — the first
+// configured directory. Empty if none is configured.
+func (r *Registry) writeDir() string {
+	if len(r.dirs) == 0 {
+		return ""
+	}
+	return strings.TrimSpace(r.dirs[0])
+}
+
+// sanitizeRoleName reduces a name to a safe, kebab-case file stem.
+func sanitizeRoleName(name string) string {
+	name = strings.ToLower(strings.TrimSpace(name))
+	var b strings.Builder
+	for _, ch := range name {
+		switch {
+		case ch >= 'a' && ch <= 'z', ch >= '0' && ch <= '9':
+			b.WriteRune(ch)
+		case ch == ' ' || ch == '_' || ch == '-':
+			b.WriteRune('-')
+		}
+	}
+	return strings.Trim(b.String(), "-")
+}
+
+// Save writes a role to disk as a Markdown file with YAML front matter, then
+// reloads. It refuses to shadow or overwrite a builtin role: builtins are
+// read-only, so a Save is allowed only for a new name or an existing local one.
+func (r *Registry) Save(role Role) (Role, error) {
+	dir := r.writeDir()
+	if dir == "" {
+		return Role{}, fmt.Errorf("no roles directory is configured")
+	}
+	name := sanitizeRoleName(role.Name)
+	if name == "" {
+		return Role{}, fmt.Errorf("a role needs a name")
+	}
+	if strings.TrimSpace(role.Title) == "" {
+		return Role{}, fmt.Errorf("a role needs a title")
+	}
+
+	// Guard builtins: a name already held by a builtin (and not by a local
+	// override) may not be written — that would silently shadow a shipped role.
+	if existing, ok := r.Get(name); ok && existing.Source == "builtin" {
+		return Role{}, fmt.Errorf("%q is a built-in role and cannot be edited; choose a different name", name)
+	}
+
+	fm := frontMatter{
+		Name:     name,
+		Title:    strings.TrimSpace(role.Title),
+		Summary:  strings.TrimSpace(role.Summary),
+		Category: strings.TrimSpace(role.Category),
+		Toolset:  strings.TrimSpace(role.Toolset),
+		Model:    strings.TrimSpace(role.Model),
+		Effort:   strings.TrimSpace(role.Effort),
+		MaxTurns: role.MaxTurns,
+		Tags:     role.Tags,
+		Danger:   role.Danger,
+		Subrole:  role.Subrole,
+		Parent:   strings.ToLower(strings.TrimSpace(role.Parent)),
+	}
+	headerYAML, err := yaml.Marshal(fm)
+	if err != nil {
+		return Role{}, err
+	}
+	content := "---\n" + string(headerYAML) + "---\n\n" + strings.TrimSpace(role.Prompt) + "\n"
+
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return Role{}, err
+	}
+	if err := os.WriteFile(filepath.Join(dir, name+".md"), []byte(content), 0o644); err != nil {
+		return Role{}, err
+	}
+	if err := r.Reload(); err != nil {
+		return Role{}, err
+	}
+	saved, _ := r.Get(name)
+	return saved, nil
+}
+
+// Delete removes a local role file. Builtin roles cannot be deleted.
+func (r *Registry) Delete(name string) error {
+	name = strings.ToLower(strings.TrimSpace(name))
+	role, ok := r.Get(name)
+	if !ok {
+		return fmt.Errorf("role %q not found", name)
+	}
+	if role.Source != "local" || role.Path == "" {
+		return fmt.Errorf("%q is a built-in role and cannot be deleted", name)
+	}
+	if err := os.Remove(role.Path); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return r.Reload()
 }
 
 // Reload rescans the user directories, keeping the bundled roles and letting a

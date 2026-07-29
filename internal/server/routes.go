@@ -125,6 +125,9 @@ func (s *Server) routes() {
 
 	// Roles and the swarm
 	m.HandleFunc("GET /api/roles", s.handleRoles)
+	m.HandleFunc("POST /api/roles", s.handleSaveRole)
+	m.HandleFunc("GET /api/roles/{name}", s.handleGetRole)
+	m.HandleFunc("DELETE /api/roles/{name}", s.handleDeleteRole)
 	m.HandleFunc("GET /api/swarm", s.handleSwarm)
 	m.HandleFunc("GET /api/swarm/stream", s.handleSwarmStream)
 	m.HandleFunc("GET /api/subagent/{id}/attach", s.handleSubAgentAttach)
