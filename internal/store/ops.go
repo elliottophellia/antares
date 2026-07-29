@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"sort"
 	"strings"
 	"time"
 )
@@ -142,11 +143,31 @@ func (s *sqlStore) UsageSeries(ctx context.Context, since time.Time, bucket stri
 	defer rows.Close()
 
 	layout := "2006-01-02"
-	if strings.EqualFold(bucket, "hour") {
+	hourly := strings.EqualFold(bucket, "hour")
+	if hourly {
 		layout = "2006-01-02T15:00"
 	}
+
+	// Pre-seed every bucket across the whole range so a chart always spans the
+	// full window as a continuous line — empty periods read as zero rather than
+	// collapsing the series to a single point.
 	index := map[string]*UsagePoint{}
 	order := []string{}
+	step := 24 * time.Hour
+	start := since.Truncate(24 * time.Hour)
+	if hourly {
+		step = time.Hour
+		start = since.Truncate(time.Hour)
+	}
+	for tcur := start; !tcur.After(time.Now()); tcur = tcur.Add(step) {
+		key := tcur.Format(layout)
+		if _, ok := index[key]; !ok {
+			p := &UsagePoint{Bucket: key}
+			index[key] = p
+			order = append(order, key)
+		}
+	}
+
 	for rows.Next() {
 		var (
 			ts      int64
@@ -159,6 +180,8 @@ func (s *sqlStore) UsageSeries(ctx context.Context, since time.Time, bucket stri
 		key := fromMS(ts).Format(layout)
 		p, ok := index[key]
 		if !ok {
+			// A record outside the pre-seeded grid (clock skew, edge of range):
+			// keep it rather than drop it.
 			p = &UsagePoint{Bucket: key}
 			index[key] = p
 			order = append(order, key)
@@ -168,6 +191,8 @@ func (s *sqlStore) UsageSeries(ctx context.Context, since time.Time, bucket stri
 		p.Cost += cost
 		p.Calls++
 	}
+
+	sort.Strings(order)
 	out := make([]UsagePoint, 0, len(order))
 	for _, k := range order {
 		out = append(out, *index[k])

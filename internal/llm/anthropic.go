@@ -311,7 +311,9 @@ func (c *anthropicClient) Stream(ctx context.Context, req Request, emit func(Eve
 				} `json:"usage"`
 			} `json:"message"`
 			Usage *struct {
-				OutputTokens int `json:"output_tokens"`
+				InputTokens          int `json:"input_tokens"`
+				OutputTokens         int `json:"output_tokens"`
+				CacheReadInputTokens int `json:"cache_read_input_tokens"`
 			} `json:"usage"`
 			Error *struct {
 				Message string `json:"message"`
@@ -370,6 +372,15 @@ func (c *anthropicClient) Stream(ctx context.Context, req Request, emit func(Eve
 			}
 			if ev.Usage != nil {
 				usage.OutputTokens = ev.Usage.OutputTokens
+				// Real Anthropic puts input_tokens in message_start; some
+				// Anthropic-compatible providers (z.ai/GLM) only send it here.
+				// Take it when message_start didn't, so input is never lost.
+				if ev.Usage.InputTokens > 0 {
+					usage.InputTokens = ev.Usage.InputTokens
+				}
+				if ev.Usage.CacheReadInputTokens > 0 {
+					usage.CacheReadTokens = ev.Usage.CacheReadInputTokens
+				}
 				u := usage
 				return emit(Event{Type: EventUsage, Usage: &u})
 			}
