@@ -9,6 +9,9 @@ web/dist/
 internal/server/dist/*
 !internal/server/dist/.gitkeep
 
+# Dev-only UI prototypes (not shipped). See web/src/App.tsx SampleRoutes.
+web/src/sample/
+
 # Local state
 *.db
 *.db-wal
@@ -17,3 +20,12 @@ internal/server/dist/*
 .env.local
 /antares
 /tuishot
+
+# Local agent/editor tooling (not part of the project)
+.agents/
+.cursor/
+.gemini/
+.opencode/
+.mcp.json
+opencode.json
+AGENTS.md
