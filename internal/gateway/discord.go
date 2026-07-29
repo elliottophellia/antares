@@ -526,11 +526,15 @@ func (d *Discord) handleMessage(ctx context.Context, m dcMessage) {
 		reply = "(no reply)"
 	}
 
-	// Post as a normal message rather than a reply-reference: a reply renders
-	// the first line inline beside the bot's name, which reads badly for a long
-	// answer. A plain message puts the whole reply on its own lines under the
-	// name.
-	for _, chunk := range splitForDiscord(reply) {
+	// Post as a normal message (no reply-reference). Discord renders the first
+	// line of any message inline beside the author's name; a leading zero-width
+	// space + newline pushes the real content onto the next line, under the
+	// name, which reads better for a long answer. Only the first chunk needs it.
+	chunks := splitForDiscord(reply)
+	for i, chunk := range chunks {
+		if i == 0 {
+			chunk = "​\n" + chunk
+		}
 		if _, err := d.Send(ctx, Reply{ChannelID: m.ChannelID, Text: chunk}); err != nil {
 			slog.Warn("discord: send failed", "error", err)
 			return
