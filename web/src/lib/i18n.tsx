@@ -554,6 +554,8 @@ const en = {
   'files.download': 'Download',
   'files.close': 'Close',
   'files.binaryHint': "This is a binary file and can't be previewed. Download it to open it.",
+  'files.rendered': 'Rendered',
+  'files.raw': 'Raw',
 
   'logs.title': 'Logs',
   'logs.desc': 'Live Antares runtime log.',
@@ -1169,6 +1171,8 @@ const id: Dict = {
   'files.download': 'Unduh',
   'files.close': 'Tutup',
   'files.binaryHint': 'Ini berkas biner dan tidak bisa dipratinjau. Unduh untuk membukanya.',
+  'files.rendered': 'Render',
+  'files.raw': 'Mentah',
 
   'logs.title': 'Log',
   'logs.desc': 'Aliran log runtime Antares.',
@@ -1715,6 +1719,8 @@ const ja: Dict = {
   'files.download': 'ダウンロード',
   'files.close': '閉じる',
   'files.binaryHint': 'これはバイナリファイルでプレビューできません。ダウンロードして開いてください。',
+  'files.rendered': 'プレビュー',
+  'files.raw': 'ソース',
 
   'logs.title': 'ログ',
   'logs.desc': 'Antares ランタイムのログ。',
@@ -2253,6 +2259,8 @@ const zh: Dict = {
   'files.download': '下载',
   'files.close': '关闭',
   'files.binaryHint': '这是二进制文件，无法预览。下载后打开。',
+  'files.rendered': '渲染',
+  'files.raw': '源码',
 
   'logs.title': '日志',
   'logs.desc': 'Antares 运行时日志。',
@@ -2794,6 +2802,8 @@ const ru: Dict = {
   'files.download': 'Скачать',
   'files.close': 'Закрыть',
   'files.binaryHint': 'Это бинарный файл, предпросмотр невозможен. Скачайте, чтобы открыть.',
+  'files.rendered': 'Просмотр',
+  'files.raw': 'Исходник',
 
   'logs.title': 'Логи',
   'logs.desc': 'Поток логов Antares.',

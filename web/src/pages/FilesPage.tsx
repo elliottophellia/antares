@@ -25,6 +25,7 @@ import { Skeleton, SkeletonList } from '@/components/ui/skeleton'
 import { useI18n, useTimeAgo, type TFunc } from '@/lib/i18n'
 import { usePageActions } from '@/components/layout/PageChrome'
 import { cn } from '@/lib/utils'
+import { Markdown } from '@/components/chat/Markdown'
 
 interface Entry {
   name: string
@@ -34,7 +35,17 @@ interface Entry {
   modified: string
 }
 
-type Kind = 'dir' | 'image' | 'video' | 'audio' | 'pdf' | 'code' | 'text' | 'archive' | 'binary'
+type Kind =
+  | 'dir'
+  | 'image'
+  | 'video'
+  | 'audio'
+  | 'pdf'
+  | 'code'
+  | 'text'
+  | 'markdown'
+  | 'archive'
+  | 'binary'
 
 const EXT: Record<string, Kind> = {}
 const add = (kind: Kind, exts: string[]) => exts.forEach((e) => (EXT[e] = kind))
@@ -43,11 +54,12 @@ add('video', ['mp4', 'webm', 'mov', 'mkv', 'avi'])
 add('audio', ['mp3', 'wav', 'ogg', 'flac', 'm4a'])
 add('pdf', ['pdf'])
 add('archive', ['zip', 'tar', 'gz', 'tgz', 'rar', '7z', 'bz2', 'xz'])
+add('markdown', ['md', 'markdown', 'mdx'])
 add('code', [
   'js', 'ts', 'tsx', 'jsx', 'go', 'py', 'rs', 'c', 'cpp', 'h', 'java', 'rb', 'php', 'sh',
   'json', 'yaml', 'yml', 'toml', 'html', 'css', 'scss', 'sql', 'lua', 'kt', 'swift', 'dart',
 ])
-add('text', ['txt', 'md', 'log', 'csv', 'env', 'gitignore', 'ini', 'conf'])
+add('text', ['txt', 'log', 'csv', 'env', 'gitignore', 'ini', 'conf'])
 
 function kindOf(entry: Entry): Kind {
   if (entry.is_dir) return 'dir'
@@ -70,6 +82,8 @@ function iconFor(kind: Kind) {
       return <FilePdf className={cn(cls, 'text-destructive')} />
     case 'code':
       return <FileCode className={cn(cls, 'text-primary')} />
+    case 'markdown':
+      return <FileText className={cn(cls, 'text-[var(--success)]')} />
     case 'text':
       return <FileText className={cn(cls, 'text-muted-foreground')} />
     case 'archive':
@@ -258,15 +272,38 @@ function PreviewPane({
 }) {
   const { entry, kind } = preview
   const rawUrl = authedUrl(`/files/raw?path=${encodeURIComponent(entry.path)}`)
+  const [view, setView] = useState<'rendered' | 'raw'>('rendered')
+
+  // A new file resets to the rendered view.
+  useEffect(() => setView('rendered'), [entry.path])
 
   return (
     <Card className="flex max-h-[calc(100vh-12rem)] flex-col overflow-hidden">
       <div className="flex items-center gap-2 border-b border-border px-3 py-2">
         {iconFor(kind)}
         <span className="min-w-0 flex-1 truncate font-mono text-xs">{entry.name}</span>
-        <span className="shrink-0 tabular-nums text-[11px] text-muted-foreground">
-          {formatBytes(entry.size)}
-        </span>
+        {kind === 'markdown' && !preview.binary && !preview.error ? (
+          <div className="flex shrink-0 rounded-[var(--radius-sm)] border border-border p-0.5">
+            {(['rendered', 'raw'] as const).map((v) => (
+              <button
+                key={v}
+                onClick={() => setView(v)}
+                className={cn(
+                  'rounded-[calc(var(--radius-sm)-2px)] px-2 py-0.5 text-[11px] font-medium transition-colors',
+                  view === v
+                    ? 'bg-primary text-primary-foreground'
+                    : 'text-muted-foreground hover:text-foreground',
+                )}
+              >
+                {t(v === 'rendered' ? 'files.rendered' : 'files.raw')}
+              </button>
+            ))}
+          </div>
+        ) : (
+          <span className="shrink-0 tabular-nums text-[11px] text-muted-foreground">
+            {formatBytes(entry.size)}
+          </span>
+        )}
         <button
           onClick={() => void downloadFile(`/files/raw?path=${encodeURIComponent(entry.path)}&download=1`, entry.name)}
           className="shrink-0 rounded-[var(--radius-sm)] p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
@@ -311,6 +348,8 @@ function PreviewPane({
               {t('files.download')}
             </Button>
           </div>
+        ) : kind === 'markdown' && view === 'rendered' ? (
+          <Markdown content={preview.content ?? ''} className="p-4 text-sm" />
         ) : (
           <pre className="p-3 font-mono text-[11px] leading-relaxed">{preview.content}</pre>
         )}
