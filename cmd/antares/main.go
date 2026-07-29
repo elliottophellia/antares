@@ -322,13 +322,11 @@ func (rt *runtimeServices) handleGatewayMessage(ctx context.Context, msg gateway
 		// A direct message, or a platform with no bindings at all: fall through
 		// to the default agent.
 	} else {
-		// A per-scope allow list overrides who may use the bot here.
-		if !gateway.BindingAllowsUser(binding, msg.UserID) {
-			return "", nil
-		}
-		// In a server, gate by the sender's Discord roles. An empty role list on
-		// a server binding serves no one; a DM is never gated by roles.
-		if !gateway.BindingAllowsRoles(binding, msg.IsDirect, msg.Roles) {
+		// Access within a matched binding. allowed_users and allowed_roles are
+		// OR'd, and an explicit user match always wins. When both lists are
+		// empty the binding places no per-sender restriction (anyone who reaches
+		// the bound channel is served). DMs are never role-gated.
+		if !gateway.BindingAdmits(binding, msg.IsDirect, msg.UserID, msg.Roles) {
 			return "", nil
 		}
 		// Relevance gate: a cheap model call decides whether the message fits

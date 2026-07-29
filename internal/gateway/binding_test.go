@@ -51,40 +51,39 @@ func TestResolveBindingPlatformIsolation(t *testing.T) {
 	}
 }
 
-func TestBindingAllowsRoles(t *testing.T) {
-	// DMs are never gated by roles.
-	if !BindingAllowsRoles(&config.Binding{}, true, nil) {
-		t.Error("a DM should never be role-gated")
+func TestBindingAdmits(t *testing.T) {
+	// No restriction at all → admit anyone.
+	if !BindingAdmits(&config.Binding{}, false, "u1", nil) {
+		t.Error("a binding with no user/role limits should admit anyone")
 	}
-	// A server binding with no roles serves no one.
-	if BindingAllowsRoles(&config.Binding{}, false, []string{"r1"}) {
-		t.Error("empty AllowedRoles on a server binding must deny")
+	// User allow list only.
+	users := &config.Binding{AllowedUsers: []string{"u1", "u2"}}
+	if !BindingAdmits(users, false, "u2", nil) {
+		t.Error("u2 is listed, should be admitted")
 	}
-	b := &config.Binding{AllowedRoles: []string{"mod", "dev"}}
-	if !BindingAllowsRoles(b, false, []string{"member", "dev"}) {
-		t.Error("sender holding 'dev' should be allowed")
+	if BindingAdmits(users, false, "u3", []string{"anyrole"}) {
+		t.Error("u3 not listed and no role rule → deny")
 	}
-	if BindingAllowsRoles(b, false, []string{"member"}) {
-		t.Error("sender without an allowed role should be denied")
+	// User + role: an explicit user match wins even with roles set, and a role
+	// match also admits. Crucially, a listed user with NO matching role is still
+	// admitted (users OR roles, not AND).
+	both := &config.Binding{AllowedUsers: []string{"u1"}, AllowedRoles: []string{"mod"}}
+	if !BindingAdmits(both, false, "u1", nil) {
+		t.Error("listed user must be admitted regardless of roles")
 	}
-	if BindingAllowsRoles(b, false, nil) {
-		t.Error("sender with no roles should be denied when roles are required")
+	if !BindingAdmits(both, false, "u9", []string{"mod"}) {
+		t.Error("unlisted user holding an allowed role should be admitted")
 	}
-}
-
-func TestBindingAllowsUser(t *testing.T) {
-	if !BindingAllowsUser(nil, "u1") {
-		t.Error("nil binding should allow anyone")
+	if BindingAdmits(both, false, "u9", []string{"member"}) {
+		t.Error("unlisted user without an allowed role should be denied")
 	}
-	open := &config.Binding{}
-	if !BindingAllowsUser(open, "u1") {
-		t.Error("empty allow list should allow anyone")
+	// Roles are ignored in a DM: a role-only binding admits the DM sender.
+	roleOnly := &config.Binding{AllowedRoles: []string{"mod"}}
+	if !BindingAdmits(roleOnly, true, "u1", nil) {
+		t.Error("a DM should not be role-gated")
 	}
-	restricted := &config.Binding{AllowedUsers: []string{"u1", "u2"}}
-	if !BindingAllowsUser(restricted, "u2") {
-		t.Error("u2 is on the list, should be allowed")
-	}
-	if BindingAllowsUser(restricted, "u3") {
-		t.Error("u3 is not on the list, should be denied")
+	// In a server, a role-only binding denies someone without the role.
+	if BindingAdmits(roleOnly, false, "u1", []string{"member"}) {
+		t.Error("server sender without the allowed role should be denied")
 	}
 }

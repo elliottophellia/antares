@@ -60,30 +60,36 @@ func HasBindings(bindings []config.Binding, platform string) bool {
 	return false
 }
 
-// BindingAllowsUser reports whether a binding's per-scope allow list admits a
-// user. An empty list admits anyone (subject to the platform's own pairing).
-func BindingAllowsUser(b *config.Binding, userID string) bool {
-	if b == nil || len(b.AllowedUsers) == 0 {
+// BindingAdmits reports whether a binding admits a sender, combining its
+// per-user and per-role allow lists:
+//
+//   - both lists empty        → admit (the binding sets no per-sender limit).
+//   - user in AllowedUsers     → admit (an explicit user always wins).
+//   - a guild message whose sender holds a role in AllowedRoles → admit.
+//   - otherwise                → deny.
+//
+// Roles only apply to guild (non-direct) messages; a DM has no server roles, so
+// in a DM only the user list is consulted. This means a DM restricted purely by
+// role (roles set, user list empty) admits the paired owner rather than locking
+// them out.
+func BindingAdmits(b *config.Binding, isDirect bool, userID string, roles []string) bool {
+	if b == nil {
 		return true
 	}
-	return contains(b.AllowedUsers, userID)
-}
+	hasUsers := len(b.AllowedUsers) > 0
+	hasRoles := len(b.AllowedRoles) > 0 && !isDirect
 
-// BindingAllowsRoles gates a Discord server binding by the sender's server
-// roles. It applies only to guild (non-direct) messages. The sender must hold
-// at least one of the binding's AllowedRoles. An EMPTY AllowedRoles denies
-// everyone — a server binding with no roles chosen serves no one (by design).
-// Direct messages are never gated by roles (they have none).
-func BindingAllowsRoles(b *config.Binding, isDirect bool, roles []string) bool {
-	if b == nil || isDirect {
+	if !hasUsers && !hasRoles {
+		return true // no per-sender restriction on this binding
+	}
+	if hasUsers && contains(b.AllowedUsers, userID) {
 		return true
 	}
-	if len(b.AllowedRoles) == 0 {
-		return false
-	}
-	for _, r := range roles {
-		if contains(b.AllowedRoles, r) {
-			return true
+	if hasRoles {
+		for _, r := range roles {
+			if contains(b.AllowedRoles, r) {
+				return true
+			}
 		}
 	}
 	return false
