@@ -1,6 +1,20 @@
 import { useEffect, useState } from 'react'
-import { ArrowUUpLeft, File as FileIcon, Folder, House } from '@phosphor-icons/react'
-import { get } from '@/lib/api'
+import {
+  ArrowUUpLeft,
+  CaretRight,
+  DownloadSimple,
+  File as FileIcon,
+  FileArchive,
+  FileAudio,
+  FileCode,
+  FileImage,
+  FilePdf,
+  FileText,
+  FileVideo,
+  Folder,
+  House,
+} from '@phosphor-icons/react'
+import { authedUrl, downloadFile, get } from '@/lib/api'
 import { useApi } from '@/lib/hooks'
 import { formatBytes } from '@/lib/utils'
 import { PageLayout } from '@/components/layout/PageLayout'
@@ -8,8 +22,9 @@ import { Pagination } from '@/components/ui/Pagination'
 import { Button } from '@/components/ui/button'
 import { Card, EmptyState } from '@/components/ui/primitives'
 import { Skeleton, SkeletonList } from '@/components/ui/skeleton'
-import { useI18n, useTimeAgo } from '@/lib/i18n'
+import { useI18n, useTimeAgo, type TFunc } from '@/lib/i18n'
 import { usePageActions } from '@/components/layout/PageChrome'
+import { cn } from '@/lib/utils'
 
 interface Entry {
   name: string
@@ -19,14 +34,67 @@ interface Entry {
   modified: string
 }
 
+type Kind = 'dir' | 'image' | 'video' | 'audio' | 'pdf' | 'code' | 'text' | 'archive' | 'binary'
+
+const EXT: Record<string, Kind> = {}
+const add = (kind: Kind, exts: string[]) => exts.forEach((e) => (EXT[e] = kind))
+add('image', ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'bmp', 'ico', 'avif'])
+add('video', ['mp4', 'webm', 'mov', 'mkv', 'avi'])
+add('audio', ['mp3', 'wav', 'ogg', 'flac', 'm4a'])
+add('pdf', ['pdf'])
+add('archive', ['zip', 'tar', 'gz', 'tgz', 'rar', '7z', 'bz2', 'xz'])
+add('code', [
+  'js', 'ts', 'tsx', 'jsx', 'go', 'py', 'rs', 'c', 'cpp', 'h', 'java', 'rb', 'php', 'sh',
+  'json', 'yaml', 'yml', 'toml', 'html', 'css', 'scss', 'sql', 'lua', 'kt', 'swift', 'dart',
+])
+add('text', ['txt', 'md', 'log', 'csv', 'env', 'gitignore', 'ini', 'conf'])
+
+function kindOf(entry: Entry): Kind {
+  if (entry.is_dir) return 'dir'
+  const ext = entry.name.split('.').pop()?.toLowerCase() ?? ''
+  return EXT[ext] ?? 'binary'
+}
+
+function iconFor(kind: Kind) {
+  const cls = 'size-4 shrink-0'
+  switch (kind) {
+    case 'dir':
+      return <Folder className={cn(cls, 'text-primary')} weight="fill" />
+    case 'image':
+      return <FileImage className={cn(cls, 'text-[var(--success)]')} />
+    case 'video':
+      return <FileVideo className={cn(cls, 'text-[var(--warning)]')} />
+    case 'audio':
+      return <FileAudio className={cn(cls, 'text-[var(--warning)]')} />
+    case 'pdf':
+      return <FilePdf className={cn(cls, 'text-destructive')} />
+    case 'code':
+      return <FileCode className={cn(cls, 'text-primary')} />
+    case 'text':
+      return <FileText className={cn(cls, 'text-muted-foreground')} />
+    case 'archive':
+      return <FileArchive className={cn(cls, 'text-muted-foreground')} />
+    default:
+      return <FileIcon className={cn(cls, 'text-muted-foreground')} />
+  }
+}
+
+interface Preview {
+  entry: Entry
+  kind: Kind
+  content?: string
+  binary?: boolean
+  error?: string
+}
+
 export default function FilesPage() {
   const { t } = useI18n()
   const timeAgo = useTimeAgo()
   const [path, setPath] = useState('.')
-  const [preview, setPreview] = useState<{ path: string; content: string } | null>(null)
+  const [preview, setPreview] = useState<Preview | null>(null)
   const [loadingPreview, setLoadingPreview] = useState(false)
   const [offset, setOffset] = useState(0)
-  const PAGE = 20
+  const PAGE = 50
   const { data, loading } = useApi<{ path: string; parent: string; entries: Entry[] }>(
     `/files?path=${encodeURIComponent(path)}`,
     [path],
@@ -40,12 +108,23 @@ export default function FilesPage() {
       setPreview(null)
       return
     }
+    const kind = kindOf(entry)
+    // Media renders straight from the raw endpoint — no need to fetch bytes
+    // into JS. Text/code is fetched for inline display.
+    if (kind === 'image' || kind === 'video' || kind === 'audio' || kind === 'pdf') {
+      setPreview({ entry, kind })
+      return
+    }
     setLoadingPreview(true)
+    setPreview({ entry, kind })
     try {
-      const r = await get<{ content: string }>(`/files/read?path=${encodeURIComponent(entry.path)}`)
-      setPreview({ path: entry.path, content: r.content })
+      const r = await get<{ content?: string; binary?: boolean }>(
+        `/files/read?path=${encodeURIComponent(entry.path)}`,
+      )
+      if (r.binary) setPreview({ entry, kind: 'binary', binary: true })
+      else setPreview({ entry, kind, content: r.content ?? '' })
     } catch (e) {
-      setPreview({ path: entry.path, content: t('files.cannotRead', { error: (e as Error).message }) })
+      setPreview({ entry, kind, error: t('files.cannotRead', { error: (e as Error).message }) })
     } finally {
       setLoadingPreview(false)
     }
@@ -53,72 +132,202 @@ export default function FilesPage() {
 
   usePageActions(
     <>
-      <Button variant="outline" size="sm" onClick={() => setPath('.')} className="gap-1.5">
+      <Button variant="outline" size="sm" onClick={() => setPath('.')} aria-label={t('files.home')}>
         <House className="size-4" />
       </Button>
-      {data?.parent ? (
+      {data?.parent != null && data.path !== '.' ? (
         <Button variant="outline" size="sm" onClick={() => setPath(data.parent)} className="gap-1.5">
           <ArrowUUpLeft className="size-4" />
           {t('files.up')}
         </Button>
       ) : null}
     </>,
-    [data?.parent, t],
+    [data?.parent, data?.path, t],
   )
 
   const entries = data?.entries ?? []
   const paged = entries.slice(offset, offset + PAGE)
 
+  const crumbs = buildCrumbs(data?.path ?? path)
+
+  const header = (
+    <nav className="flex items-center gap-1 overflow-x-auto text-xs">
+      <button
+        onClick={() => setPath('.')}
+        className="inline-flex shrink-0 items-center gap-1 rounded-[var(--radius-sm)] px-1.5 py-1 font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+      >
+        <House className="size-3.5" />
+        {t('files.workspace')}
+      </button>
+      {crumbs.map((c) => (
+        <span key={c.path} className="inline-flex shrink-0 items-center gap-1">
+          <CaretRight className="size-3 text-muted-foreground/50" />
+          <button
+            onClick={() => setPath(c.path)}
+            className="rounded-[var(--radius-sm)] px-1.5 py-1 font-mono text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+          >
+            {c.name}
+          </button>
+        </span>
+      ))}
+    </nav>
+  )
+
   return (
     <PageLayout
-      footer={<Pagination offset={offset} limit={PAGE} total={entries.length} onChange={setOffset} />}
+      header={header}
+      footer={
+        entries.length > PAGE ? (
+          <Pagination offset={offset} limit={PAGE} total={entries.length} onChange={setOffset} />
+        ) : undefined
+      }
     >
-      <p className="truncate font-mono text-xs text-muted-foreground">{data?.path ?? path}</p>
+      <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)]">
+        {/* file list */}
+        <div className="min-w-0">
+          {loading && !data ? (
+            <SkeletonList count={8} />
+          ) : entries.length === 0 ? (
+            <EmptyState icon={<Folder className="size-8" />} title={t('files.emptyFolder')} />
+          ) : (
+            <Card className="divide-y divide-border overflow-hidden">
+              {paged.map((e) => {
+                const kind = kindOf(e)
+                const active = preview?.entry.path === e.path
+                return (
+                  <button
+                    key={e.path}
+                    onClick={() => open(e)}
+                    className={cn(
+                      'flex w-full items-center gap-3 px-3 py-2 text-left transition-colors hover:bg-accent',
+                      active && 'bg-accent',
+                    )}
+                  >
+                    {iconFor(kind)}
+                    <span className="min-w-0 flex-1 truncate text-sm">{e.name}</span>
+                    {!e.is_dir ? (
+                      <span className="shrink-0 tabular-nums text-[11px] text-muted-foreground">
+                        {formatBytes(e.size)}
+                      </span>
+                    ) : (
+                      <CaretRight className="size-3.5 shrink-0 text-muted-foreground/50" />
+                    )}
+                    <span className="hidden shrink-0 text-[11px] text-muted-foreground sm:inline">
+                      {timeAgo(e.modified)}
+                    </span>
+                  </button>
+                )
+              })}
+            </Card>
+          )}
+        </div>
 
-      {loading && !data ? (
-        <SkeletonList count={6} />
-      ) : (data?.entries.length ?? 0) === 0 ? (
-        <EmptyState icon={<Folder className="size-8" />} title={t('files.emptyFolder')} />
-      ) : (
-        <Card className="divide-y divide-border">
-          {paged.map((e) => (
-            <button
-              key={e.path}
-              onClick={() => open(e)}
-              className="flex w-full items-center gap-3 px-3 py-2.5 text-left transition-colors hover:bg-accent"
-            >
-              {e.is_dir ? (
-                <Folder className="size-4 shrink-0 text-primary" weight="fill" />
-              ) : (
-                <FileIcon className="size-4 shrink-0 text-muted-foreground" />
-              )}
-              <span className="min-w-0 flex-1 truncate text-sm">{e.name}</span>
-              {!e.is_dir ? (
-                <span className="shrink-0 text-[11px] text-muted-foreground">{formatBytes(e.size)}</span>
-              ) : null}
-              <span className="hidden shrink-0 text-[11px] text-muted-foreground sm:inline">
-                {timeAgo(e.modified)}
-              </span>
-            </button>
-          ))}
-        </Card>
-      )}
-
-      {loadingPreview ? (
-        <Skeleton className="h-64 w-full rounded-[var(--radius-lg)]" />
-      ) : preview ? (
-        <Card className="overflow-hidden">
-          <div className="flex items-center justify-between border-b border-border px-3 py-2">
-            <span className="truncate font-mono text-xs">{preview.path}</span>
-            <Button variant="ghost" size="sm" onClick={() => setPreview(null)}>
-              {t('common.close')}
-            </Button>
-          </div>
-          <pre className="max-h-96 overflow-auto p-3 font-mono text-[11px] leading-relaxed">
-            {preview.content}
-          </pre>
-        </Card>
-      ) : null}
+        {/* preview pane */}
+        <div className="min-w-0">
+          {preview ? (
+            <PreviewPane
+              preview={preview}
+              loading={loadingPreview}
+              onClose={() => setPreview(null)}
+              t={t}
+            />
+          ) : (
+            <div className="hidden h-full items-center justify-center rounded-[var(--radius-lg)] border border-dashed border-border text-center lg:flex">
+              <div className="p-6 text-xs text-muted-foreground">
+                <FileText className="mx-auto mb-2 size-7 opacity-50" />
+                {t('files.selectHint')}
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
     </PageLayout>
   )
+}
+
+function PreviewPane({
+  preview,
+  loading,
+  onClose,
+  t,
+}: {
+  preview: Preview
+  loading: boolean
+  onClose: () => void
+  t: TFunc
+}) {
+  const { entry, kind } = preview
+  const rawUrl = authedUrl(`/files/raw?path=${encodeURIComponent(entry.path)}`)
+
+  return (
+    <Card className="flex max-h-[calc(100vh-12rem)] flex-col overflow-hidden">
+      <div className="flex items-center gap-2 border-b border-border px-3 py-2">
+        {iconFor(kind)}
+        <span className="min-w-0 flex-1 truncate font-mono text-xs">{entry.name}</span>
+        <span className="shrink-0 tabular-nums text-[11px] text-muted-foreground">
+          {formatBytes(entry.size)}
+        </span>
+        <button
+          onClick={() => void downloadFile(`/files/raw?path=${encodeURIComponent(entry.path)}&download=1`, entry.name)}
+          className="shrink-0 rounded-[var(--radius-sm)] p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+          aria-label={t('files.download')}
+          title={t('files.download')}
+        >
+          <DownloadSimple className="size-4" />
+        </button>
+        <Button variant="ghost" size="sm" onClick={onClose}>
+          {t('files.close')}
+        </Button>
+      </div>
+
+      <div className="min-h-0 flex-1 overflow-auto">
+        {loading ? (
+          <Skeleton className="m-3 h-64 rounded-[var(--radius-lg)]" />
+        ) : preview.error ? (
+          <p className="p-4 text-xs text-destructive">{preview.error}</p>
+        ) : kind === 'image' ? (
+          <div className="flex items-center justify-center bg-[repeating-conic-gradient(var(--muted)_0_25%,transparent_0_50%)] bg-[length:16px_16px] p-4">
+            <img src={rawUrl} alt={entry.name} className="max-h-full max-w-full rounded object-contain" />
+          </div>
+        ) : kind === 'video' ? (
+          <video src={rawUrl} controls className="max-h-[70vh] w-full bg-black" />
+        ) : kind === 'audio' ? (
+          <div className="p-4">
+            <audio src={rawUrl} controls className="w-full" />
+          </div>
+        ) : kind === 'pdf' ? (
+          <iframe src={rawUrl} title={entry.name} className="h-[70vh] w-full border-0" />
+        ) : preview.binary ? (
+          <div className="flex flex-col items-center gap-3 p-8 text-center">
+            <FileIcon className="size-8 text-muted-foreground" />
+            <p className="text-xs text-muted-foreground">{t('files.binaryHint')}</p>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => void downloadFile(`/files/raw?path=${encodeURIComponent(entry.path)}&download=1`, entry.name)}
+              className="gap-1.5"
+            >
+              <DownloadSimple className="size-4" />
+              {t('files.download')}
+            </Button>
+          </div>
+        ) : (
+          <pre className="p-3 font-mono text-[11px] leading-relaxed">{preview.content}</pre>
+        )}
+      </div>
+    </Card>
+  )
+}
+
+// buildCrumbs turns "a/b/c" into clickable [{name,path}] segments.
+function buildCrumbs(p: string): { name: string; path: string }[] {
+  if (!p || p === '.' || p === '/') return []
+  const parts = p.split('/').filter((s) => s && s !== '.')
+  const out: { name: string; path: string }[] = []
+  let acc = ''
+  for (const part of parts) {
+    acc = acc ? `${acc}/${part}` : part
+    out.push({ name: part, path: acc })
+  }
+  return out
 }

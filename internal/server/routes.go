@@ -110,6 +110,7 @@ func (s *Server) routes() {
 	// Files
 	m.HandleFunc("GET /api/files", s.handleListFiles)
 	m.HandleFunc("GET /api/files/read", s.handleReadFile)
+	m.HandleFunc("GET /api/files/raw", s.handleRawFile)
 
 	// Skills
 	m.HandleFunc("GET /api/skills", s.handleListSkills)

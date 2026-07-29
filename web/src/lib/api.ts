@@ -76,6 +76,17 @@ export const put = <T,>(path: string, data?: unknown) =>
 export const del = <T,>(path: string) => api<T>(path, { method: 'DELETE' })
 
 /** Fetch a file endpoint (with auth) and trigger a browser download. */
+/**
+ * Build a same-origin URL to an API GET endpoint with the auth token in the
+ * query string. Use for <img src>, <video>, and download links — places that
+ * cannot set an Authorization header. The token middleware accepts ?token=.
+ */
+export function authedUrl(path: string): string {
+  const token = getToken()
+  if (!token) return `/api${path}`
+  return `/api${path}${path.includes('?') ? '&' : '?'}token=${encodeURIComponent(token)}`
+}
+
 export async function downloadFile(path: string, filename: string): Promise<void> {
   const res = await fetch(`/api${path}`, { headers: { ...authHeaders() } })
   if (!res.ok) {

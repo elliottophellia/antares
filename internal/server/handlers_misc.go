@@ -392,7 +392,67 @@ func (s *Server) handleReadFile(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
+	// A NUL byte in the first chunk means it is not text — say so rather than
+	// returning mojibake the preview would render as noise.
+	if isBinary(data) {
+		writeJSON(w, http.StatusOK, map[string]any{"binary": true, "size": fi.Size()})
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"content": string(data), "size": fi.Size()})
+}
+
+// isBinary reports whether b looks like non-text data (a NUL byte in the first
+// 8 KB is a reliable, cheap signal).
+func isBinary(b []byte) bool {
+	n := len(b)
+	if n > 8192 {
+		n = 8192
+	}
+	for i := 0; i < n; i++ {
+		if b[i] == 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// handleRawFile serves a file's bytes with a detected Content-Type so the
+// dashboard can render images inline and download anything. Unlike
+// handleReadFile (JSON text, for previews), this streams the raw file and
+// works for binary content. Auth is handled by the token middleware, which
+// accepts a ?token= query param — needed because <img src> and download links
+// cannot set an Authorization header.
+func (s *Server) handleRawFile(w http.ResponseWriter, r *http.Request) {
+	cfg := s.config()
+	abs, err := safeJoin(cfg.Agent.Workspace, r.URL.Query().Get("path"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	fi, err := os.Stat(abs)
+	if err != nil {
+		writeError(w, http.StatusNotFound, err)
+		return
+	}
+	if fi.IsDir() {
+		writeError(w, http.StatusBadRequest, errors.New("path is a directory"))
+		return
+	}
+	f, err := os.Open(abs)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	defer f.Close()
+
+	// A download link passes ?download=1 to force a save-as; otherwise the
+	// browser renders inline (images, PDFs).
+	if r.URL.Query().Get("download") != "" {
+		w.Header().Set("Content-Disposition", "attachment; filename=\""+filepath.Base(abs)+"\"")
+	}
+	// http.ServeContent sniffs the content type and handles range requests,
+	// which lets the browser stream large media.
+	http.ServeContent(w, r, filepath.Base(abs), fi.ModTime(), f)
 }
 
 func safeJoin(workspace, target string) (string, error) {
