@@ -307,15 +307,20 @@ func (rt *runtimeServices) handleGatewayMessage(ctx context.Context, msg gateway
 		return rt.runGatewayCommand(ctx, key, sessionID, name, args)
 	}
 
-	// Per-channel routing. When a platform has any binding, it answers ONLY in
-	// bound channels; an unbound channel is silently ignored (strict allowlist).
+	// Per-channel routing. Bindings gate GROUP/server channels: when a platform
+	// has any binding, it answers only in bound group channels and ignores
+	// unregistered ones (strict allowlist). Direct messages (1:1) are always
+	// allowed — the allowlist never locks you out of your own DM with the bot.
+	// A binding may still match a DM to give it a role/model, but its absence
+	// does not silence a DM.
 	bindings := config.Get().Gateway.Bindings
 	binding := gateway.ResolveBinding(bindings, msg.Platform, msg.GuildID, msg.ChannelID)
 	if binding == nil {
-		if gateway.HasBindings(bindings, msg.Platform) {
-			return "", nil // unregistered channel — stay silent
+		if !msg.IsDirect && gateway.HasBindings(bindings, msg.Platform) {
+			return "", nil // unregistered group channel — stay silent
 		}
-		// No bindings for this platform at all: fall through to the default agent.
+		// A direct message, or a platform with no bindings at all: fall through
+		// to the default agent.
 	} else {
 		// A per-scope allow list overrides who may use the bot here.
 		if !gateway.BindingAllowsUser(binding, msg.UserID) {

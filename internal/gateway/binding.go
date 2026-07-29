@@ -47,8 +47,9 @@ func ResolveBinding(bindings []config.Binding, platform, guildID, channelID stri
 }
 
 // HasBindings reports whether a platform has any binding configured at all
-// (enabled or not). When true and ResolveBinding returns nil, the channel is
-// unregistered and the bot should stay silent.
+// (enabled or not). When true and ResolveBinding returns nil for a GROUP
+// channel, the channel is unregistered and the bot should stay silent. Direct
+// messages are never gated this way — the caller lets DMs through regardless.
 func HasBindings(bindings []config.Binding, platform string) bool {
 	platform = strings.ToLower(strings.TrimSpace(platform))
 	for i := range bindings {
