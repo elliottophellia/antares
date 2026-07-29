@@ -40,6 +40,7 @@ import { SkeletonList } from '@/components/ui/skeleton'
 import { Button } from '@/components/ui/button'
 import { usePageActions } from '@/components/layout/PageChrome'
 import { HubDialog } from '@/components/hub/HubDialog'
+import { ConfirmDialog } from '@/components/ui/ConfirmDialog'
 
 interface McpTool {
   name: string
@@ -60,6 +61,7 @@ export default function McpPage() {
   const [browsing, setBrowsing] = useState(false)
   const [adding, setAdding] = useState(false)
   const [removing, setRemoving] = useState('')
+  const [toRemove, setToRemove] = useState<string | null>(null)
   const [tab, setTab] = useState<'servers' | 'docs'>('servers')
 
   usePageActions(
@@ -76,14 +78,16 @@ export default function McpPage() {
     [t],
   )
 
-  const remove = async (name: string) => {
-    if (!confirm(t('mcp.removeConfirm', { name }))) return
+  const confirmRemove = async () => {
+    if (!toRemove) return
+    const name = toRemove
     setRemoving(name)
     try {
       await del(`/mcp/servers/${encodeURIComponent(name)}`)
       reload()
     } finally {
       setRemoving('')
+      setToRemove(null)
     }
   }
 
@@ -104,6 +108,14 @@ export default function McpPage() {
     <PageLayout header={header}>
       <HubDialog kind="mcp" open={browsing} onOpenChange={setBrowsing} onInstalled={reload} />
       <AddMcpDialog open={adding} onOpenChange={setAdding} onAdded={reload} />
+      <ConfirmDialog
+        open={!!toRemove}
+        onOpenChange={(open) => !open && setToRemove(null)}
+        title={t('mcp.removeConfirm', { name: toRemove ?? '' })}
+        confirmLabel={t('common.remove')}
+        loading={removing !== ''}
+        onConfirm={() => void confirmRemove()}
+      />
 
       {tab === 'docs' ? (
         <McpDocs />
@@ -142,7 +154,7 @@ export default function McpPage() {
                     )}
                     <span className="min-w-0 flex-1 truncate text-sm font-medium">{s.name}</span>
                     <button
-                      onClick={() => void remove(s.name)}
+                      onClick={() => setToRemove(s.name)}
                       disabled={removing === s.name}
                       aria-label={t('common.delete')}
                       className="shrink-0 text-muted-foreground transition-colors hover:text-destructive disabled:opacity-50"

@@ -46,6 +46,8 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { SkeletonList } from '@/components/ui/skeleton'
+import { SearchSelect, SearchMultiSelect, type Option } from '@/components/ui/SearchSelect'
+import { ConfirmDialog } from '@/components/ui/ConfirmDialog'
 
 interface ChannelField {
   key: string
@@ -657,6 +659,7 @@ interface Binding {
   model: string
   toolset: string
   allowed_users: string[]
+  allowed_roles?: string[]
   reply_mode: string
   prompt_prefix: string
   relevance_filter: string
@@ -688,6 +691,7 @@ const emptyBinding = (platform: 'discord' | 'telegram' = 'discord'): Binding => 
   model: '',
   toolset: '',
   allowed_users: [],
+  allowed_roles: [],
   reply_mode: 'mention',
   prompt_prefix: '',
   relevance_filter: '',
@@ -706,18 +710,21 @@ function RoutingPanel({ platform }: { platform?: 'discord' | 'telegram' } = {}) 
   const { data, loading, reload } = useApi<{ bindings: Binding[] }>('/channels/bindings')
   const [editing, setEditing] = useState<Binding | null>(null)
   const [removing, setRemoving] = useState('')
+  const [toDelete, setToDelete] = useState<Binding | null>(null)
 
   const allBindings = data?.bindings ?? []
   const bindings = platform ? allBindings.filter((b) => b.platform === platform) : allBindings
 
-  const remove = async (b: Binding) => {
-    if (!confirm(t('common.delete') + '?')) return
+  const confirmRemove = async () => {
+    if (!toDelete) return
+    const b = toDelete
     setRemoving(b.id)
     try {
       await del(`/channels/bindings/${encodeURIComponent(b.id)}`)
       reload()
     } finally {
       setRemoving('')
+      setToDelete(null)
     }
   }
 
@@ -735,6 +742,14 @@ function RoutingPanel({ platform }: { platform?: 'discord' | 'telegram' } = {}) 
         lockedPlatform={platform}
         onOpenChange={(open) => !open && setEditing(null)}
         onSaved={reload}
+      />
+      <ConfirmDialog
+        open={!!toDelete}
+        onOpenChange={(open) => !open && setToDelete(null)}
+        title={t('channels.deleteBinding')}
+        description={toDelete?.label || toDelete?.channel_id || toDelete?.guild_id || undefined}
+        loading={removing !== ''}
+        onConfirm={() => void confirmRemove()}
       />
 
       <div className="flex justify-end">
@@ -800,7 +815,7 @@ function RoutingPanel({ platform }: { platform?: 'discord' | 'telegram' } = {}) 
                     {t('channels.editBinding')}
                   </Button>
                   <button
-                    onClick={() => void remove(b)}
+                    onClick={() => setToDelete(b)}
                     disabled={removing === b.id}
                     aria-label={t('common.delete')}
                     className="ml-auto shrink-0 text-muted-foreground transition-colors hover:text-destructive disabled:opacity-50"
@@ -854,6 +869,8 @@ function BindingDialog({
   const [guildsError, setGuildsError] = useState<string>()
   const [channels, setChannels] = useState<DiscoverChannel[]>([])
   const [channelsError, setChannelsError] = useState<string>()
+  const [discordRoles, setDiscordRoles] = useState<{ id: string; name: string }[]>([])
+  const [discordRolesError, setDiscordRolesError] = useState<string>()
 
   const update = <K extends keyof Binding>(key: K, value: Binding[K]) =>
     setForm((f) => ({ ...f, [key]: value }))
@@ -866,6 +883,8 @@ function BindingDialog({
     setError(undefined)
     setChannels([])
     setChannelsError(undefined)
+    setDiscordRoles([])
+    setDiscordRolesError(undefined)
 
     void get<{ roles: Role[]; toolsets: string[] }>('/roles')
       .then((r) => {
@@ -908,6 +927,26 @@ function BindingDialog({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [binding, form.platform, form.guild_id])
 
+  // Discord role discovery, once a guild is picked — powers the allowed-roles
+  // multi-select.
+  useEffect(() => {
+    if (!binding || form.platform !== 'discord' || !form.guild_id) {
+      setDiscordRoles([])
+      setDiscordRolesError(undefined)
+      return
+    }
+    setDiscordRolesError(undefined)
+    void get<{ roles: { id: string; name: string }[]; error?: string }>(
+      `/channels/discord/guilds/${encodeURIComponent(form.guild_id)}/roles`,
+    )
+      .then((r) => {
+        setDiscordRoles(r.roles ?? [])
+        setDiscordRolesError(r.error)
+      })
+      .catch((e: Error) => setDiscordRolesError(e.message))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [binding, form.platform, form.guild_id])
+
   const save = async () => {
     setBusy(true)
     setError(undefined)
@@ -918,6 +957,7 @@ function BindingDialog({
           .split(',')
           .map((s) => s.trim())
           .filter(Boolean),
+        allowed_roles: form.allowed_roles ?? [],
       }
       const r = await post<{ ok: boolean; error?: string; binding?: Binding }>(
         '/channels/bindings',
@@ -975,22 +1015,15 @@ function BindingDialog({
             <>
               <div className="grid gap-1.5">
                 <Label htmlFor="b-server">{t('channels.bServer')}</Label>
-                <select
-                  id="b-server"
-                  className={selectClass}
+                <SearchSelect
                   value={form.guild_id}
-                  onChange={(e) => {
-                    update('guild_id', e.target.value)
+                  onChange={(v) => {
+                    update('guild_id', v)
                     update('channel_id', '')
                   }}
-                >
-                  <option value="">—</option>
-                  {guilds.map((g) => (
-                    <option key={g.id} value={g.id}>
-                      {g.name}
-                    </option>
-                  ))}
-                </select>
+                  options={guilds.map((g): Option => ({ value: g.id, label: g.name, hint: g.id }))}
+                  placeholder="—"
+                />
                 {guildsError ? (
                   <p className="text-[11px] text-destructive">{guildsError}</p>
                 ) : null}
@@ -998,24 +1031,34 @@ function BindingDialog({
 
               <div className="grid gap-1.5">
                 <Label htmlFor="b-channel">{t('channels.bChannel')}</Label>
-                <select
-                  id="b-channel"
-                  className={selectClass}
+                <SearchSelect
                   value={form.channel_id}
-                  onChange={(e) => update('channel_id', e.target.value)}
+                  onChange={(v) => update('channel_id', v)}
+                  options={channels.map((c): Option => ({ value: c.id, label: `#${c.name}`, hint: c.id }))}
+                  emptyLabel={t('channels.bChannelAll')}
                   disabled={!form.guild_id}
-                >
-                  <option value="">{t('channels.bChannelAll')}</option>
-                  {channels.map((c) => (
-                    <option key={c.id} value={c.id}>
-                      #{c.name}
-                    </option>
-                  ))}
-                </select>
+                />
                 {channelsError ? (
                   <p className="text-[11px] text-destructive">{channelsError}</p>
                 ) : null}
               </div>
+
+              {/* Allowed Discord roles */}
+              {form.guild_id ? (
+                <div className="grid gap-1.5">
+                  <Label htmlFor="b-allowed-roles">{t('channels.bAllowedRoles')}</Label>
+                  <SearchMultiSelect
+                    values={form.allowed_roles ?? []}
+                    onChange={(v) => update('allowed_roles', v)}
+                    options={discordRoles.map((r): Option => ({ value: r.id, label: r.name, hint: r.id }))}
+                    placeholder={t('channels.bAllowedRoles')}
+                  />
+                  {discordRolesError ? (
+                    <p className="text-[11px] text-destructive">{discordRolesError}</p>
+                  ) : null}
+                  <p className="text-[11px] text-muted-foreground">{t('channels.bAllowedRolesHint')}</p>
+                </div>
+              ) : null}
             </>
           ) : (
             <div className="grid gap-1.5">
@@ -1044,55 +1087,38 @@ function BindingDialog({
           {/* Role */}
           <div className="grid gap-1.5">
             <Label htmlFor="b-role">{t('channels.bRole')}</Label>
-            <select
-              id="b-role"
-              className={selectClass}
+            <SearchSelect
               value={form.role}
-              onChange={(e) => update('role', e.target.value)}
-            >
-              <option value="">{t('channels.bRoleDefault')}</option>
-              {roles.map((r) => (
-                <option key={r.name} value={r.name}>
-                  {r.title || r.name}
-                </option>
-              ))}
-            </select>
+              onChange={(v) => update('role', v)}
+              options={roles.map((r): Option => ({ value: r.name, label: r.title || r.name }))}
+              emptyLabel={t('channels.bRoleDefault')}
+            />
           </div>
 
           {/* Model */}
           <div className="grid gap-1.5">
             <Label htmlFor="b-model">{t('channels.bModel')}</Label>
-            <select
-              id="b-model"
-              className={selectClass}
+            <SearchSelect
               value={form.model}
-              onChange={(e) => update('model', e.target.value)}
-            >
-              <option value="">{t('channels.bModelDefault')}</option>
-              {models.map((m) => (
-                <option key={m.id} value={m.id}>
-                  {m.name} — {m.provider_label}
-                </option>
-              ))}
-            </select>
+              onChange={(v) => update('model', v)}
+              options={models.map((m): Option => ({
+                value: m.id,
+                label: `${m.name} — ${m.provider_label}`,
+                hint: m.id,
+              }))}
+              emptyLabel={t('channels.bModelDefault')}
+            />
           </div>
 
           {/* Toolset */}
           <div className="grid gap-1.5">
             <Label htmlFor="b-toolset">{t('channels.bToolset')}</Label>
-            <select
-              id="b-toolset"
-              className={selectClass}
+            <SearchSelect
               value={form.toolset}
-              onChange={(e) => update('toolset', e.target.value)}
-            >
-              <option value="">{t('channels.bToolsetDefault')}</option>
-              {toolsets.map((ts) => (
-                <option key={ts} value={ts}>
-                  {ts}
-                </option>
-              ))}
-            </select>
+              onChange={(v) => update('toolset', v)}
+              options={toolsets.map((ts): Option => ({ value: ts, label: ts }))}
+              emptyLabel={t('channels.bToolsetDefault')}
+            />
           </div>
 
           {/* Reply mode */}
