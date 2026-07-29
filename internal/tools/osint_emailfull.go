@@ -9,6 +9,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/enowdev/antares/internal/config"
 )
 
 // osint_email_full drives emailosint.org's own investigation engine: it resolves
@@ -108,6 +110,11 @@ func emailOSINTToken(ctx context.Context, in Input) (string, error) {
 	// its own session key so it never disturbs the conversation's main browser.
 	cfg := *in.Deps.Config
 	cfg.Tools.Browser.Headed = true
+	// Route the solve through the global active proxy too, so the token is minted
+	// from the same IP the lookup will use (some challenges bind token to IP).
+	if p := in.Deps.Config.ActiveProxyURL(); p != "" {
+		cfg.Tools.Browser.Proxy = p
+	}
 	s := sessionFor("emailosint:"+in.SessionID, &cfg)
 	if !s.Started() {
 		if err := s.Start(ctx); err != nil {
@@ -200,7 +207,15 @@ func emailOSINTStreamLookup(ctx context.Context, in Input, email, token string) 
 	req.Header.Set("Referer", emailOSINTSite)
 	req.Header.Set("User-Agent", emailOSINTClientUA)
 
-	resp, err := webClient.Do(req)
+	client := webClient
+	if p := in.Deps.Config.ActiveProxyURL(); p != "" {
+		pc, err := config.ProxyHTTPClient(p, 5*time.Minute)
+		if err != nil {
+			return Result{}, fmt.Errorf("invalid proxy %q: %w", p, err)
+		}
+		client = pc
+	}
+	resp, err := client.Do(req)
 	if err != nil {
 		return Result{}, err
 	}

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/url"
 	"os"
 	"os/exec"
 	"strconv"
@@ -58,6 +59,28 @@ func (s *Session) LastUsed() time.Time {
 }
 
 // Start launches or attaches to a browser and opens a page.
+// proxyCreds extracts the username/password from a proxy URL. ok is false when
+// the URL is empty, unparseable, or carries no userinfo.
+func proxyCreds(raw string) (user, pass string, ok bool) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return "", "", false
+	}
+	if !strings.Contains(raw, "://") {
+		raw = "http://" + raw
+	}
+	u, err := url.Parse(raw)
+	if err != nil || u.User == nil {
+		return "", "", false
+	}
+	user = u.User.Username()
+	pass, _ = u.User.Password()
+	if user == "" {
+		return "", "", false
+	}
+	return user, pass, true
+}
+
 func (s *Session) Start(ctx context.Context) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -182,6 +205,49 @@ func (s *Session) Start(ctx context.Context) error {
 		if _, err := c.send(ctx, s.pageSess, m, nil); err != nil {
 			s.killLocked()
 			return err
+		}
+	}
+
+	// An authenticated proxy (user:pass in the URL) can't carry its credentials
+	// on Chrome's --proxy-server flag, so Chrome would pop a native auth dialog
+	// and stall. Handle it over CDP: enable Fetch with auth handling and answer
+	// the challenge with the stored credentials, continuing every other paused
+	// request untouched.
+	if user, pass, ok := proxyCreds(s.opts.Proxy); ok {
+		// handleAuthRequests without url patterns means only auth challenges pause
+		// (and fire Fetch.authRequired); ordinary requests are not intercepted, so
+		// there is no per-request continue overhead. Chrome still emits a paired
+		// Fetch.requestPaused for the challenged request, which we let continue.
+		if _, err := c.send(ctx, s.pageSess, "Fetch.enable", map[string]any{
+			"handleAuthRequests": true,
+		}); err != nil {
+			s.killLocked()
+			return err
+		}
+		c.onEvent = func(method string, params json.RawMessage, sess string) {
+			switch method {
+			case "Fetch.authRequired":
+				var ev struct {
+					RequestID string `json:"requestId"`
+				}
+				_ = json.Unmarshal(params, &ev)
+				_, _ = c.send(context.Background(), sess, "Fetch.continueWithAuth", map[string]any{
+					"requestId": ev.RequestID,
+					"authChallengeResponse": map[string]any{
+						"response": "ProvideCredentials",
+						"username": user,
+						"password": pass,
+					},
+				})
+			case "Fetch.requestPaused":
+				var ev struct {
+					RequestID string `json:"requestId"`
+				}
+				_ = json.Unmarshal(params, &ev)
+				_, _ = c.send(context.Background(), sess, "Fetch.continueRequest", map[string]any{
+					"requestId": ev.RequestID,
+				})
+			}
 		}
 	}
 	_, _ = c.send(ctx, s.pageSess, "Emulation.setDeviceMetricsOverride", map[string]any{

@@ -2,6 +2,18 @@
 // YAML overrides from the profile config, then environment variables.
 package config
 
+import (
+	"context"
+	"fmt"
+	"net"
+	"net/http"
+	"net/url"
+	"strings"
+	"time"
+
+	xproxy "golang.org/x/net/proxy"
+)
+
 // Config is the complete runtime configuration tree.
 type Config struct {
 	Model         Model               `yaml:"model" json:"model"`
@@ -32,6 +44,7 @@ type Config struct {
 	Display       Display             `yaml:"display" json:"display"`
 	Logging       Logging             `yaml:"logging" json:"logging"`
 	MCP           MCP                 `yaml:"mcp" json:"mcp"`
+	Proxies       Proxies             `yaml:"proxies" json:"proxies"`
 
 	MaxConcurrentSessions int  `yaml:"max_concurrent_sessions" json:"max_concurrent_sessions"`
 	GroupSessionsPerUser  bool `yaml:"group_sessions_per_user" json:"group_sessions_per_user"`
@@ -333,6 +346,128 @@ type OSINT struct {
 	// GoogleAuthUser selects which account in a multi-account cookie session the
 	// Google lookups act as — the /u/<N>/ index. 0 is the default account.
 	GoogleAuthUser int `yaml:"google_authuser" json:"google_authuser"`
+}
+
+// Proxies is a global store of named proxy endpoints. Features that can route
+// through a proxy (osint_email_full, the browser, …) look up the active entry
+// here rather than each carrying its own proxy setting. Think of it as shared
+// proxy storage the whole app draws from when a proxy is called for.
+type Proxies struct {
+	// Active is the ID of the entry used when a feature asks for "the proxy".
+	// Empty means no proxy — a direct connection.
+	Active string `yaml:"active" json:"active"`
+	// Entries are the saved proxies, keyed by a stable ID.
+	Entries []ProxyEntry `yaml:"entries" json:"entries"`
+}
+
+// ProxyEntry is one saved proxy. URL is the full endpoint; the convenience
+// fields (Scheme/Host/Port/Username/Password) let the dashboard edit parts
+// without re-typing the whole URL, and ProxyURL() composes them when URL is
+// empty.
+type ProxyEntry struct {
+	ID       string `yaml:"id" json:"id"`
+	Label    string `yaml:"label" json:"label"`
+	URL      string `yaml:"url" json:"url"`
+	Scheme   string `yaml:"scheme" json:"scheme"` // http|https|socks5 (default http)
+	Host     string `yaml:"host" json:"host"`
+	Port     int    `yaml:"port" json:"port"`
+	Username string `yaml:"username" json:"username"`
+	Password string `yaml:"password" json:"password"`
+}
+
+// ProxyURL returns the entry as a dial-ready URL, e.g.
+// "http://user:pass@host:port". It prefers an explicit URL, else composes one
+// from the parts. Empty if the entry has neither.
+func (p ProxyEntry) ProxyURL() string {
+	if u := strings.TrimSpace(p.URL); u != "" {
+		if !strings.Contains(u, "://") {
+			u = "http://" + u
+		}
+		return u
+	}
+	host := strings.TrimSpace(p.Host)
+	if host == "" {
+		return ""
+	}
+	scheme := strings.TrimSpace(p.Scheme)
+	if scheme == "" {
+		scheme = "http"
+	}
+	auth := ""
+	if p.Username != "" {
+		auth = url.QueryEscape(p.Username)
+		if p.Password != "" {
+			auth += ":" + url.QueryEscape(p.Password)
+		}
+		auth += "@"
+	}
+	hostport := host
+	if p.Port > 0 {
+		hostport = fmt.Sprintf("%s:%d", host, p.Port)
+	}
+	return fmt.Sprintf("%s://%s%s", scheme, auth, hostport)
+}
+
+// ProxyHTTPClient builds an *http.Client that dials through the given proxy URL.
+// http/https proxies use the standard transport proxy; socks5/socks5h use a
+// x/net SOCKS dialer. It is the one place that turns a proxy URL into a client,
+// shared by the tools and the server's proxy-test endpoint. An empty proxyURL
+// yields a plain client with the given timeout.
+func ProxyHTTPClient(proxyURL string, timeout time.Duration) (*http.Client, error) {
+	proxyURL = strings.TrimSpace(proxyURL)
+	if proxyURL == "" {
+		return &http.Client{Timeout: timeout}, nil
+	}
+	u, err := url.Parse(proxyURL)
+	if err != nil {
+		return nil, err
+	}
+	switch strings.ToLower(u.Scheme) {
+	case "http", "https", "":
+		if u.Scheme == "" {
+			u.Scheme = "http"
+		}
+		return &http.Client{
+			Timeout:   timeout,
+			Transport: &http.Transport{Proxy: http.ProxyURL(u)},
+		}, nil
+	case "socks5", "socks5h":
+		var auth *xproxy.Auth
+		if u.User != nil {
+			pw, _ := u.User.Password()
+			auth = &xproxy.Auth{User: u.User.Username(), Password: pw}
+		}
+		d, err := xproxy.SOCKS5("tcp", u.Host, auth, xproxy.Direct)
+		if err != nil {
+			return nil, err
+		}
+		tr := &http.Transport{}
+		if dc, ok := d.(xproxy.ContextDialer); ok {
+			tr.DialContext = dc.DialContext
+		} else {
+			tr.DialContext = func(_ context.Context, network, addr string) (net.Conn, error) {
+				return d.Dial(network, addr)
+			}
+		}
+		return &http.Client{Timeout: timeout, Transport: tr}, nil
+	default:
+		return nil, fmt.Errorf("unsupported proxy scheme %q", u.Scheme)
+	}
+}
+
+// ActiveProxyURL resolves the globally-selected proxy to a dial-ready URL, or
+// "" when none is active. This is the single entry point features use.
+func (c *Config) ActiveProxyURL() string {
+	id := strings.TrimSpace(c.Proxies.Active)
+	if id == "" {
+		return ""
+	}
+	for _, e := range c.Proxies.Entries {
+		if e.ID == id {
+			return e.ProxyURL()
+		}
+	}
+	return ""
 }
 
 // Roles configures the specialist agent roles.

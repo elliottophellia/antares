@@ -46,6 +46,11 @@ type conn struct {
 	eventsMu sync.Mutex
 	events   map[string][]json.RawMessage
 
+	// onEvent, when set, is invoked for every event frame (each in its own
+	// goroutine so a handler may call send() without deadlocking the read loop).
+	// Used for CDP flows that must reply immediately, e.g. proxy auth.
+	onEvent func(method string, params json.RawMessage, sessionID string)
+
 	closed chan struct{}
 	once   sync.Once
 }
@@ -91,6 +96,9 @@ func (c *conn) readLoop() {
 			continue
 		}
 		if m.Method != "" {
+			if c.onEvent != nil {
+				go c.onEvent(m.Method, m.Params, m.SessionID)
+			}
 			c.eventsMu.Lock()
 			// Keep the tail only; a chatty page would otherwise grow forever.
 			list := append(c.events[m.Method], m.Params)

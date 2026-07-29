@@ -132,6 +132,13 @@ func (s *Server) routes() {
 	m.HandleFunc("POST /api/osint/google/verify", s.handleGoogleVerify)
 	m.HandleFunc("POST /api/osint/google/select", s.handleGoogleSelect)
 
+	// Proxies — global proxy store
+	m.HandleFunc("GET /api/proxies", s.handleListProxies)
+	m.HandleFunc("POST /api/proxies", s.handleAddProxy)
+	m.HandleFunc("POST /api/proxies/select", s.handleSelectProxy)
+	m.HandleFunc("POST /api/proxies/test", s.handleTestProxy)
+	m.HandleFunc("DELETE /api/proxies/{id}", s.handleDeleteProxy)
+
 	// MCP
 	m.HandleFunc("GET /api/mcp", s.handleMCPStatus)
 	m.HandleFunc("POST /api/mcp/servers", s.handleAddMCPServer)

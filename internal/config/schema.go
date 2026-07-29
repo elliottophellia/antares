@@ -135,7 +135,7 @@ var help = map[string]string{
 
 func secretKey(path string) bool {
 	l := strings.ToLower(path)
-	for _, s := range []string{"api_key", "token", "secret", "password", "dsn", "cookie"} {
+	for _, s := range []string{"api_key", "token", "secret", "password", "dsn", "cookie", "proxy"} {
 		if strings.Contains(l, s) {
 			return l != "database.dsn" || strings.Contains(l, "password")
 		}
@@ -350,6 +350,16 @@ func redactMap(m map[string]any, prefix string) {
 		switch t := v.(type) {
 		case map[string]any:
 			redactMap(t, path)
+		case []any:
+			// Recurse into arrays of objects (e.g. proxies.entries) so nested
+			// secrets like a proxy password are masked too. Elements inherit the
+			// array's path, so secretKey("proxies.entries.password") still
+			// matches on the "password" leaf.
+			for _, el := range t {
+				if mm, ok := el.(map[string]any); ok {
+					redactMap(mm, path)
+				}
+			}
 		case string:
 			if t != "" && secretKey(path) {
 				m[k] = maskSecret(t)
