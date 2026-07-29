@@ -7,6 +7,7 @@ import {
   Eye,
   EyeSlash,
   Faders,
+  GearSix,
   Key,
   PencilSimple,
   Plugs,
@@ -62,6 +63,7 @@ interface Channel {
   configured: boolean
   detail: string
   docs?: string
+  bot_name?: string
   fields: ChannelField[]
 }
 
@@ -94,7 +96,8 @@ export default function ChannelsPage() {
   const { data, loading, reload } = useApi<ChannelsResponse>('/channels')
   const [busy, setBusy] = useState('')
   const [configFor, setConfigFor] = useState<Channel | null>(null)
-  const [tab, setTab] = useState<'channels' | 'devices' | 'routing'>('channels')
+  const [settingsFor, setSettingsFor] = useState<Channel | null>(null)
+  const [tab, setTab] = useState<'channels' | 'devices'>('channels')
 
   const act = async (id: string, fn: () => Promise<unknown>) => {
     setBusy(id)
@@ -106,33 +109,12 @@ export default function ChannelsPage() {
     }
   }
 
-  const [cmdNote, setCmdNote] = useState<Record<string, string>>({})
-  const runCommands = async (id: string, action: 'register' | 'clear') => {
-    setBusy(id + ':cmd')
-    setCmdNote((n) => ({ ...n, [id]: '' }))
-    try {
-      const r = await post<{ ok: boolean; error?: string }>(`/channels/${id}/commands/${action}`)
-      setCmdNote((n) => ({
-        ...n,
-        [id]: r.ok
-          ? action === 'clear'
-            ? t('channels.cmdCleared')
-            : t('channels.cmdRegistered')
-          : r.error || t('channels.cmdFailed'),
-      }))
-    } catch (e) {
-      setCmdNote((n) => ({ ...n, [id]: (e as Error).message }))
-    } finally {
-      setBusy('')
-    }
-  }
-
   const channels = data?.channels ?? []
   const pairings = data?.pairings ?? []
   const pending = pairings.filter((p) => p.status === 'pending').length
 
   const header = (
-    <Tabs value={tab} onValueChange={(v) => setTab(v as 'channels' | 'devices' | 'routing')}>
+    <Tabs value={tab} onValueChange={(v) => setTab(v as 'channels' | 'devices')}>
       <TabsList>
         <TabsTrigger value="channels">{t('channels.tabChannels')}</TabsTrigger>
         <TabsTrigger value="devices" className="gap-1.5">
@@ -143,7 +125,6 @@ export default function ChannelsPage() {
             </span>
           ) : null}
         </TabsTrigger>
-        <TabsTrigger value="routing">{t('channels.tabRouting')}</TabsTrigger>
       </TabsList>
     </Tabs>
   )
@@ -155,10 +136,12 @@ export default function ChannelsPage() {
         onOpenChange={(open) => !open && setConfigFor(null)}
         onSaved={reload}
       />
+      <ChannelSettingsDialog
+        channel={settingsFor}
+        onOpenChange={(open) => !open && setSettingsFor(null)}
+      />
 
-      {tab === 'routing' ? (
-        <RoutingPanel />
-      ) : tab === 'devices' ? (
+      {tab === 'devices' ? (
         <DevicesPanel loading={loading && !data} pairings={pairings} busy={busy} act={act} />
       ) : loading && !data ? (
         <SkeletonList count={4} />
@@ -180,7 +163,11 @@ export default function ChannelsPage() {
                   <Icon className={cn('mt-0.5 size-5 shrink-0', tone)} weight="fill" />
                   <div className="min-w-0 flex-1">
                     <span className="block truncate text-sm font-medium">{c.label}</span>
-                    <p className="mt-0.5 line-clamp-2 text-xs text-muted-foreground">{c.detail}</p>
+                    {c.connected && c.bot_name ? (
+                      <p className="mt-0.5 truncate text-[11px] text-muted-foreground">{c.bot_name}</p>
+                    ) : (
+                      <p className="mt-0.5 line-clamp-2 text-xs text-muted-foreground">{c.detail}</p>
+                    )}
                   </div>
                   <Switch
                     checked={c.enabled}
@@ -223,32 +210,15 @@ export default function ChannelsPage() {
                     <span className="text-[11px] text-muted-foreground">{t('channels.tokenNeeded')}</span>
                   ) : null}
                   {c.configured && (c.id === 'discord' || c.id === 'telegram') ? (
-                    <>
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        loading={busy === c.id + ':cmd'}
-                        onClick={() => void runCommands(c.id, 'register')}
-                        className="gap-1.5"
-                        title={t('channels.cmdRegisterHint')}
-                      >
-                        <Faders className="size-4" />
-                        {t('channels.cmdRegister')}
-                      </Button>
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        disabled={busy === c.id + ':cmd'}
-                        onClick={() => void runCommands(c.id, 'clear')}
-                        className="text-muted-foreground"
-                        title={t('channels.cmdClearHint')}
-                      >
-                        {t('channels.cmdClear')}
-                      </Button>
-                    </>
-                  ) : null}
-                  {cmdNote[c.id] ? (
-                    <span className="w-full text-[11px] text-muted-foreground">{cmdNote[c.id]}</span>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      onClick={() => setSettingsFor(c)}
+                      className="gap-1.5"
+                    >
+                      <GearSix className="size-4" />
+                      {t('channels.settings')}
+                    </Button>
                   ) : null}
                 </div>
               </div>
@@ -490,6 +460,123 @@ function ConfigDialog({
   )
 }
 
+/* ---------- Per-channel settings (routing + commands) ---------- */
+
+/**
+ * Settings for a single Discord/Telegram channel: routing bindings scoped to
+ * this platform, plus command registration. Opened from the channel card.
+ */
+function ChannelSettingsDialog({
+  channel,
+  onOpenChange,
+}: {
+  channel: Channel | null
+  onOpenChange: (open: boolean) => void
+}) {
+  const { t } = useI18n()
+  const [subTab, setSubTab] = useState<'routing' | 'commands'>('routing')
+  const platform = channel?.id === 'telegram' ? 'telegram' : 'discord'
+
+  useEffect(() => {
+    if (channel) setSubTab('routing')
+  }, [channel])
+
+  return (
+    <Dialog open={!!channel} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-2xl">
+        <DialogHeader>
+          <DialogTitle>
+            {t('channels.settingsTitle', { channel: channel?.label ?? '' })}
+          </DialogTitle>
+        </DialogHeader>
+        <DialogBody>
+          <Tabs value={subTab} onValueChange={(v) => setSubTab(v as 'routing' | 'commands')}>
+            <TabsList className="mb-3">
+              <TabsTrigger value="routing">{t('channels.tabRouting')}</TabsTrigger>
+              <TabsTrigger value="commands">{t('channels.tabCommands')}</TabsTrigger>
+            </TabsList>
+          </Tabs>
+          {subTab === 'routing' ? (
+            <RoutingPanel platform={platform} />
+          ) : channel ? (
+            <CommandsPanel id={channel.id} />
+          ) : null}
+        </DialogBody>
+        <DialogFooter>
+          <DialogClose asChild>
+            <Button variant="outline" size="sm">
+              {t('common.close')}
+            </Button>
+          </DialogClose>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+/**
+ * Register / clear the bot's native commands (Discord slash commands, Telegram
+ * menu). Moved here from the channel card.
+ */
+function CommandsPanel({ id }: { id: string }) {
+  const { t } = useI18n()
+  const [busy, setBusy] = useState('')
+  const [note, setNote] = useState('')
+
+  const run = async (action: 'register' | 'clear') => {
+    setBusy(action)
+    setNote('')
+    try {
+      const r = await post<{ ok: boolean; error?: string }>(`/channels/${id}/commands/${action}`)
+      setNote(
+        r.ok
+          ? action === 'clear'
+            ? t('channels.cmdCleared')
+            : t('channels.cmdRegistered')
+          : r.error || t('channels.cmdFailed'),
+      )
+    } catch (e) {
+      setNote((e as Error).message)
+    } finally {
+      setBusy('')
+    }
+  }
+
+  return (
+    <div className="space-y-3">
+      <div className="space-y-1.5">
+        <div className="flex flex-wrap items-center gap-2">
+          <Button
+            size="sm"
+            loading={busy === 'register'}
+            disabled={busy === 'clear'}
+            onClick={() => void run('register')}
+            className="gap-1.5"
+          >
+            <Faders className="size-4" />
+            {t('channels.cmdRegister')}
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={busy !== ''}
+            onClick={() => void run('clear')}
+          >
+            {t('channels.cmdClear')}
+          </Button>
+        </div>
+        <p className="text-[11px] leading-relaxed text-muted-foreground">
+          {t('channels.cmdRegisterHint')}
+        </p>
+        <p className="text-[11px] leading-relaxed text-muted-foreground">
+          {t('channels.cmdClearHint')}
+        </p>
+      </div>
+      {note ? <p className="text-xs text-muted-foreground">{note}</p> : null}
+    </div>
+  )
+}
+
 /* ---------- Routing (channel → agent bindings) ---------- */
 
 interface Binding {
@@ -523,9 +610,9 @@ interface ModelInfo {
   provider_label: string
 }
 
-const emptyBinding = (): Binding => ({
+const emptyBinding = (platform: 'discord' | 'telegram' = 'discord'): Binding => ({
   id: '',
-  platform: 'discord',
+  platform,
   guild_id: '',
   channel_id: '',
   label: '',
@@ -547,13 +634,14 @@ const selectClass =
  * different rooms can behave differently. The list is a compact card grid; the
  * dialog does create and edit against POST /channels/bindings.
  */
-function RoutingPanel() {
+function RoutingPanel({ platform }: { platform?: 'discord' | 'telegram' } = {}) {
   const { t } = useI18n()
   const { data, loading, reload } = useApi<{ bindings: Binding[] }>('/channels/bindings')
   const [editing, setEditing] = useState<Binding | null>(null)
   const [removing, setRemoving] = useState('')
 
-  const bindings = data?.bindings ?? []
+  const allBindings = data?.bindings ?? []
+  const bindings = platform ? allBindings.filter((b) => b.platform === platform) : allBindings
 
   const remove = async (b: Binding) => {
     if (!confirm(t('common.delete') + '?')) return
@@ -577,12 +665,13 @@ function RoutingPanel() {
     <div className="space-y-3">
       <BindingDialog
         binding={editing}
+        lockedPlatform={platform}
         onOpenChange={(open) => !open && setEditing(null)}
         onSaved={reload}
       />
 
       <div className="flex justify-end">
-        <Button size="sm" onClick={() => setEditing(emptyBinding())} className="gap-1.5">
+        <Button size="sm" onClick={() => setEditing(emptyBinding(platform))} className="gap-1.5">
           <Plus className="size-4" />
           {t('channels.addBinding')}
         </Button>
@@ -594,7 +683,7 @@ function RoutingPanel() {
           title={t('channels.noBindings')}
           description={t('channels.noBindingsDesc')}
           action={
-            <Button size="sm" onClick={() => setEditing(emptyBinding())} className="gap-1.5">
+            <Button size="sm" onClick={() => setEditing(emptyBinding(platform))} className="gap-1.5">
               <Plus className="size-4" />
               {t('channels.addBinding')}
             </Button>
@@ -675,10 +764,12 @@ interface DiscoverChannel {
 
 function BindingDialog({
   binding,
+  lockedPlatform,
   onOpenChange,
   onSaved,
 }: {
   binding: Binding | null
+  lockedPlatform?: 'discord' | 'telegram'
   onOpenChange: (open: boolean) => void
   onSaved: () => void
 }) {
@@ -703,7 +794,7 @@ function BindingDialog({
   // Reset + load pickers whenever a binding is opened.
   useEffect(() => {
     if (!binding) return
-    setForm(binding)
+    setForm(lockedPlatform ? { ...binding, platform: lockedPlatform } : binding)
     setAllowedUsers(binding.allowed_users.join(', '))
     setError(undefined)
     setChannels([])
@@ -791,25 +882,27 @@ function BindingDialog({
         </DialogHeader>
         <DialogBody>
           {/* Platform */}
-          <div className="grid gap-1.5">
-            <Label>{t('channels.bPlatform')}</Label>
-            <div className="inline-flex w-fit rounded-[var(--radius-sm)] border border-border p-0.5">
-              {(['discord', 'telegram'] as const).map((p) => (
-                <button
-                  key={p}
-                  onClick={() => update('platform', p)}
-                  className={cn(
-                    'rounded-[calc(var(--radius-sm)-2px)] px-3 py-1 text-xs font-medium transition-colors',
-                    form.platform === p
-                      ? 'bg-primary text-primary-foreground'
-                      : 'text-muted-foreground hover:text-foreground',
-                  )}
-                >
-                  {p}
-                </button>
-              ))}
+          {lockedPlatform ? null : (
+            <div className="grid gap-1.5">
+              <Label>{t('channels.bPlatform')}</Label>
+              <div className="inline-flex w-fit rounded-[var(--radius-sm)] border border-border p-0.5">
+                {(['discord', 'telegram'] as const).map((p) => (
+                  <button
+                    key={p}
+                    onClick={() => update('platform', p)}
+                    className={cn(
+                      'rounded-[calc(var(--radius-sm)-2px)] px-3 py-1 text-xs font-medium transition-colors',
+                      form.platform === p
+                        ? 'bg-primary text-primary-foreground'
+                        : 'text-muted-foreground hover:text-foreground',
+                    )}
+                  >
+                    {p}
+                  </button>
+                ))}
+              </div>
             </div>
-          </div>
+          )}
 
           {form.platform === 'discord' ? (
             <>
