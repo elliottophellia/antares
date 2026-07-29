@@ -108,6 +108,7 @@ export default function RolesPage() {
   const { data, loading, reload } = useApi<RolesResponse>('/roles')
   const [editing, setEditing] = useState<Role | null>(null)
   const [creating, setCreating] = useState(false)
+  const [tab, setTab] = useState<'roles' | 'performance'>('roles')
 
   // While sub-agents are running, refresh so the panel stays live.
   useEffect(() => {
@@ -138,134 +139,118 @@ export default function RolesPage() {
     reload()
   }
 
-  return (
-    <PageLayout>
-      {/* Header: title + New role. */}
-      <div className="flex items-start gap-3">
-        <div className="min-w-0 flex-1">
-          <h1 className="flex items-center gap-2 text-base font-semibold">
-            <UsersThree className="size-4 text-primary" weight="fill" />
-            {t('roles.title')}
-          </h1>
-          <p className="mt-0.5 text-xs text-muted-foreground">{t('roles.intro')}</p>
-        </div>
-        <Button size="sm" className="shrink-0 gap-1.5" onClick={() => setCreating(true)}>
+  // Sticky tab bar mirroring the Providers page: [Roles] and [Performance].
+  // The tab strip + (on the Roles tab) the New-role button stay pinned; only
+  // the content below scrolls.
+  const header = (
+    <div className="flex items-center gap-2">
+      <Tabs value={tab} onValueChange={(v) => setTab(v as 'roles' | 'performance')}>
+        <TabsList>
+          <TabsTrigger value="roles" className="gap-1.5">
+            <UsersThree className="size-3.5" /> {t('roles.title')}
+          </TabsTrigger>
+          <TabsTrigger value="performance" className="gap-1.5">
+            <Lightning className="size-3.5" /> {t('roles.performance')}
+          </TabsTrigger>
+        </TabsList>
+      </Tabs>
+      {tab === 'roles' ? (
+        <Button size="sm" className="ml-auto shrink-0 gap-1.5" onClick={() => setCreating(true)}>
           <Plus className="size-4" />
           {t('roles.new')}
         </Button>
-      </div>
-
-      {data?.active?.length ? (
-        <Card className="border-primary/40">
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <Spinner className="size-4 animate-spin text-primary" />
-              {t('roles.working', { n: data.active.length })}
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-2">
-            {data.active.map((a) => (
-              <div key={a.id} className="flex items-start gap-2 text-xs">
-                <Badge variant="secondary" className="shrink-0">
-                  {a.role}
-                </Badge>
-                <span className="min-w-0 flex-1 truncate text-muted-foreground">{a.task}</span>
-              </div>
-            ))}
-          </CardContent>
-        </Card>
       ) : null}
+    </div>
+  )
 
-      {data?.performance?.length ? (
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <Lightning className="size-4 text-primary" weight="fill" />
-              {t('roles.performance')}
-            </CardTitle>
-            <CardDescription>{t('roles.performanceDesc')}</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-1.5">
-            {data.performance.map((p) => (
-              <div key={p.role} className="flex items-center gap-3 text-xs">
-                <span className="w-40 shrink-0 truncate font-medium">{p.role}</span>
-                <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-muted">
-                  <div
-                    className="h-full rounded-full bg-primary"
-                    style={{ width: `${Math.max(2, Math.min(100, p.score))}%` }}
-                  />
-                </div>
-                <span className="w-10 shrink-0 text-right tabular-nums text-muted-foreground">
-                  {p.score.toFixed(0)}
-                </span>
-                <span className="w-16 shrink-0 text-right text-[10px] text-muted-foreground">
-                  {t('roles.missions', { n: p.missions })}
-                </span>
+  return (
+    <PageLayout header={header}>
+      {tab === 'performance' ? (
+        <PerformanceView performance={data?.performance ?? []} />
+      ) : (
+        <>
+          {data?.active?.length ? (
+            <Card className="border-primary/40">
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <Spinner className="size-4 animate-spin text-primary" />
+                  {t('roles.working', { n: data.active.length })}
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-2">
+                {data.active.map((a) => (
+                  <div key={a.id} className="flex items-start gap-2 text-xs">
+                    <Badge variant="secondary" className="shrink-0">
+                      {a.role}
+                    </Badge>
+                    <span className="min-w-0 flex-1 truncate text-muted-foreground">{a.task}</span>
+                  </div>
+                ))}
+              </CardContent>
+            </Card>
+          ) : null}
+
+          {/* Role grid, grouped by category, subroles nested under their master. */}
+          {groups.map((g) => (
+            <div key={g.category} className="space-y-2">
+              <h2 className="text-sm font-semibold">{CATEGORY_LABEL[g.category] ?? g.category}</h2>
+              <div className="grid gap-2.5 sm:grid-cols-2 xl:grid-cols-3">
+                {orderWithSubroles(g.roles).map((r) => {
+                  const editable = r.source === 'local'
+                  return (
+                    <button
+                      key={r.name}
+                      type="button"
+                      onClick={() => setEditing(r)}
+                      className={cn(
+                        'group rounded-[var(--radius-lg)] border border-border bg-card p-3.5 text-left transition-colors hover:border-primary/40',
+                        r.subrole && 'border-l-2 border-l-border bg-muted/20',
+                      )}
+                    >
+                      <div className="flex items-start justify-between gap-2">
+                        <span className="min-w-0 truncate text-sm font-medium">{r.title}</span>
+                        {editable ? (
+                          <PencilSimple className="size-3.5 shrink-0 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100" />
+                        ) : null}
+                      </div>
+                      <code className="mt-0.5 inline-block rounded bg-muted px-1.5 py-0.5 font-mono text-[11px] text-muted-foreground">
+                        {r.name}
+                      </code>
+                      <p className="mt-1.5 line-clamp-2 text-xs text-muted-foreground">{r.summary}</p>
+                      <div className="mt-2 flex flex-wrap gap-1.5">
+                        {editable ? (
+                          <Badge variant="secondary">{t('roles.custom')}</Badge>
+                        ) : (
+                          <Badge variant="outline">{t('roles.builtin')}</Badge>
+                        )}
+                        {r.subrole ? (
+                          <Badge variant="secondary">
+                            {t('roles.specialistOf', { master: r.parent ?? '' })}
+                          </Badge>
+                        ) : null}
+                        {r.danger ? (
+                          <Badge variant="warning">
+                            <Warning className="size-3" weight="fill" />
+                            {t('roles.authorized')}
+                          </Badge>
+                        ) : null}
+                        {r.toolset ? (
+                          <Badge variant="outline">{t('roles.tools', { set: r.toolset })}</Badge>
+                        ) : null}
+                        {r.model ? <Badge variant="outline">{r.model}</Badge> : null}
+                      </div>
+                    </button>
+                  )
+                })}
               </div>
-            ))}
-          </CardContent>
-        </Card>
-      ) : null}
+            </div>
+          ))}
 
-      {/* Role grid, grouped by category, subroles nested under their master. */}
-      {groups.map((g) => (
-        <div key={g.category} className="space-y-2">
-          <h2 className="text-sm font-semibold">{CATEGORY_LABEL[g.category] ?? g.category}</h2>
-          <div className="grid gap-2.5 sm:grid-cols-2 xl:grid-cols-3">
-            {orderWithSubroles(g.roles).map((r) => {
-              const editable = r.source === 'local'
-              return (
-                <button
-                  key={r.name}
-                  type="button"
-                  onClick={() => setEditing(r)}
-                  className={cn(
-                    'group rounded-[var(--radius-lg)] border border-border bg-card p-3.5 text-left transition-colors hover:border-primary/40',
-                    r.subrole && 'border-l-2 border-l-border bg-muted/20',
-                  )}
-                >
-                  <div className="flex items-start justify-between gap-2">
-                    <span className="min-w-0 truncate text-sm font-medium">{r.title}</span>
-                    {editable ? (
-                      <PencilSimple className="size-3.5 shrink-0 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100" />
-                    ) : null}
-                  </div>
-                  <code className="mt-0.5 inline-block rounded bg-muted px-1.5 py-0.5 font-mono text-[11px] text-muted-foreground">
-                    {r.name}
-                  </code>
-                  <p className="mt-1.5 line-clamp-2 text-xs text-muted-foreground">{r.summary}</p>
-                  <div className="mt-2 flex flex-wrap gap-1.5">
-                    {editable ? (
-                      <Badge variant="secondary">{t('roles.custom')}</Badge>
-                    ) : (
-                      <Badge variant="outline">{t('roles.builtin')}</Badge>
-                    )}
-                    {r.subrole ? (
-                      <Badge variant="secondary">
-                        {t('roles.specialistOf', { master: r.parent ?? '' })}
-                      </Badge>
-                    ) : null}
-                    {r.danger ? (
-                      <Badge variant="warning">
-                        <Warning className="size-3" weight="fill" />
-                        {t('roles.authorized')}
-                      </Badge>
-                    ) : null}
-                    {r.toolset ? (
-                      <Badge variant="outline">{t('roles.tools', { set: r.toolset })}</Badge>
-                    ) : null}
-                    {r.model ? <Badge variant="outline">{r.model}</Badge> : null}
-                  </div>
-                </button>
-              )
-            })}
-          </div>
-        </div>
-      ))}
-
-      <Card>
-        <CardContent className="pt-4 text-xs text-muted-foreground">{t('roles.howto')}</CardContent>
-      </Card>
+          <Card>
+            <CardContent className="pt-4 text-xs text-muted-foreground">{t('roles.howto')}</CardContent>
+          </Card>
+        </>
+      )}
 
       {(editing || creating) && (
         <RoleEditor
@@ -277,6 +262,50 @@ export default function RolesPage() {
         />
       )}
     </PageLayout>
+  )
+}
+
+// PerformanceView is the "how the team performs" panel, now its own tab.
+function PerformanceView({ performance }: { performance: Perf[] }) {
+  const { t } = useI18n()
+  if (performance.length === 0) {
+    return (
+      <Card>
+        <CardContent className="pt-4 text-xs text-muted-foreground">
+          {t('roles.performanceDesc')}
+        </CardContent>
+      </Card>
+    )
+  }
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2">
+          <Lightning className="size-4 text-primary" weight="fill" />
+          {t('roles.performance')}
+        </CardTitle>
+        <CardDescription>{t('roles.performanceDesc')}</CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-1.5">
+        {performance.map((p) => (
+          <div key={p.role} className="flex items-center gap-3 text-xs">
+            <span className="w-40 shrink-0 truncate font-medium">{p.role}</span>
+            <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-muted">
+              <div
+                className="h-full rounded-full bg-primary"
+                style={{ width: `${Math.max(2, Math.min(100, p.score))}%` }}
+              />
+            </div>
+            <span className="w-10 shrink-0 text-right tabular-nums text-muted-foreground">
+              {p.score.toFixed(0)}
+            </span>
+            <span className="w-16 shrink-0 text-right text-[10px] text-muted-foreground">
+              {t('roles.missions', { n: p.missions })}
+            </span>
+          </div>
+        ))}
+      </CardContent>
+    </Card>
   )
 }
 
@@ -428,12 +457,8 @@ function RoleEditor({
           </DialogTitle>
         </DialogHeader>
 
-        {readOnly ? (
-          <div className="mx-6 -mt-1 rounded-[var(--radius-sm)] border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
-            {t('roles.builtinReadonly')}
-          </div>
-        ) : (
-          <div className="px-6">
+        {!readOnly ? (
+          <div className="px-6 pt-1">
             <Tabs value={tab} onValueChange={(v) => setTab(v as 'form' | 'raw')}>
               <TabsList>
                 <TabsTrigger value="form">{t('roles.tabForm')}</TabsTrigger>
@@ -441,11 +466,16 @@ function RoleEditor({
               </TabsList>
             </Tabs>
           </div>
-        )}
+        ) : null}
 
         <DialogBody className="space-y-3.5">
           {readOnly ? (
-            <ReadOnlyView role={role!} />
+            <>
+              <div className="rounded-[var(--radius-sm)] border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
+                {t('roles.builtinReadonly')}
+              </div>
+              <ReadOnlyView role={role!} />
+            </>
           ) : tab === 'raw' ? (
             <div className="space-y-1.5">
               <Label>{t('roles.rawLabel')}</Label>
