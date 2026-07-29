@@ -1,14 +1,22 @@
 import { useEffect, useState } from 'react'
-import { ClockCounterClockwise, Play, Plus, Trash } from '@phosphor-icons/react'
+import {
+  CheckCircle,
+  ClockCounterClockwise,
+  Play,
+  Plus,
+  TrashSimple,
+  Warning,
+  XCircle,
+} from '@phosphor-icons/react'
 import { del, get, post } from '@/lib/api'
 import { useApi } from '@/lib/hooks'
 import { useI18n, useTimeAgo } from '@/lib/i18n'
+import { cn } from '@/lib/utils'
 import { PageLayout } from '@/components/layout/PageLayout'
 import { usePageActions } from '@/components/layout/PageChrome'
 import { Button } from '@/components/ui/button'
 import {
   Badge,
-  Card,
   EmptyState,
   Input,
   Label,
@@ -25,7 +33,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
-import { SkeletonList } from '@/components/ui/skeleton'
+import { Skeleton, SkeletonList } from '@/components/ui/skeleton'
 
 interface CronJob {
   id: string
@@ -39,6 +47,15 @@ interface CronJob {
   last_state: string
 }
 
+interface CronRun {
+  id: string
+  status: string
+  output: string
+  error: string
+  started_at: string
+  finished_at: string | null
+}
+
 const EMPTY_DRAFT = { name: '', schedule: '0 8 * * *', prompt: '' }
 
 export default function CronPage() {
@@ -47,6 +64,7 @@ export default function CronPage() {
   const { data, loading, reload } = useApi<{ jobs: CronJob[] }>('/cron/jobs')
   const [busy, setBusy] = useState('')
   const [open, setOpen] = useState(false)
+  const [viewing, setViewing] = useState<CronJob | null>(null)
 
   usePageActions(
     <Button size="sm" onClick={() => setOpen(true)} className="gap-1.5">
@@ -66,13 +84,16 @@ export default function CronPage() {
     }
   }
 
+  const jobs = data?.jobs ?? []
+
   return (
     <PageLayout>
       <NewJobDialog open={open} onOpenChange={setOpen} onCreated={reload} />
+      {viewing ? <RunsDialog job={viewing} onClose={() => setViewing(null)} /> : null}
 
       {loading && !data ? (
         <SkeletonList count={3} />
-      ) : (data?.jobs.length ?? 0) === 0 ? (
+      ) : jobs.length === 0 ? (
         <EmptyState
           icon={<ClockCounterClockwise className="size-8" />}
           title={t('cron.none')}
@@ -85,31 +106,37 @@ export default function CronPage() {
           }
         />
       ) : (
-        <div className="space-y-2">
-          {data!.jobs.map((j) => (
-            <Card key={j.id} className="p-3.5">
-              <div className="flex items-start gap-3">
-                <div className="min-w-0 flex-1">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <span className="text-sm font-medium">{j.name}</span>
-                    <Badge variant="outline" className="font-mono">
-                      {j.schedule}
+        <div className="grid gap-2.5 sm:grid-cols-2 xl:grid-cols-3">
+          {jobs.map((j) => (
+            <div
+              key={j.id}
+              className={cn(
+                'group flex flex-col rounded-[var(--radius-lg)] border border-border bg-card p-3.5 transition-colors hover:border-primary/40',
+                !j.enabled && 'opacity-60',
+              )}
+            >
+              <button onClick={() => setViewing(j)} className="min-w-0 flex-1 text-left">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="min-w-0 truncate text-sm font-medium">{j.name}</span>
+                  {j.last_state ? (
+                    <Badge variant={j.last_state === 'ok' ? 'success' : 'destructive'}>
+                      {j.last_state}
                     </Badge>
-                    {j.last_state ? (
-                      <Badge variant={j.last_state === 'ok' ? 'success' : 'destructive'}>
-                        {j.last_state}
-                      </Badge>
-                    ) : null}
-                  </div>
-                  <p className="mt-1 line-clamp-2 text-xs text-muted-foreground">{j.prompt}</p>
-                  <p className="mt-1 text-[10px] text-muted-foreground">
-                    {t('cron.lastRun', {
-                      time: timeAgo(j.last_run),
-                      next: j.next_run ? new Date(j.next_run).toLocaleString(locale) : '—',
-                    })}
-                  </p>
+                  ) : null}
                 </div>
-                <div className="flex shrink-0 items-center gap-1">
+                <Badge variant="outline" className="mt-1.5 font-mono">
+                  {j.schedule}
+                </Badge>
+                <p className="mt-1.5 line-clamp-2 text-xs text-muted-foreground">{j.prompt}</p>
+                <p className="mt-1.5 text-[10px] text-muted-foreground">
+                  {t('cron.lastRun', {
+                    time: timeAgo(j.last_run),
+                    next: j.next_run ? new Date(j.next_run).toLocaleString(locale) : '—',
+                  })}
+                </p>
+              </button>
+              <div className="mt-2.5 flex items-center justify-between border-t border-border pt-2">
+                <label className="flex items-center gap-2 text-[11px] text-muted-foreground">
                   <Switch
                     checked={j.enabled}
                     disabled={busy === j.id}
@@ -118,6 +145,9 @@ export default function CronPage() {
                     }
                     aria-label={t('common.enable')}
                   />
+                  {j.enabled ? t('cron.on') : t('cron.off')}
+                </label>
+                <div className="flex items-center gap-1">
                   <Button
                     variant="ghost"
                     size="icon-sm"
@@ -135,15 +165,84 @@ export default function CronPage() {
                     aria-label={t('common.delete')}
                     className="text-muted-foreground hover:text-destructive"
                   >
-                    <Trash className="size-4" />
+                    <TrashSimple className="size-4" />
                   </Button>
                 </div>
               </div>
-            </Card>
+            </div>
           ))}
         </div>
       )}
     </PageLayout>
+  )
+}
+
+// A job's execution history — surfaced from /cron/jobs/{id}/runs (was unused).
+function RunsDialog({ job, onClose }: { job: CronJob; onClose: () => void }) {
+  const { t } = useI18n()
+  const timeAgo = useTimeAgo()
+  const { data, loading } = useApi<{ runs: CronRun[] }>(`/cron/jobs/${job.id}/runs`, [job.id])
+  const runs = data?.runs ?? []
+
+  const glyph = (status: string) =>
+    status === 'ok' ? (
+      <CheckCircle className="size-3.5 shrink-0 text-[var(--success)]" weight="fill" />
+    ) : status === 'error' ? (
+      <XCircle className="size-3.5 shrink-0 text-destructive" weight="fill" />
+    ) : status === 'running' ? (
+      <ClockCounterClockwise className="size-3.5 shrink-0 animate-spin text-primary" />
+    ) : (
+      <Warning className="size-3.5 shrink-0 text-muted-foreground" />
+    )
+
+  return (
+    <Dialog open onOpenChange={(o) => (!o ? onClose() : null)}>
+      <DialogContent className="sm:max-w-2xl">
+        <DialogHeader>
+          <DialogTitle>{job.name}</DialogTitle>
+          <DialogDescription>
+            <span className="font-mono">{job.schedule}</span> · {t('cron.runHistory')}
+          </DialogDescription>
+        </DialogHeader>
+        <DialogBody>
+          {loading && !data ? (
+            <Skeleton className="h-24 w-full" />
+          ) : runs.length === 0 ? (
+            <p className="text-xs text-muted-foreground">{t('cron.noRuns')}</p>
+          ) : (
+            <div className="space-y-2">
+              {runs.map((r) => (
+                <div key={r.id} className="rounded-[var(--radius-sm)] border border-border p-2.5">
+                  <div className="flex items-center gap-2">
+                    {glyph(r.status)}
+                    <span className="text-xs font-medium">{r.status}</span>
+                    <span className="ml-auto text-[10px] text-muted-foreground">
+                      {timeAgo(r.started_at)}
+                    </span>
+                  </div>
+                  {r.error ? (
+                    <p className="mt-1.5 whitespace-pre-wrap break-words text-[11px] text-destructive">
+                      {r.error}
+                    </p>
+                  ) : r.output ? (
+                    <pre className="mt-1.5 max-h-48 overflow-auto whitespace-pre-wrap break-words font-mono text-[10px] leading-relaxed text-muted-foreground">
+                      {r.output}
+                    </pre>
+                  ) : null}
+                </div>
+              ))}
+            </div>
+          )}
+        </DialogBody>
+        <DialogFooter>
+          <DialogClose asChild>
+            <Button variant="outline" size="sm">
+              {t('common.close')}
+            </Button>
+          </DialogClose>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   )
 }
 
@@ -162,7 +261,6 @@ function NewJobDialog({
   const [error, setError] = useState<string>()
   const [preview, setPreview] = useState<{ valid: boolean; upcoming?: string[]; error?: string }>()
 
-  // Start each visit from a clean slate rather than a half-typed previous job.
   useEffect(() => {
     if (open) {
       setDraft(EMPTY_DRAFT)
@@ -170,8 +268,6 @@ function NewJobDialog({
     }
   }, [open])
 
-  // Preview the next few activations so a wrong expression is obvious before
-  // the job is ever created.
   useEffect(() => {
     const expr = draft.schedule.trim()
     if (!open || !expr) {
@@ -240,8 +336,6 @@ function NewJobDialog({
                   {t('cron.nextRuns')}:{' '}
                   {(preview.upcoming ?? [])
                     .slice(0, 3)
-                    // A full locale timestamp three times over wrapped to two lines on
-                    // a phone; day and time is enough to sanity-check a schedule.
                     .map((iso) =>
                       new Date(iso).toLocaleString(locale, {
                         day: 'numeric',
