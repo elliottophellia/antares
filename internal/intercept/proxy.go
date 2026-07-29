@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -31,14 +32,48 @@ type Exchange struct {
 	Blocked     bool        `json:"blocked"`
 }
 
-// Rule matches a request by URL substring and either blocks it or returns a mock
-// response, letting the operator shape a target's traffic during testing.
+// Rule matches a request by URL substring and either blocks it, returns a mock
+// response, or pauses it at a breakpoint for the operator to edit — letting them
+// shape a target's traffic during testing.
 type Rule struct {
 	ID         int64  `json:"id"`
 	Match      string `json:"match"` // substring of the URL
 	Block      bool   `json:"block"`
 	MockStatus int    `json:"mock_status"`
 	MockBody   string `json:"mock_body"`
+	// Breakpoint pauses a matching request before it is forwarded, so the
+	// operator can edit it (or the response) and then resume or abort it.
+	Breakpoint bool `json:"breakpoint"`
+}
+
+// PausedExchange is a request held at a breakpoint, waiting for the operator to
+// resume (optionally with edits) or abort it. It carries a resolve channel the
+// waiting proxy goroutine blocks on.
+type PausedExchange struct {
+	ID      int64             `json:"id"`
+	Method  string            `json:"method"`
+	URL     string            `json:"url"`
+	Headers map[string]string `json:"headers"`
+	Body    string            `json:"body"`
+	resolve chan breakpointEdit
+}
+
+// breakpointEdit is how a paused exchange is released: either aborted, or
+// resumed with (possibly edited) request fields.
+type breakpointEdit struct {
+	abort   bool
+	method  string
+	url     string
+	headers map[string]string
+	body    string
+}
+
+// BreakpointResume carries operator edits to release a paused request.
+type BreakpointResume struct {
+	Method  string            `json:"method"`
+	URL     string            `json:"url"`
+	Headers map[string]string `json:"headers"`
+	Body    string            `json:"body"`
 }
 
 // Proxy is a MITM HTTP(S) proxy that captures every exchange.
@@ -56,6 +91,14 @@ type Proxy struct {
 	running  bool
 	addr     string
 	listener net.Listener
+
+	// Breakpoints: requests paused mid-flight, keyed by exchange id, plus a
+	// pub/sub so the dashboard learns of a new pause without polling.
+	pausedID int64
+	paused   map[int64]*PausedExchange
+	bpMu     sync.Mutex
+	bpSubs   map[int]chan struct{}
+	bpSeq    int
 }
 
 // New builds a proxy backed by the given CA.
@@ -65,6 +108,8 @@ func New(ca *CA) *Proxy {
 		tr:      &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, ForceAttemptHTTP2: false},
 		maxLog:  1000,
 		maxBody: 256 << 10,
+		paused:  map[int64]*PausedExchange{},
+		bpSubs:  map[int]chan struct{}{},
 	}
 }
 
@@ -177,6 +222,123 @@ func (p *Proxy) matchRule(url string) (Rule, bool) {
 	return Rule{}, false
 }
 
+// breakpointTimeout bounds how long a request may sit paused, so a client
+// connection is never wedged indefinitely if nobody resolves the breakpoint.
+const breakpointTimeout = 5 * time.Minute
+
+// ListPaused returns the requests currently held at breakpoints.
+func (p *Proxy) ListPaused() []*PausedExchange {
+	p.bpMu.Lock()
+	defer p.bpMu.Unlock()
+	out := make([]*PausedExchange, 0, len(p.paused))
+	for _, pe := range p.paused {
+		out = append(out, pe)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	return out
+}
+
+// Resume releases a paused request with the operator's edits and lets the proxy
+// forward it. Unknown ids are a no-op.
+func (p *Proxy) Resume(id int64, edit BreakpointResume) {
+	p.bpMu.Lock()
+	pe := p.paused[id]
+	p.bpMu.Unlock()
+	if pe == nil {
+		return
+	}
+	pe.resolve <- breakpointEdit{method: edit.Method, url: edit.URL, headers: edit.Headers, body: edit.Body}
+}
+
+// Abort releases a paused request by refusing it (the client gets a 4xx).
+func (p *Proxy) Abort(id int64) {
+	p.bpMu.Lock()
+	pe := p.paused[id]
+	p.bpMu.Unlock()
+	if pe == nil {
+		return
+	}
+	pe.resolve <- breakpointEdit{abort: true}
+}
+
+// SubscribeBreakpoints returns a channel that fires whenever a request is paused
+// or resolved, so the dashboard can refresh without polling.
+func (p *Proxy) SubscribeBreakpoints() (<-chan struct{}, func()) {
+	ch := make(chan struct{}, 1)
+	p.bpMu.Lock()
+	p.bpSeq++
+	id := p.bpSeq
+	p.bpSubs[id] = ch
+	p.bpMu.Unlock()
+	return ch, func() {
+		p.bpMu.Lock()
+		if c, ok := p.bpSubs[id]; ok {
+			delete(p.bpSubs, id)
+			close(c)
+		}
+		p.bpMu.Unlock()
+	}
+}
+
+func (p *Proxy) notifyBreakpoints() {
+	p.bpMu.Lock()
+	defer p.bpMu.Unlock()
+	for _, ch := range p.bpSubs {
+		select {
+		case ch <- struct{}{}:
+		default:
+		}
+	}
+}
+
+// pauseAtBreakpoint holds a request until the operator resumes or aborts it (or
+// the timeout elapses). It returns the edited request fields and whether the
+// request should be aborted. headers is a flat map for the UI's convenience.
+func (p *Proxy) pauseAtBreakpoint(method, url string, headers map[string]string, body string) (breakpointEdit, bool) {
+	pe := &PausedExchange{
+		Method: method, URL: url, Headers: headers, Body: body,
+		resolve: make(chan breakpointEdit, 1),
+	}
+	p.bpMu.Lock()
+	p.pausedID++
+	pe.ID = p.pausedID
+	p.paused[pe.ID] = pe
+	p.bpMu.Unlock()
+	p.notifyBreakpoints()
+
+	defer func() {
+		p.bpMu.Lock()
+		delete(p.paused, pe.ID)
+		p.bpMu.Unlock()
+		p.notifyBreakpoints()
+	}()
+
+	select {
+	case edit := <-pe.resolve:
+		return edit, true
+	case <-time.After(breakpointTimeout):
+		return breakpointEdit{}, false // timed out — proceed unmodified
+	}
+}
+
+// flatHeaders collapses an http.Header to a single-value map for the breakpoint
+// editor; rebuildHeaders does the reverse when applying edits.
+func flatHeaders(h http.Header) map[string]string {
+	out := make(map[string]string, len(h))
+	for k := range h {
+		out[k] = h.Get(k)
+	}
+	return out
+}
+
+func rebuildHeaders(m map[string]string) http.Header {
+	h := http.Header{}
+	for k, v := range m {
+		h.Set(k, v)
+	}
+	return h
+}
+
 func (p *Proxy) serve(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodConnect {
 		p.handleConnect(w, r)
@@ -275,16 +437,48 @@ func (p *Proxy) forward(req *http.Request, secure bool) *Exchange {
 			p.record(e)
 			return e
 		}
-		e.Mocked = true
-		e.Status = rule.MockStatus
-		if e.Status == 0 {
-			e.Status = 200
+		if rule.Breakpoint {
+			// Pause for the operator; apply edits or abort when they resume.
+			edit, resolved := p.pauseAtBreakpoint(req.Method, fullURL, flatHeaders(req.Header), string(reqBody))
+			if resolved && edit.abort {
+				e.Blocked, e.Status = true, 599
+				e.RespBody = "aborted at breakpoint"
+				e.DurationMS = time.Since(start).Milliseconds()
+				p.record(e)
+				return e
+			}
+			if resolved {
+				if edit.method != "" {
+					req.Method, e.Method = edit.method, edit.method
+				}
+				if edit.url != "" {
+					if u, err := req.URL.Parse(edit.url); err == nil {
+						req.URL = u
+						fullURL, e.URL = edit.url, edit.url
+					}
+				}
+				if edit.headers != nil {
+					req.Header = rebuildHeaders(edit.headers)
+					e.ReqHeaders = req.Header.Clone()
+				}
+				if edit.body != "" {
+					reqBody = []byte(edit.body)
+					e.ReqBody = edit.body
+				}
+			}
+			// Fall through to the normal forward with the (edited) request.
+		} else {
+			e.Mocked = true
+			e.Status = rule.MockStatus
+			if e.Status == 0 {
+				e.Status = 200
+			}
+			e.RespBody = rule.MockBody
+			e.RespHeaders.Set("Content-Type", "text/plain")
+			e.DurationMS = time.Since(start).Milliseconds()
+			p.record(e)
+			return e
 		}
-		e.RespBody = rule.MockBody
-		e.RespHeaders.Set("Content-Type", "text/plain")
-		e.DurationMS = time.Since(start).Milliseconds()
-		p.record(e)
-		return e
 	}
 
 	// Rebuild a clean outbound request body.

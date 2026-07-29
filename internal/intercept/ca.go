@@ -9,9 +9,11 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/base64"
 	"encoding/pem"
 	"fmt"
 	"math/big"
@@ -92,6 +94,22 @@ func LoadOrCreateCA(dir string) (*CA, error) {
 
 // CertPEM returns the CA certificate in PEM form, for the user to trust.
 func (c *CA) CertPEM() []byte { return c.certPEM }
+
+// Cert returns the parsed CA certificate.
+func (c *CA) Cert() *x509.Certificate { return c.cert }
+
+// CertDER returns the raw DER bytes of the CA certificate.
+func (c *CA) CertDER() []byte { return c.cert.Raw }
+
+// SPKIFingerprint returns base64(SHA-256(SubjectPublicKeyInfo)) of the CA cert.
+// This is the fingerprint Chromium-family browsers accept via
+// --ignore-certificate-errors-spki-list, which makes them trust every leaf the
+// proxy signs WITHOUT installing anything into a trust store — the key trick
+// that lets a launched browser be intercepted with zero cert setup.
+func (c *CA) SPKIFingerprint() string {
+	sum := sha256.Sum256(c.cert.RawSubjectPublicKeyInfo)
+	return base64.StdEncoding.EncodeToString(sum[:])
+}
 
 // LeafFor returns (and caches) a leaf certificate for host, signed by the CA.
 func (c *CA) LeafFor(host string) (*tls.Certificate, error) {
