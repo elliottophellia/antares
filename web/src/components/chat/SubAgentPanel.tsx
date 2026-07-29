@@ -66,7 +66,11 @@ export function SubAgentPanel({ agent, onBack }: { agent: ActiveAgent; onBack: (
             patch((m) =>
               updateToolSeg(m, String(event.id ?? ''), (c) => ({
                 ...c,
-                progress: (c.progress ?? '') + String(event.chunk ?? event.message ?? ''),
+                // chunk = streaming (append); message = status line (replace).
+                progress:
+                  event.chunk != null
+                    ? (c.progress ?? '') + String(event.chunk)
+                    : String(event.message ?? c.progress ?? ''),
               })),
             )
             break

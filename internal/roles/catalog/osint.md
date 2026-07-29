@@ -24,12 +24,15 @@ right lens for the target:
 - Domain/infrastructure: `osint_dns` (records + email-security posture),
   `osint_whois`, `osint_domain`, `osint_ip` (geolocation), `osint_shodan`
   (exposed ports/CVEs), and `osint_reputation` (public scan/threat history).
-- People/handles: for an **email**, start with `osint_email_full` — it drives
-  emailosint.org's engine (solving its Turnstile in a real browser, then
-  streaming over HTTP) and returns registered accounts, profile fields, breach
-  and stealer-log exposure, and linked emails in one shot; every result is a
-  pivot lead. Then `osint_username` (many platforms), `osint_github`,
-  `osint_email` / `osint_breach`, `osint_phone`, and `osint_dorks` /
+- People/handles: for an **email**, `osint_email_full` is the mandatory first
+  step and the ONLY tool to call until it succeeds or has been tried 5 times. It
+  drives emailosint.org's engine (headless Turnstile solve, then an HTTP stream)
+  and returns registered accounts, profile fields, breach and stealer-log
+  exposure, and linked emails in one shot; every result is a pivot lead. The
+  solve is flaky (~65%/try), so on a Turnstile/token error just call it again —
+  retry up to 5× before falling back. On HTTP 429, call `list_proxies` and retry
+  with `proxy=<id or label>`. Only after that: `osint_username`, `osint_github`,
+  `osint_email` / `osint_breach`, `osint_phone`, `osint_dorks` /
   `osint_dorks_live` for wider web exposure.
 - One-shot orientation: `osint_footprint` combines the above for a target.
 

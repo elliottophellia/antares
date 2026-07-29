@@ -31,6 +31,7 @@ type Session struct {
 	lastUsed  time.Time
 	started   bool
 	userAgent string
+	tempDir   string // a profile dir we minted and must remove on Stop
 }
 
 // New builds an unstarted session.
@@ -100,6 +101,7 @@ func (s *Session) Start(ctx context.Context) error {
 			if err != nil {
 				return err
 			}
+			s.tempDir = dir // ours to remove when the session stops
 		}
 		// Flags the caller owns regardless of which binary launches: the debug
 		// port, the profile dir, and the window. The stealth build supplies its
@@ -279,6 +281,10 @@ func (s *Session) killLocked() {
 	s.started = false
 	s.pageSess = ""
 	s.targetID = ""
+	if s.tempDir != "" {
+		_ = os.RemoveAll(s.tempDir)
+		s.tempDir = ""
+	}
 }
 
 // call runs one CDP command against the page, starting the browser if needed.
@@ -430,6 +436,23 @@ func (s *Session) PressKey(ctx context.Context, key string) error {
 // InsertText types text into the focused element as if a human had.
 func (s *Session) InsertText(ctx context.Context, text string) error {
 	_, err := s.call(ctx, "Input.insertText", map[string]any{"text": text})
+	return err
+}
+
+// ClickXY sends a real mouse press+release at viewport coordinates. Some
+// widgets (a Turnstile checkbox living in a cross-origin iframe) can only be
+// reached this way, and score a synthetic DOM .click() as fake — a dispatched
+// mouse event at the right point is what they accept.
+func (s *Session) ClickXY(ctx context.Context, x, y float64) error {
+	press := map[string]any{
+		"type": "mousePressed", "x": x, "y": y, "button": "left", "clickCount": 1,
+	}
+	if _, err := s.call(ctx, "Input.dispatchMouseEvent", press); err != nil {
+		return err
+	}
+	_, err := s.call(ctx, "Input.dispatchMouseEvent", map[string]any{
+		"type": "mouseReleased", "x": x, "y": y, "button": "left", "clickCount": 1,
+	})
 	return err
 }
 

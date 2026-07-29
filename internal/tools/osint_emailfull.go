@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/enowdev/antares/internal/browser"
 	"github.com/enowdev/antares/internal/config"
 )
 
@@ -40,14 +41,16 @@ func (osintEmailFullTool) Name() string { return "osint_email_full" }
 func (osintEmailFullTool) Description() string {
 	return "Deep email investigation via emailosint.org: resolves an email to registered accounts, profile " +
 		"data (names, usernames, bios, locations), data-breach and stealer-log exposure, and an AI risk summary. " +
-		"Briefly opens a real (visible) anti-detect browser to solve the site's Cloudflare Turnstile, then runs " +
-		"the whole lookup over HTTP. Use this FIRST — its accounts and usernames seed the rest of an " +
-		"investigation. For authorized use."
+		"Briefly opens the headless anti-detect browser to solve the site's Cloudflare Turnstile (closed right " +
+		"after), then runs the whole lookup over HTTP. ALWAYS use this FIRST for an email and use ONLY this tool " +
+		"until it succeeds — its accounts and usernames seed everything else. The solve is flaky (~80%/try): on a " +
+		"Turnstile/token error, just call this tool again, up to 5 times, before falling back to other tools. On " +
+		"HTTP 429 (IP rate-limit), retry with a proxy (see list_proxies). For authorized use."
 }
 func (osintEmailFullTool) Schema() map[string]any {
 	return schema(map[string]any{
 		"email":           prop("string", "The email address to investigate."),
-		"timeout_seconds": propDefault("integer", "Overall budget for the solve + stream.", 120),
+		"timeout_seconds": propDefault("integer", "Overall budget for the solve + stream.", 90),
 		"proxy":           prop("string", "Optional. Route through a stored proxy — its id or label (see list_proxies). Use this if a direct request is rate-limited (HTTP 429). Omit for a direct connection."),
 	}, "email")
 }
@@ -67,7 +70,7 @@ func (osintEmailFullTool) Execute(ctx context.Context, in Input) Result {
 		return Errorf("%q is not a valid email", email)
 	}
 	if args.Timeout <= 0 || args.Timeout > 300 {
-		args.Timeout = 120
+		args.Timeout = 90
 	}
 	if in.Deps == nil || in.Deps.Config == nil {
 		return Errorf("browser is not available in this runtime")
@@ -90,12 +93,12 @@ func (osintEmailFullTool) Execute(ctx context.Context, in Input) Result {
 	ctx, cancel := context.WithTimeout(ctx, time.Duration(args.Timeout)*time.Second)
 	defer cancel()
 
-	// 1. Harvest a fresh Turnstile token in the real browser. The token is
-	// single-use and short-lived, so we solve immediately before the request.
-	in.Emit(Progress{Tool: "osint_email_full", Message: "solving Turnstile challenge…"})
+	// 1. Harvest a fresh single-use Turnstile token (one bounded attempt). The
+	// solve is flaky headless, so the error tells the agent to just call this
+	// tool again — up to 5× before trying anything else.
 	token, err := emailOSINTToken(ctx, in, proxyURL)
 	if err != nil {
-		return Errorf("could not obtain a Turnstile token: %v", err)
+		return Errorf("could not obtain a Turnstile token (%v) — the solve is flaky; call osint_email_full again (retry up to 5×) before trying any other tool.", err)
 	}
 
 	// 2. Run the whole lookup over HTTP against the SSE endpoint.
@@ -107,27 +110,67 @@ func (osintEmailFullTool) Execute(ctx context.Context, in Input) Result {
 	return res
 }
 
-// emailOSINTToken loads emailosint.org in the anti-detect browser and renders a
-// fresh, single-use Turnstile token for its sitekey, returning the token string.
+// emailOSINTToken loads emailosint.org in a throwaway anti-detect browser and
+// renders a fresh, single-use Turnstile token for its sitekey.
 //
 // It injects an explicit-render Turnstile widget rather than scraping the site's
-// own hidden field: the site mints its token on submit, but an explicit widget
-// with the same sitekey and page origin yields an equally valid token on demand
-// and on a deterministic callback we can poll. The browser having already
-// cleared Cloudflare's page challenge is what lets the widget resolve silently.
-func emailOSINTToken(ctx context.Context, in Input, proxyURL string) (string, error) {
-	// Turnstile clears reliably only in a real, visible browser; a headless
-	// launch here fails the challenge (and often the debug-port handshake). Force
-	// a headed session for the token step regardless of the global default, on
-	// its own session key so it never disturbs the conversation's main browser.
+// own hidden field: an explicit widget with the same sitekey and page origin
+// yields an equally valid token on a deterministic callback we can poll. The
+// stealth build clears Cloudflare's page challenge headlessly, so no visible
+// window is needed.
+//
+// This is ONE bounded attempt — the headless solve is flaky (~80% per try), so
+// retrying is the caller's job: the agent re-runs osint_email_full up to 5×
+// before falling back to anything else. Keeping each attempt to a single fast
+// try makes those agent-level retries quick, and the browser is torn down at the
+// end of every call so nothing lingers as a zombie.
+//
+// The session is dedicated (its own key) and closed as soon as the token is
+// harvested — it must never linger as a zombie browser.
+func emailOSINTToken(ctx context.Context, in Input, proxyURL string) (token string, err error) {
+	in.Emit(Progress{Tool: "osint_email_full", Message: "solving Turnstile challenge…"})
+	// Bound the whole attempt. Browser startup + navigate through a residential
+	// proxy already costs ~8–15s before the widget can even run, and the solve
+	// itself wants a few more — so 40s is the realistic floor. Past that it has
+	// stalled and the caller's next retry (fresh browser) is the better bet.
+	if dl, ok := ctx.Deadline(); !ok || time.Until(dl) > 40*time.Second {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, 40*time.Second)
+		defer cancel()
+	}
+	// Honour the configured headless/headed default (headless by default); the
+	// stealth Chromium solves Turnstile without a visible window.
 	cfg := *in.Deps.Config
-	cfg.Tools.Browser.Headed = true
+	// Use a throwaway profile, NOT the shared ~/.antares/browser one: a leftover
+	// SingletonLock there (from the user's own browsing or a prior run) makes
+	// Chrome refuse to open its debug port ("did not open its debugging port in
+	// time"). An empty UserDataDir makes Start() mint a fresh temp profile, so
+	// this one-shot solve never contends with anything.
+	cfg.Tools.Browser.UserDataDir = ""
 	// Solve through the same proxy the lookup will use, so the token is minted
 	// from the same IP (some challenges bind the token to the requesting IP).
 	if proxyURL != "" {
 		cfg.Tools.Browser.Proxy = proxyURL
 	}
-	s := sessionFor("emailosint:"+in.SessionID, &cfg)
+	// A coherent, common fingerprint clears more challenges: give the stealth
+	// build a real locale + timezone if the config left them blank, so
+	// navigator.language, Accept-Language, and the clock all agree.
+	if strings.TrimSpace(cfg.Tools.Browser.Locale) == "" {
+		cfg.Tools.Browser.Locale = "en-US"
+	}
+	if strings.TrimSpace(cfg.Tools.Browser.Timezone) == "" {
+		cfg.Tools.Browser.Timezone = "America/New_York"
+	}
+	key := "emailosint:" + in.SessionID
+	s := sessionFor(key, &cfg)
+	// Always tear the browser down on the way out — this is a one-shot solve, not
+	// a persistent session, so leaving it open would leak a browser process.
+	defer func() {
+		s.Stop()
+		browserSessions.Lock()
+		delete(browserSessions.byKey, key)
+		browserSessions.Unlock()
+	}()
 	if !s.Started() {
 		if err := s.Start(ctx); err != nil {
 			return "", fmt.Errorf("start browser: %w", err)
@@ -136,30 +179,59 @@ func emailOSINTToken(ctx context.Context, in Input, proxyURL string) (string, er
 	if err := s.Navigate(ctx, emailOSINTSite); err != nil {
 		return "", fmt.Errorf("navigate: %w", err)
 	}
-	_ = s.WaitReady(ctx, 20*time.Second)
+	_ = s.WaitReady(ctx, 15*time.Second)
+	// A brief settle before rendering our widget — solving the instant the page
+	// loads sometimes misfires — but keep it short to stay within the budget.
+	select {
+	case <-ctx.Done():
+		return "", ctx.Err()
+	case <-time.After(700 * time.Millisecond):
+	}
 
 	// Ensure the Turnstile script is present, then render an invisible widget and
-	// stash the token on window.__ao_tsToken when the callback fires.
+	// stash the token on window.__ao_tsToken when the callback fires. The widget
+	// is self-healing: an error-callback or timeout auto-resets and re-renders
+	// (with a fresh cData "action") a few times, which is what lifts the solve
+	// rate on a headless client where the first attempt often gets challenged.
 	setup := `(() => {
-	  window.__ao_tsToken = "";
-	  window.__ao_tsErr = "";
-	  const start = () => {
+	  window.__ao_tsToken = ""; window.__ao_tsErr = ""; window.__ao_tsTries = 0;
+	  const MAX = 8;
+	  // Each attempt gets a BRAND-NEW host element (a stale/reset widget often
+	  // never recovers headless); we fully remove the old one and render fresh.
+	  const fresh = () => {
+	    const h = document.createElement('div');
+	    // On-screen with real size so the interactive checkbox is visible AND
+	    // clickable (a hidden/off-screen widget can't be clicked, and Turnstile
+	    // refuses to run in a zero-size or invisible container).
+	    h.style.position = 'fixed'; h.style.left = '8px'; h.style.top = '8px';
+	    h.style.width = '300px'; h.style.height = '65px'; h.style.zIndex = '2147483647';
+	    document.body.appendChild(h);
+	    return h;
+	  };
+	  const again = (delay) => {
+	    if (window.__ao_tsToken || window.__ao_tsTries >= MAX) return;
+	    setTimeout(render, delay);
+	  };
+	  let host = null;
+	  const render = () => {
 	    try {
 	      if (!window.turnstile) { window.__ao_tsErr = "no-turnstile"; return; }
-	      const host = document.createElement('div');
-	      host.style.position = 'fixed'; host.style.left = '-9999px';
-	      document.body.appendChild(host);
+	      window.__ao_tsTries++;
+	      if (host) { try { host.remove(); } catch(e){} }
+	      host = fresh();
 	      window.turnstile.render(host, {
 	        sitekey: "` + emailOSINTSitekey + `",
-	        callback: (t) => { window.__ao_tsToken = t; },
-	        'error-callback': () => { window.__ao_tsErr = "error-callback"; },
+	        retry: "auto", "refresh-expired": "auto",
+	        callback: (t) => { window.__ao_tsToken = t; window.__ao_tsErr = ""; },
+	        'error-callback': () => { window.__ao_tsErr = "error-callback"; again(1200); },
+	        'timeout-callback': () => { window.__ao_tsErr = "timeout-callback"; again(800); },
 	      });
-	    } catch (e) { window.__ao_tsErr = String(e); }
+	    } catch (e) { window.__ao_tsErr = String(e); again(1500); }
 	  };
-	  if (window.turnstile) { start(); return "ready"; }
+	  if (window.turnstile) { render(); return "ready"; }
 	  const sc = document.createElement('script');
 	  sc.src = "https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit";
-	  sc.onload = start;
+	  sc.onload = render;
 	  sc.onerror = () => { window.__ao_tsErr = "script-load"; };
 	  document.head.appendChild(sc);
 	  return "loading";
@@ -168,31 +240,74 @@ func emailOSINTToken(ctx context.Context, in Input, proxyURL string) (string, er
 		return "", fmt.Errorf("inject turnstile: %w", err)
 	}
 
-	// Poll for the token (or a hard error) until the context deadline.
-	poll := `(() => JSON.stringify({t: window.__ao_tsToken || "", e: window.__ao_tsErr || ""}))()`
+	// Poll for the token. Turnstile has two modes: it either solves itself and
+	// the token appears, or it renders a checkbox and waits for a real click.
+	// Waiting alone hangs forever on the interactive variant, so once the widget
+	// is up we click its checkbox — a dispatched mouse event at the iframe's
+	// coordinates, which is what the cross-origin widget will accept.
+	poll := `(() => JSON.stringify({t: window.__ao_tsToken || "", e: window.__ao_tsErr || "", n: window.__ao_tsTries || 0}))()`
+	scriptReloads := 0
+	lastClick := time.Time{}
 	for {
 		select {
 		case <-ctx.Done():
 			return "", fmt.Errorf("timed out waiting for Turnstile token")
-		case <-time.After(1500 * time.Millisecond):
+		case <-time.After(400 * time.Millisecond):
 		}
 		raw, err := s.EvalString(ctx, poll)
 		if err != nil {
 			continue
 		}
-		var out struct{ T, E string }
+		var out struct {
+			T, E string
+			N    int
+		}
 		if json.Unmarshal([]byte(raw), &out) != nil {
 			continue
 		}
 		if out.T != "" {
 			return out.T, nil
 		}
-		// A transient error-callback can recover; only "no-turnstile"/"script-load"
-		// are fatal enough to stop early.
+		// Click the checkbox: once shortly after it appears, then re-click every
+		// few seconds in case the widget re-rendered.
+		if lastClick.IsZero() || time.Since(lastClick) > 3*time.Second {
+			if clickTurnstile(ctx, s) {
+				lastClick = time.Now()
+			}
+		}
+		// A failed script load through a flaky proxy is transient — re-inject the
+		// whole setup a couple of times before treating it as fatal.
+		if out.E == "script-load" && scriptReloads < 2 {
+			scriptReloads++
+			_, _ = s.EvalString(ctx, setup)
+			continue
+		}
 		if out.E == "no-turnstile" || out.E == "script-load" {
 			return "", fmt.Errorf("turnstile unavailable (%s)", out.E)
 		}
 	}
+}
+
+// clickTurnstile finds the Cloudflare challenge iframe and clicks its checkbox
+// (left side, vertically centred) with a real mouse event. Returns false when
+// no visible widget iframe is present yet.
+func clickTurnstile(ctx context.Context, s *browser.Session) bool {
+	raw, err := s.EvalString(ctx, `(() => {
+	  const f = [...document.querySelectorAll("iframe")]
+	    .find(f => (f.src || "").includes("challenges.cloudflare.com"));
+	  if (!f) return "";
+	  const r = f.getBoundingClientRect();
+	  if (r.width < 10 || r.height < 10) return "";
+	  return JSON.stringify([r.left + 30, r.top + r.height / 2]);
+	})()`)
+	if err != nil || raw == "" {
+		return false
+	}
+	var xy []float64
+	if json.Unmarshal([]byte(raw), &xy) != nil || len(xy) != 2 {
+		return false
+	}
+	return s.ClickXY(ctx, xy[0], xy[1]) == nil
 }
 
 // --- SSE lookup --------------------------------------------------------------
@@ -236,7 +351,13 @@ func emailOSINTStreamLookup(ctx context.Context, in Input, email, token, proxyUR
 		return Result{}, fmt.Errorf("HTTP %d — the Turnstile token was rejected (expired or invalid); try again", resp.StatusCode)
 	}
 	if resp.StatusCode == 429 {
-		return Result{}, fmt.Errorf("HTTP 429 — emailosint.org is rate-limiting this address; wait a few minutes before retrying")
+		if proxyURL != "" {
+			return Result{}, fmt.Errorf("HTTP 429 — rate-limited even through the proxy; try a different stored proxy (list_proxies) or wait a few minutes")
+		}
+		// Self-documenting so the model retries via a proxy instead of giving up.
+		return Result{}, fmt.Errorf("HTTP 429 — emailosint.org rate-limits by IP. Do NOT proceed without this data: " +
+			"call list_proxies, then retry osint_email_full with proxy=<id or label> to route through a different IP. " +
+			"Only if there are no proxies, wait a few minutes and retry.")
 	}
 	if resp.StatusCode != 200 {
 		return Result{}, fmt.Errorf("HTTP %d from emailosint.org", resp.StatusCode)
