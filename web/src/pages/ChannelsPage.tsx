@@ -164,7 +164,7 @@ export default function ChannelsPage() {
                   />
                 </div>
 
-                <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
+                <div className="mb-3 mt-2.5 flex flex-wrap items-center gap-1.5">
                   <Badge variant={c.connected ? 'success' : c.enabled ? 'warning' : 'outline'}>
                     {c.connected
                       ? t('channels.connected')
@@ -180,7 +180,7 @@ export default function ChannelsPage() {
                   ) : null}
                 </div>
 
-                <div className="mt-auto flex items-center gap-2 border-t border-border pt-2.5">
+                <div className="mt-auto flex flex-wrap items-center gap-x-2 gap-y-1.5 border-t border-border pt-3">
                   <Button
                     size="sm"
                     variant={c.configured ? 'outline' : 'default'}
