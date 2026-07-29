@@ -30,7 +30,46 @@ func TestAskUserFormatsQuestionAndOptions(t *testing.T) {
 	if !strings.Contains(emitted, "staging / prod") {
 		t.Fatalf("options not surfaced to the UI: %q", emitted)
 	}
-	if res.Meta["question"] != "Which environment?" {
-		t.Fatalf("meta missing the question: %v", res.Meta)
+	qs, ok := res.Meta["questions"].([]map[string]any)
+	if !ok || len(qs) != 1 || qs[0]["question"] != "Which environment?" {
+		t.Fatalf("meta should carry the normalised questions list: %v", res.Meta)
+	}
+}
+
+func TestAskUserMultipleQuestions(t *testing.T) {
+	res := askUserTool{}.Execute(nil, Input{
+		Args: []byte(`{"questions":[
+			{"question":"Pick a database","options":["sqlite","postgres"]},
+			{"question":"Workspace path?"}
+		]}`),
+		Emit: func(Progress) {},
+	})
+	if res.IsError {
+		t.Fatalf("unexpected error: %s", res.Content)
+	}
+	// Both questions must reach the model, numbered, with the yield instruction.
+	if !strings.Contains(res.Content, "1. Pick a database") || !strings.Contains(res.Content, "2. Workspace path?") {
+		t.Fatalf("both questions should be posed: %s", res.Content)
+	}
+	if !strings.Contains(res.Content, "end your turn") {
+		t.Fatalf("result should tell the model to yield: %s", res.Content)
+	}
+	qs, ok := res.Meta["questions"].([]map[string]any)
+	if !ok || len(qs) != 2 {
+		t.Fatalf("meta should carry two questions: %v", res.Meta)
+	}
+}
+
+func TestAskUserSkipsBlankQuestions(t *testing.T) {
+	res := askUserTool{}.Execute(nil, Input{
+		Args: []byte(`{"questions":[{"question":"  "},{"question":"Real one?"}]}`),
+		Emit: func(Progress) {},
+	})
+	if res.IsError {
+		t.Fatalf("unexpected error: %s", res.Content)
+	}
+	qs, _ := res.Meta["questions"].([]map[string]any)
+	if len(qs) != 1 || qs[0]["question"] != "Real one?" {
+		t.Fatalf("blank question should be dropped: %v", res.Meta)
 	}
 }
