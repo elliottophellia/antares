@@ -186,6 +186,9 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		defer func() {
 			lr.finish()
 			s.hub.remove(sessionKey, lr)
+			// A sub-agent that finished while this turn streamed queued its
+			// result; act on it now as the next turn (context preserved).
+			s.drainAfterTurn(sessionKey)
 		}()
 		if _, err := s.agent.Run(context.Background(), agentReq, emit); err != nil {
 			slog.Debug("chat turn failed", "error", err)
@@ -290,6 +293,9 @@ func (s *Server) handleListSessions(w http.ResponseWriter, r *http.Request) {
 		Limit:    queryInt(r, "limit", 50),
 		Offset:   queryInt(r, "offset", 0),
 		OrderBy:  r.URL.Query().Get("order_by"),
+		// Sub-agent sessions are internal machinery, not conversations the user
+		// started — keep them out of the sessions list.
+		ExcludePlatforms: []string{"subagent", "background"},
 	}
 	sessions, total, err := s.db.ListSessions(r.Context(), f)
 	if err != nil {

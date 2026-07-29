@@ -3,7 +3,7 @@ import { ClockCounterClockwise, Play, Plus, Trash } from '@phosphor-icons/react'
 import { del, get, post } from '@/lib/api'
 import { useApi } from '@/lib/hooks'
 import { useI18n, useTimeAgo } from '@/lib/i18n'
-import { PageBody } from '@/components/layout/AppShell'
+import { PageLayout } from '@/components/layout/PageLayout'
 import { usePageActions } from '@/components/layout/PageChrome'
 import { Button } from '@/components/ui/button'
 import {
@@ -67,7 +67,7 @@ export default function CronPage() {
   }
 
   return (
-    <PageBody>
+    <PageLayout>
       <NewJobDialog open={open} onOpenChange={setOpen} onCreated={reload} />
 
       {loading && !data ? (
@@ -143,7 +143,7 @@ export default function CronPage() {
           ))}
         </div>
       )}
-    </PageBody>
+    </PageLayout>
   )
 }
 

@@ -178,12 +178,15 @@ type Pairing struct {
 // SessionFilter narrows a session listing.
 type SessionFilter struct {
 	Platform string
-	UserID   string
-	Query    string
-	Archived *bool
-	Limit    int
-	Offset   int
-	OrderBy  string // updated_at|created_at|message_count
+	// ExcludePlatforms hides sessions from these platforms — used to keep
+	// sub-agent sessions ("subagent", "background") out of the human's list.
+	ExcludePlatforms []string
+	UserID           string
+	Query            string
+	Archived         *bool
+	Limit            int
+	Offset           int
+	OrderBy          string // updated_at|created_at|message_count
 }
 
 // SearchHit is a full-text match inside a session.

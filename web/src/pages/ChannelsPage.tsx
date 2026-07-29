@@ -16,7 +16,7 @@ import {
 import { post } from '@/lib/api'
 import { useApi } from '@/lib/hooks'
 import { useI18n, useTimeAgo } from '@/lib/i18n'
-import { PageBody } from '@/components/layout/AppShell'
+import { PageLayout } from '@/components/layout/PageLayout'
 import { Button } from '@/components/ui/button'
 import {
   Badge,
@@ -102,7 +102,7 @@ export default function ChannelsPage() {
   }
 
   return (
-    <PageBody>
+    <PageLayout>
       <ConfigDialog
         channel={configFor}
         onOpenChange={(open) => !open && setConfigFor(null)}
@@ -228,7 +228,7 @@ export default function ChannelsPage() {
           </div>
         )}
       </div>
-    </PageBody>
+    </PageLayout>
   )
 }
 

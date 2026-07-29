@@ -21,6 +21,7 @@ func (s *Server) routes() {
 
 	// Chat
 	m.HandleFunc("POST /api/chat", s.handleChat)
+	m.HandleFunc("POST /api/upload", s.handleUpload)
 	m.HandleFunc("GET /api/chat/attach", s.handleChatAttach)
 	m.HandleFunc("POST /api/chat/interrupt", s.handleInterrupt)
 
@@ -46,6 +47,11 @@ func (s *Server) routes() {
 	m.HandleFunc("DELETE /api/sessions/{id}", s.handleDeleteSession)
 	m.HandleFunc("POST /api/sessions/{id}/title", s.handleRenameSession)
 
+	// Dashboard login (web-only; TUI and gateways are unaffected)
+	m.HandleFunc("GET /api/auth/status", s.handleAuthStatus)
+	m.HandleFunc("POST /api/auth/login", s.handleAuthLogin)
+	m.HandleFunc("POST /api/auth/logout", s.handleAuthLogout)
+
 	// Setup / onboarding
 	m.HandleFunc("GET /api/setup/status", s.handleSetupStatus)
 	m.HandleFunc("POST /api/setup/test", s.handleSetupTest)
@@ -61,8 +67,13 @@ func (s *Server) routes() {
 	// Models & providers
 	m.HandleFunc("GET /api/model/options", s.handleModelOptions)
 	m.HandleFunc("GET /api/model/list", s.handleModelList)
+	m.HandleFunc("GET /api/model/list-all", s.handleModelListAll)
 	m.HandleFunc("POST /api/model/set", s.handleModelSet)
 	m.HandleFunc("POST /api/providers/{id}/key", s.handleSetProviderKey)
+	m.HandleFunc("GET /api/providers/{id}/model-info", s.handleProviderModelInfo)
+	m.HandleFunc("POST /api/providers/{id}/model", s.handleAddProviderModel)
+	m.HandleFunc("DELETE /api/providers/{id}/model/{model}", s.handleDeleteProviderModel)
+	m.HandleFunc("POST /api/providers/{id}/settings", s.handleProviderSettings)
 
 	// Tools
 	m.HandleFunc("GET /api/tools", s.handleListTools)
@@ -115,6 +126,8 @@ func (s *Server) routes() {
 	// Roles and the swarm
 	m.HandleFunc("GET /api/roles", s.handleRoles)
 	m.HandleFunc("GET /api/swarm", s.handleSwarm)
+	m.HandleFunc("GET /api/swarm/stream", s.handleSwarmStream)
+	m.HandleFunc("GET /api/subagent/{id}/attach", s.handleSubAgentAttach)
 
 	// Plugins
 	m.HandleFunc("GET /api/plugins", s.handlePlugins)
@@ -124,6 +137,10 @@ func (s *Server) routes() {
 	// Approvals for tools that change something.
 	m.HandleFunc("GET /api/approvals", s.handleApprovals)
 	m.HandleFunc("POST /api/approvals/{id}", s.handleResolveApproval)
+
+	// ask_user pause/resume
+	m.HandleFunc("GET /api/asks", s.handleAsks)
+	m.HandleFunc("POST /api/asks/{id}", s.handleResolveAsk)
 
 	// Hub: browse and install skills and MCP servers.
 	m.HandleFunc("GET /api/hub/skills", s.handleHubSkills)
@@ -151,6 +168,7 @@ func (s *Server) routes() {
 	m.HandleFunc("GET /api/engagement/report", s.handleEngagementReport)
 	m.HandleFunc("GET /api/board/sessions", s.handleBoardSessions)
 	m.HandleFunc("GET /api/board", s.handleBoard)
+	m.HandleFunc("GET /api/board/stream", s.handleBoardStream)
 	m.HandleFunc("DELETE /api/board/card", s.handleBoardRemoveCard)
 	m.HandleFunc("DELETE /api/board", s.handleBoardClear)
 	m.HandleFunc("POST /api/pairing/approve", s.handleApprovePairing)

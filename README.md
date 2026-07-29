@@ -18,6 +18,15 @@ antares serve      # API + dashboard on :8787
 antares setup      # configure it, in the browser or the terminal
 ```
 
+> [!NOTE]
+> **Antares is an early release.** It runs and is used daily, but the surface is
+> still moving and rough edges are expected. Bug reports, feature ideas, and
+> pull requests are all welcome — [open an issue](https://github.com/enowdev/antares/issues)
+> or [send a PR](https://github.com/enowdev/antares/pulls). See
+> [Contributing](#contributing).
+
+Runs on **Linux**, **macOS**, and **Windows**.
+
 ---
 
 ## Why it is built this way
@@ -37,7 +46,31 @@ else is the standard library.
 
 ## Quick start
 
+The installer downloads the prebuilt binary for your platform from GitHub
+Releases — no build tools required. Full guide, per-OS notes, and
+troubleshooting: [docs/installation.md](docs/installation.md).
+
+**Linux / macOS**
+
 ```bash
+curl -fsSL https://raw.githubusercontent.com/enowdev/antares/main/scripts/install.sh | bash
+```
+
+**Windows (PowerShell)**
+
+```powershell
+irm https://raw.githubusercontent.com/enowdev/antares/main/scripts/install.ps1 | iex
+```
+
+> While the repo is private, install the [GitHub CLI](https://cli.github.com)
+> and run `gh auth login` first — the installer uses it to fetch release assets.
+> Once the repo is public this is not needed.
+
+**From source** (to develop, or run an unreleased commit — needs Go 1.21+, Bun/npm, git):
+
+```bash
+git clone https://github.com/enowdev/antares.git
+cd antares
 make install          # Go modules, Air, frontend packages
 make build            # single binary with the dashboard embedded
 ./bin/antares         # first run drops straight into setup
@@ -283,7 +316,8 @@ credentials, and RAG backend in one pass.
 
 | Guide | What it covers |
 |---|---|
-| [Getting started](docs/getting-started.md) | Install, first run, connecting a provider |
+| [Installation](docs/installation.md) | Install on Linux, macOS, Windows; upgrading; releases |
+| [Getting started](docs/getting-started.md) | First run, connecting a provider |
 | [Configuration](docs/configuration.md) | Every setting, and where it can be set |
 | [Tools](docs/tools.md) | The tool surface and the toolsets |
 | [Browser](docs/browser.md) | Driving a real browser |
@@ -304,6 +338,25 @@ credentials, and RAG backend in one pass.
 | [Backups](docs/backups.md) | Archiving and restoring everything |
 | [Architecture](docs/architecture.md) | How the pieces fit |
 | [Development](docs/development.md) | Building and testing |
+
+---
+
+## Contributing
+
+Antares is an **early release** and actively worked on — contributions are
+welcome.
+
+- **Bugs & ideas:** [open an issue](https://github.com/enowdev/antares/issues).
+  Include what you ran, what happened, and `antares doctor` output where it
+  helps.
+- **Pull requests:** [send one](https://github.com/enowdev/antares/pulls). Run
+  `make check` (go vet + tests + tsc) before pushing; for dashboard changes,
+  `make smoke` loads every route in a real browser.
+- **Scope:** the interface is still moving, so for anything large it is worth
+  opening an issue first to agree on the shape.
+
+Because it is early, expect rough edges and the occasional breaking change
+between versions. Please report anything that surprises you.
 
 ---
 

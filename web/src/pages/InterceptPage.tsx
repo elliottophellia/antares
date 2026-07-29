@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { Broadcast, DownloadSimple, Play, Stop, Trash } from '@phosphor-icons/react'
 import { del, get, post } from '@/lib/api'
 import { useApi } from '@/lib/hooks'
-import { PageBody } from '@/components/layout/AppShell'
+import { PageLayout } from '@/components/layout/PageLayout'
 import { Button } from '@/components/ui/button'
 import { Badge, Card, EmptyState, Input, Label } from '@/components/ui/primitives'
 
@@ -95,7 +95,7 @@ export default function InterceptPage() {
     s >= 500 ? 'destructive' : s >= 400 ? 'warning' : s >= 200 ? 'success' : 'outline'
 
   return (
-    <PageBody>
+    <PageLayout>
       <div className="mb-4 flex flex-wrap items-center gap-3">
         <Broadcast className="size-5 text-primary" />
         <div className="flex-1">
@@ -232,6 +232,6 @@ export default function InterceptPage() {
           ) : null}
         </div>
       </div>
-    </PageBody>
+    </PageLayout>
   )
 }

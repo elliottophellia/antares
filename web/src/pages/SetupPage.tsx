@@ -82,12 +82,15 @@ export default function SetupPage() {
   const [model, setModel] = useState('')
   const [modelFilter, setModelFilter] = useState('')
   const [workspace, setWorkspace] = useState('')
+  const [dbDriver, setDbDriver] = useState<'sqlite' | 'postgres'>('sqlite')
+  const [dbDSN, setDbDSN] = useState('')
 
   const [ragEnabled, setRagEnabled] = useState(false)
   const [ragProvider, setRagProvider] = useState('builtin')
   const [embedModel, setEmbedModel] = useState('text-embedding-3-small')
   const [enowxURL, setEnowxURL] = useState('http://127.0.0.1:7777')
   const [telegram, setTelegram] = useState('')
+  const [dashboardPassword, setDashboardPassword] = useState('')
 
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string>()
@@ -157,6 +160,10 @@ export default function SetupPage() {
         api_key: apiKey,
         model,
         workspace,
+        database: {
+          driver: dbDriver,
+          dsn: dbDriver === 'postgres' ? dbDSN.trim() : '',
+        },
         rag: {
           enabled: ragEnabled,
           provider: ragProvider,
@@ -164,6 +171,7 @@ export default function SetupPage() {
           enowx_url: enowxURL,
         },
         telegram_token: telegram,
+        dashboard_password: dashboardPassword,
       })
       setStep('done')
     } catch (e) {
@@ -387,7 +395,56 @@ export default function SetupPage() {
             />
             <p className="text-[11px] text-muted-foreground">{t('setup.workspaceHint')}</p>
           </div>
-          <StepNav onBack={goBack} onNext={goNext} nextLabel={t('setup.next')} />
+
+          <Card>
+            <CardHeader>
+              <CardTitle>{t('setup.storageTitle')}</CardTitle>
+              <CardDescription>{t('setup.storageDesc')}</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              <div className="grid gap-2 sm:grid-cols-2">
+                {(
+                  [
+                    ['sqlite', t('setup.storageSqlite')],
+                    ['postgres', t('setup.storagePostgres')],
+                  ] as const
+                ).map(([id, label]) => (
+                  <button
+                    key={id}
+                    type="button"
+                    onClick={() => setDbDriver(id)}
+                    className={cn(
+                      'rounded-[var(--radius-md)] border p-3 text-left text-sm transition-colors',
+                      dbDriver === id ? 'border-primary bg-primary/8' : 'border-border hover:border-primary/40',
+                    )}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+              {dbDriver === 'postgres' ? (
+                <div className="space-y-1.5">
+                  <Label htmlFor="db-dsn">{t('setup.storageDsn')}</Label>
+                  <Input
+                    id="db-dsn"
+                    value={dbDSN}
+                    onChange={(e) => setDbDSN(e.target.value)}
+                    placeholder="postgres://user:pass@localhost:5432/antares?sslmode=disable"
+                    className="font-mono text-xs"
+                    autoComplete="off"
+                  />
+                  <p className="text-[11px] text-muted-foreground">{t('setup.storageDsnHint')}</p>
+                </div>
+              ) : null}
+            </CardContent>
+          </Card>
+
+          <StepNav
+            onBack={goBack}
+            onNext={goNext}
+            nextLabel={t('setup.next')}
+            disabled={dbDriver === 'postgres' && !dbDSN.trim()}
+          />
         </section>
       ) : null}
 
@@ -469,6 +526,22 @@ export default function SetupPage() {
                 onChange={(e) => setTelegram(e.target.value)}
                 placeholder={t('setup.telegramPlaceholder')}
                 autoComplete="off"
+              />
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <CardTitle>{t('setup.dashboardPasswordTitle')}</CardTitle>
+              <CardDescription>{t('setup.dashboardPasswordDesc')}</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <Input
+                type="password"
+                value={dashboardPassword}
+                onChange={(e) => setDashboardPassword(e.target.value)}
+                placeholder={t('setup.dashboardPasswordPlaceholder')}
+                autoComplete="new-password"
               />
             </CardContent>
           </Card>

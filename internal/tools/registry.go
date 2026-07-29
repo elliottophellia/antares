@@ -29,9 +29,25 @@ type Input struct {
 	Workspace string
 	// Emit reports progress; it is never nil.
 	Emit func(Progress)
+	// AskUser blocks the current turn to put questions to the person and returns
+	// their answer as text. Nil where no one can answer (some gateways/cron), in
+	// which case a blocking tool must fall back to yielding via its result.
+	AskUser AskFunc
 	// Deps exposes shared services (store, memory, rag, llm factory, sub-agent).
 	Deps *Deps
 }
+
+// AskQuestion is one question the ask_user tool puts to the person.
+type AskQuestion struct {
+	Question    string   `json:"question"`
+	Header      string   `json:"header,omitempty"`
+	Options     []string `json:"options,omitempty"`
+	MultiSelect bool     `json:"multiSelect,omitempty"`
+}
+
+// AskFunc pauses the turn, asks the questions, and returns the answer text. It
+// unblocks with an error if the run is cancelled.
+type AskFunc func(ctx context.Context, questions []AskQuestion) (string, error)
 
 // Bind decodes the tool arguments into v.
 func (in Input) Bind(v any) error {
@@ -180,11 +196,11 @@ func (r *Registry) Resolve(toolset string, enabled, disabled []string) []Tool {
 var Toolsets = map[string][]string{
 	"minimal": {"read_file", "list_files", "grep", "todo"},
 	"coding": {
-		"read_file", "write_file", "edit_file", "list_files", "glob", "grep",
+		"read_file", "read_document", "write_file", "edit_file", "list_files", "glob", "grep",
 		"terminal", "todo", "board", "skill", "delegate_task", "task", "list_roles", "diagnostics", "http_request", "ask_user", "schedule",
 	},
 	"research": {
-		"read_file", "web_search", "web_fetch", "http_request", "browser", "grep", "todo", "memory",
+		"read_file", "read_document", "web_search", "web_fetch", "http_request", "browser", "grep", "todo", "memory",
 		"session_search", "rag_search", "skill", "view_image", "report_finding", "add_intel", "methodology_status",
 		"delegate_task", "task", "list_roles",
 	},
@@ -216,7 +232,7 @@ var Toolsets = map[string][]string{
 		"read_file", "write_file", "todo", "report_finding", "add_intel",
 	},
 	"default": {
-		"read_file", "write_file", "edit_file", "list_files", "glob", "grep",
+		"read_file", "read_document", "write_file", "edit_file", "list_files", "glob", "grep",
 		"terminal", "web_search", "web_fetch", "http_request", "browser", "todo", "board", "memory",
 		"session_search", "rag_search", "rag_index", "skill", "delegate_task", "task", "list_roles", "image_generate", "view_image", "speak", "transcribe", "computer", "diagnostics", "ask_user", "schedule",
 		"osint_dns", "osint_dorks", "osint_whois", "osint_ip", "osint_username", "osint_github", "osint_email", "osint_breach", "osint_shodan", "osint_reputation", "osint_crypto", "osint_domain", "osint_phone", "osint_scrape", "osint_paste", "osint_footprint", "osint_dorks_live", "check_dependencies", "re_info", "re_strings", "re_analyze", "re_decompile", "solve_captcha", "intercept",

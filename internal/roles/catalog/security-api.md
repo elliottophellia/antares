@@ -3,6 +3,8 @@ name: security-api
 title: API Tester
 summary: Tests authorized APIs for authorization, input handling, and logic flaws.
 category: security
+subrole: true
+parent: security
 toolset: security
 effort: high
 danger: true

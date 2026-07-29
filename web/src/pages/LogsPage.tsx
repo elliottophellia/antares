@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { Broom, Pause, Play, Terminal } from '@phosphor-icons/react'
 import { get } from '@/lib/api'
 import { cn } from '@/lib/utils'
-import { PageBody } from '@/components/layout/AppShell'
+import { PageLayout } from '@/components/layout/PageLayout'
 import { Button } from '@/components/ui/button'
 import { EmptyState, Input, Tabs, TabsList, TabsTrigger } from '@/components/ui/primitives'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -83,25 +83,27 @@ export default function LogsPage() {
   }, [entries, filter])
 
   return (
-    <PageBody>
-      <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
-        <Tabs value={level} onValueChange={setLevel}>
-          <TabsList>
-            {LEVELS.map((l) => (
-              <TabsTrigger key={l} value={l}>
-                {l}
-              </TabsTrigger>
-            ))}
-          </TabsList>
-        </Tabs>
-        <Input
-          value={filter}
-          onChange={(e) => setFilter(e.target.value)}
-          placeholder={t('logs.filterPlaceholder')}
-          className="sm:max-w-xs"
-        />
-      </div>
-
+    <PageLayout
+      header={
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+          <Tabs value={level} onValueChange={setLevel}>
+            <TabsList>
+              {LEVELS.map((l) => (
+                <TabsTrigger key={l} value={l}>
+                  {l}
+                </TabsTrigger>
+              ))}
+            </TabsList>
+          </Tabs>
+          <Input
+            value={filter}
+            onChange={(e) => setFilter(e.target.value)}
+            placeholder={t('logs.filterPlaceholder')}
+            className="sm:max-w-xs"
+          />
+        </div>
+      }
+    >
       {loading ? (
         <div className="space-y-2">
           {Array.from({ length: 12 }).map((_, i) => (
@@ -112,7 +114,7 @@ export default function LogsPage() {
         <EmptyState icon={<Terminal className="size-8" />} title={t('logs.none')} />
       ) : (
         <div className="overflow-hidden rounded-[var(--radius-lg)] border border-border bg-card">
-          <div className="max-h-[65dvh] overflow-auto p-3 font-mono text-[11px] leading-relaxed">
+          <div className="p-3 font-mono text-[11px] leading-relaxed">
             {visible.map((e, i) => (
               <div key={i} className="flex gap-2 py-0.5">
                 <span className="shrink-0 text-muted-foreground">
@@ -140,6 +142,6 @@ export default function LogsPage() {
       <p className="text-[11px] text-muted-foreground">
         {t('logs.lines', { n: visible.length, time: timeAgo(new Date()) })}
       </p>
-    </PageBody>
+    </PageLayout>
   )
 }

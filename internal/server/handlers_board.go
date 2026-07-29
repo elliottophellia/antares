@@ -3,6 +3,7 @@ package server
 import (
 	"errors"
 	"net/http"
+	"time"
 
 	"github.com/enowdev/antares/internal/board"
 	"github.com/enowdev/antares/internal/config"
@@ -34,18 +35,15 @@ func (s *Server) handleBoardSessions(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"sessions": out})
 }
 
-// handleBoard returns one session's board, grouped by column.
-func (s *Server) handleBoard(w http.ResponseWriter, r *http.Request) {
-	session := r.URL.Query().Get("session")
-	if session == "" {
-		writeJSON(w, http.StatusOK, map[string]any{"columns": []any{}})
-		return
-	}
+type boardColumn struct {
+	Name  string       `json:"name"`
+	Cards []board.Card `json:"cards"`
+}
+
+// boardColumns builds one session's board grouped by column, in the standard
+// order with any custom columns appended.
+func boardColumns(session string) []boardColumn {
 	byCol := boardStore().List(session)
-	type column struct {
-		Name  string       `json:"name"`
-		Cards []board.Card `json:"cards"`
-	}
 	order := append([]string{}, board.DefaultColumns...)
 	seen := map[string]bool{}
 	for _, c := range order {
@@ -56,15 +54,67 @@ func (s *Server) handleBoard(w http.ResponseWriter, r *http.Request) {
 			order = append(order, name)
 		}
 	}
-	cols := make([]column, 0, len(order))
+	cols := make([]boardColumn, 0, len(order))
 	for _, name := range order {
 		cards := byCol[name]
 		if cards == nil {
 			cards = []board.Card{}
 		}
-		cols = append(cols, column{Name: name, Cards: cards})
+		cols = append(cols, boardColumn{Name: name, Cards: cards})
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"columns": cols})
+	return cols
+}
+
+// handleBoard returns one session's board, grouped by column.
+func (s *Server) handleBoard(w http.ResponseWriter, r *http.Request) {
+	session := r.URL.Query().Get("session")
+	if session == "" {
+		writeJSON(w, http.StatusOK, map[string]any{"columns": []any{}})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"columns": boardColumns(session)})
+}
+
+// handleBoardStream pushes a session's board to the browser over SSE, on every
+// change (todo write, card move/remove/clear) and once immediately — so the
+// Kanban view tracks the agent's task list in realtime with no polling.
+func (s *Server) handleBoardStream(w http.ResponseWriter, r *http.Request) {
+	session := r.URL.Query().Get("session")
+	if session == "" {
+		writeError(w, http.StatusBadRequest, errors.New("session is required"))
+		return
+	}
+	sse, err := newSSE(w)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	ch, cancel := board.Subscribe(session)
+	defer cancel()
+
+	// Send the current state at once so the page renders without waiting for the
+	// first change.
+	if err := sse.send(map[string]any{"columns": boardColumns(session)}); err != nil {
+		return
+	}
+
+	ticker := time.NewTicker(25 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-r.Context().Done():
+			return
+		case <-ticker.C:
+			sse.comment("keepalive")
+		case _, ok := <-ch:
+			if !ok {
+				return
+			}
+			if err := sse.send(map[string]any{"columns": boardColumns(session)}); err != nil {
+				return
+			}
+		}
+	}
 }
 
 // handleBoardRemoveCard deletes a single card from a session's board.

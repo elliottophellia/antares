@@ -129,7 +129,11 @@ func (a *Agent) Probe(ctx context.Context) (bool, string) {
 	return true, fmt.Sprintf("%s · %s ready", provider, model)
 }
 
-// Models lists the models a provider offers.
+// Models lists the models a provider offers: whatever its /models endpoint
+// reports, merged with any models added by hand in config (providers.<id>.
+// models). Manually added ids that the endpoint does not return are appended,
+// carrying a context window from providers.<id>.model_meta when set. A live
+// fetch that fails still yields the manual list rather than nothing.
 func (a *Agent) Models(ctx context.Context, providerID string) ([]llm.ModelInfo, error) {
 	id, p := a.cfg.ResolveProvider(providerID)
 	client, err := llm.New(llm.Options{
@@ -139,7 +143,33 @@ func (a *Agent) Models(ctx context.Context, providerID string) ([]llm.ModelInfo,
 	if err != nil {
 		return nil, err
 	}
-	ctx, cancel := context.WithTimeout(ctx, 45*time.Second)
+	fetchCtx, cancel := context.WithTimeout(ctx, 45*time.Second)
 	defer cancel()
-	return client.Models(ctx)
+
+	live, ferr := client.Models(fetchCtx)
+
+	// Fold in manually configured models the endpoint did not return.
+	seen := make(map[string]bool, len(live))
+	for _, m := range live {
+		seen[m.ID] = true
+	}
+	out := live
+	for _, mid := range p.Models {
+		if mid == "" || seen[mid] {
+			continue
+		}
+		seen[mid] = true
+		out = append(out, llm.ModelInfo{
+			ID:            mid,
+			Name:          mid,
+			Provider:      id,
+			ContextWindow: p.ModelMeta[mid].ContextWindow,
+		})
+	}
+
+	// A failed fetch is only an error when it left us with nothing to show.
+	if ferr != nil && len(out) == 0 {
+		return nil, ferr
+	}
+	return out, nil
 }

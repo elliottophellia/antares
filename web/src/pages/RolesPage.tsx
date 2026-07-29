@@ -2,9 +2,10 @@ import { Lightning, Spinner, UsersThree, Warning } from '@phosphor-icons/react'
 import { useEffect } from 'react'
 import { useApi } from '@/lib/hooks'
 import { useI18n } from '@/lib/i18n'
-import { PageBody } from '@/components/layout/AppShell'
+import { PageLayout } from '@/components/layout/PageLayout'
 import { Badge, Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/primitives'
 import { SkeletonList } from '@/components/ui/skeleton'
+import { cn } from '@/lib/utils'
 
 interface Role {
   name: string
@@ -14,6 +15,8 @@ interface Role {
   toolset: string
   model: string
   danger?: boolean
+  subrole?: boolean
+  parent?: string
   source: string
 }
 
@@ -30,6 +33,30 @@ interface Perf {
   missions: number
   successes: number
   kept: number
+}
+
+// orderWithSubroles keeps the server order for top-level roles but pulls each
+// subrole up directly beneath its master, so the nesting reads top-down.
+function orderWithSubroles(roles: Role[]): Role[] {
+  const subs = new Map<string, Role[]>()
+  for (const r of roles) {
+    if (r.subrole && r.parent) {
+      const list = subs.get(r.parent) ?? []
+      list.push(r)
+      subs.set(r.parent, list)
+    }
+  }
+  const out: Role[] = []
+  for (const r of roles) {
+    if (r.subrole) continue
+    out.push(r)
+    for (const s of subs.get(r.name) ?? []) out.push(s)
+  }
+  // Any subrole whose master is in another category still gets shown.
+  for (const r of roles) {
+    if (r.subrole && !out.includes(r)) out.push(r)
+  }
+  return out
 }
 
 const CATEGORY_LABEL: Record<string, string> = {
@@ -71,7 +98,7 @@ export default function RolesPage() {
   }
 
   return (
-    <PageBody>
+    <PageLayout>
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
@@ -136,8 +163,11 @@ export default function RolesPage() {
         <div key={g.category} className="space-y-2">
           <h2 className="text-sm font-semibold">{CATEGORY_LABEL[g.category] ?? g.category}</h2>
           <div className="space-y-2">
-            {g.roles.map((r) => (
-              <Card key={r.name} className="p-3.5">
+            {orderWithSubroles(g.roles).map((r) => (
+              <Card
+                key={r.name}
+                className={cn('p-3.5', r.subrole && 'ml-4 border-l-2 border-l-border bg-muted/20')}
+              >
                 <div className="flex items-start gap-3">
                   <div className="min-w-0 flex-1">
                     <div className="flex flex-wrap items-center gap-2">
@@ -145,6 +175,9 @@ export default function RolesPage() {
                       <code className="rounded bg-muted px-1.5 py-0.5 font-mono text-[11px] text-muted-foreground">
                         {r.name}
                       </code>
+                      {r.subrole ? (
+                        <Badge variant="secondary">{t('roles.specialistOf', { master: r.parent ?? '' })}</Badge>
+                      ) : null}
                       {r.danger ? (
                         <Badge variant="warning">
                           <Warning className="size-3" weight="fill" />
@@ -171,6 +204,6 @@ export default function RolesPage() {
           {t('roles.howto')}
         </CardContent>
       </Card>
-    </PageBody>
+    </PageLayout>
   )
 }

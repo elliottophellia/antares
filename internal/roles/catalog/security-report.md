@@ -3,6 +3,8 @@ name: security-report
 title: Security Report Writer
 summary: Turns engagement findings into a clear, actionable report.
 category: security
+subrole: true
+parent: security
 toolset: writing
 tags: [security, reporting, writing]
 ---

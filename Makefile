@@ -100,9 +100,13 @@ check: vet test typecheck ## Run every check (add `make smoke` for the browser p
 fmt: ## Format Go sources
 	@$(GO) fmt ./...
 
+.PHONY: release
+release: ## Cross-compile release binaries for all platforms into dist/release
+	@VERSION="$(VERSION)" GO="$(GO)" BUN="$(BUN)" ./scripts/release-build.sh
+
 .PHONY: clean
 clean: ## Remove build artefacts
-	@rm -rf bin .air web/dist
+	@rm -rf bin .air web/dist dist
 	@echo "cleaned"
 
 .PHONY: doctor

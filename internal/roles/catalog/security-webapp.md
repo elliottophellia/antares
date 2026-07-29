@@ -3,6 +3,8 @@ name: security-webapp
 title: Web Application Tester
 summary: Tests an authorized web application against the OWASP categories.
 category: security
+subrole: true
+parent: security
 toolset: security
 effort: high
 danger: true

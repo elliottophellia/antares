@@ -10,6 +10,7 @@ interface Role {
   summary: string
   category: string
   danger?: boolean
+  subrole?: boolean
 }
 
 const CATEGORY_LABEL: Record<string, string> = {
@@ -28,9 +29,13 @@ const CATEGORY_LABEL: Record<string, string> = {
 export function RolePicker({
   value,
   onChange,
+  compact = false,
 }: {
   value: string
   onChange: (role: string) => void
+  // compact renders a short chip for the composer's control row, instead of the
+  // tall standalone box.
+  compact?: boolean
 }) {
   const { t } = useI18n()
   const [roles, setRoles] = useState<Role[]>([])
@@ -39,7 +44,9 @@ export function RolePicker({
 
   useEffect(() => {
     get<{ roles: Role[] }>('/roles')
-      .then((r) => setRoles(r.roles ?? []))
+      // Subroles are reached only through their master role, never selected
+      // directly — so they stay out of the picker.
+      .then((r) => setRoles((r.roles ?? []).filter((x) => !x.subrole)))
       .catch(() => setRoles([]))
   }, [])
 
@@ -53,7 +60,11 @@ export function RolePicker({
     return () => document.removeEventListener('mousedown', onClick)
   }, [open])
 
-  const current = roles.find((r) => r.name === value)
+  // Empty value means "the default agent", which is the Orchestrator (the
+  // `assistant` role). Resolve it so the button and the checkmark reflect that,
+  // rather than showing a separate "no role" state.
+  const selected = value || 'assistant'
+  const current = roles.find((r) => r.name === selected)
 
   // Group by category, preserving the server's order.
   const groups: { category: string; roles: Role[] }[] = []
@@ -75,26 +86,20 @@ export function RolePicker({
     <div ref={ref} className="relative">
       <button
         onClick={() => setOpen((v) => !v)}
-        className="flex h-[3.25rem] items-center gap-1.5 rounded-[var(--radius-xl)] border border-border bg-card px-3 text-sm shadow-sm transition-colors hover:border-primary/40 focus-visible:border-ring"
+        className={cn(
+          'flex items-center gap-1.5 border border-border bg-card transition-colors hover:border-primary/40 focus-visible:border-ring',
+          compact
+            ? 'h-8 rounded-[var(--radius-md)] px-2.5 text-xs'
+            : 'h-[3.25rem] rounded-[var(--radius-xl)] px-3 text-sm shadow-sm',
+        )}
       >
-        <UsersThree className="size-4 shrink-0 text-muted-foreground" />
-        <span className="max-w-28 truncate">{current ? current.title : t('roles.asAssistant')}</span>
-        <CaretDown className="size-3.5 shrink-0 text-muted-foreground" />
+        <UsersThree className={cn('shrink-0 text-muted-foreground', compact ? 'size-3.5' : 'size-4')} />
+        <span className="max-w-28 truncate">{current ? current.title : t('roles.orchestrator')}</span>
+        <CaretDown className="size-3 shrink-0 text-muted-foreground" />
       </button>
 
       {open ? (
         <div className="absolute bottom-full left-0 z-30 mb-2 max-h-72 w-72 overflow-y-auto rounded-[var(--radius-lg)] border border-border bg-card p-1 shadow-lg">
-          <button
-            onClick={() => pick('')}
-            className={cn(
-              'flex w-full items-center gap-2 rounded-[var(--radius-sm)] px-2.5 py-1.5 text-left text-xs transition-colors hover:bg-muted',
-              value === '' && 'text-primary',
-            )}
-          >
-            {value === '' ? <Check className="size-3.5" /> : <span className="w-3.5" />}
-            {t('roles.asAssistant')}
-          </button>
-
           {groups.map((g) => (
             <div key={g.category}>
               <div className="px-2.5 pb-1 pt-2 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
@@ -103,13 +108,16 @@ export function RolePicker({
               {g.roles.map((r) => (
                 <button
                   key={r.name}
-                  onClick={() => pick(r.name)}
+                  // Selecting the Orchestrator (the default) clears the role back
+                  // to empty, so the default stays represented as "no explicit
+                  // role" rather than a pinned name.
+                  onClick={() => pick(r.name === 'assistant' ? '' : r.name)}
                   className={cn(
                     'flex w-full items-start gap-2 rounded-[var(--radius-sm)] px-2.5 py-1.5 text-left transition-colors hover:bg-muted',
-                    value === r.name && 'bg-primary/5',
+                    selected === r.name && 'bg-primary/5',
                   )}
                 >
-                  {value === r.name ? (
+                  {selected === r.name ? (
                     <Check className="mt-0.5 size-3.5 shrink-0 text-primary" />
                   ) : (
                     <span className="w-3.5 shrink-0" />

@@ -4,7 +4,7 @@ import { del, get, post } from '@/lib/api'
 import { useApi } from '@/lib/hooks'
 import { useI18n, useTimeAgo } from '@/lib/i18n'
 import { cn } from '@/lib/utils'
-import { PageBody } from '@/components/layout/AppShell'
+import { PageLayout } from '@/components/layout/PageLayout'
 import { usePageActions } from '@/components/layout/PageChrome'
 import { Button } from '@/components/ui/button'
 import {
@@ -66,6 +66,11 @@ export default function SkillsPage() {
   const [browsing, setBrowsing] = useState(false)
   const [expanded, setExpanded] = useState<string | null>(null)
   const [bodies, setBodies] = useState<Record<string, string>>({})
+  const [tab, setTab] = useState('everyday')
+  const [libCategory, setLibCategory] = useState('')
+  const [libOffset, setLibOffset] = useState(0)
+  const [libTotal, setLibTotal] = useState(0)
+  const LIB_LIMIT = 40
 
   usePageActions(
     <>
@@ -124,22 +129,57 @@ export default function SkillsPage() {
   const skills = data?.skills ?? []
   const library = data?.library ?? 0
 
+  const libShownTotal = libTotal || library
+  const libFooter =
+    tab === 'library' && library > 0 ? (
+      <div className="flex items-center justify-between text-xs text-muted-foreground">
+        <span>
+          {t('skills.showingRange', {
+            from: libShownTotal === 0 ? 0 : libOffset + 1,
+            to: Math.min(libOffset + LIB_LIMIT, libShownTotal),
+            total: libShownTotal,
+          })}
+        </span>
+        <div className="flex gap-2">
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={libOffset === 0}
+            onClick={() => setLibOffset(Math.max(0, libOffset - LIB_LIMIT))}
+          >
+            {t('common.previous')}
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={libOffset + LIB_LIMIT >= libShownTotal}
+            onClick={() => setLibOffset(libOffset + LIB_LIMIT)}
+          >
+            {t('common.next')}
+          </Button>
+        </div>
+      </div>
+    ) : undefined
+
   return (
-    <PageBody>
+    <PageLayout footer={libFooter}>
       <NewSkillDialog open={composing} onOpenChange={setComposing} onSaved={reload} />
       <HubDialog kind="skills" open={browsing} onOpenChange={setBrowsing} onInstalled={reload} />
 
-      <Tabs defaultValue="everyday">
-        <TabsList>
-          <TabsTrigger value="everyday" className="gap-1.5">
-            <Sparkle className="size-3.5" /> {t('skills.tabEveryday')}
-          </TabsTrigger>
-          {library > 0 ? (
-            <TabsTrigger value="library" className="gap-1.5">
-              <ShieldCheck className="size-3.5" /> {t('skills.tabLibrary', { n: library })}
+      <Tabs value={tab} onValueChange={setTab}>
+        {/* The tab bar stays pinned while the tab's content scrolls beneath it. */}
+        <div className="sticky top-0 z-10 -mx-1 bg-background px-1 pb-3">
+          <TabsList>
+            <TabsTrigger value="everyday" className="gap-1.5">
+              <Sparkle className="size-3.5" /> {t('skills.tabEveryday')}
             </TabsTrigger>
-          ) : null}
-        </TabsList>
+            {library > 0 ? (
+              <TabsTrigger value="library" className="gap-1.5">
+                <ShieldCheck className="size-3.5" /> {t('skills.tabLibrary', { n: library })}
+              </TabsTrigger>
+            ) : null}
+          </TabsList>
+        </div>
 
         <TabsContent value="everyday" className="space-y-4">
       <div className="space-y-1.5">
@@ -255,11 +295,18 @@ export default function SkillsPage() {
 
         {library > 0 ? (
           <TabsContent value="library">
-            <SecurityLibrary total={library} />
+            <SecurityLibrary
+              category={libCategory}
+              onCategoryChange={setLibCategory}
+              offset={libOffset}
+              onOffsetChange={setLibOffset}
+              limit={LIB_LIMIT}
+              onTotalChange={setLibTotal}
+            />
           </TabsContent>
         ) : null}
       </Tabs>
-    </PageBody>
+    </PageLayout>
   )
 }
 
@@ -275,14 +322,26 @@ interface LibSkill {
  * what to search for. The list only loads when opened — the everyday page must
  * stay fast.
  */
-function SecurityLibrary({ total }: { total: number }) {
+function SecurityLibrary({
+  category,
+  onCategoryChange,
+  offset,
+  onOffsetChange,
+  limit,
+  onTotalChange,
+}: {
+  category: string
+  onCategoryChange: (v: string) => void
+  offset: number
+  onOffsetChange: (v: number) => void
+  limit: number
+  onTotalChange: (v: number) => void
+}) {
   const { t } = useI18n()
   const [open] = useState(true)
-  const [category, setCategory] = useState('')
-  const [offset, setOffset] = useState(0)
   const [reading, setReading] = useState<string | null>(null)
   const [body, setBody] = useState('')
-  const LIMIT = 40
+  const LIMIT = limit
 
   const { data, loading } = useApi<{
     skills: LibSkill[]
@@ -292,6 +351,10 @@ function SecurityLibrary({ total }: { total: number }) {
     open ? `/skills/library?category=${encodeURIComponent(category)}&offset=${offset}&limit=${LIMIT}` : null,
     [open, category, offset],
   )
+
+  useEffect(() => {
+    if (data?.total !== undefined) onTotalChange(data.total)
+  }, [data?.total, onTotalChange])
 
   const read = async (name: string) => {
     if (reading === name) {
@@ -309,7 +372,6 @@ function SecurityLibrary({ total }: { total: number }) {
   }
 
   const categories = Object.entries(data?.categories ?? {}).sort((a, b) => b[1] - a[1])
-  const shownTotal = data?.total ?? total
 
   return (
     <Card>
@@ -318,8 +380,8 @@ function SecurityLibrary({ total }: { total: number }) {
           <div className="mb-3 flex flex-wrap gap-1.5">
             <button
               onClick={() => {
-                setCategory('')
-                setOffset(0)
+                onCategoryChange('')
+                onOffsetChange(0)
               }}
               className={cn(
                 'rounded-full border px-2.5 py-1 text-[11px] transition-colors',
@@ -332,8 +394,8 @@ function SecurityLibrary({ total }: { total: number }) {
               <button
                 key={cat}
                 onClick={() => {
-                  setCategory(cat)
-                  setOffset(0)
+                  onCategoryChange(cat)
+                  onOffsetChange(0)
                 }}
                 className={cn(
                   'rounded-full border px-2.5 py-1 text-[11px] transition-colors',
@@ -373,34 +435,6 @@ function SecurityLibrary({ total }: { total: number }) {
               ))}
             </div>
           )}
-
-          <div className="mt-3 flex items-center justify-between text-xs text-muted-foreground">
-            <span>
-              {t('skills.showingRange', {
-                from: shownTotal === 0 ? 0 : offset + 1,
-                to: Math.min(offset + LIMIT, shownTotal),
-                total: shownTotal,
-              })}
-            </span>
-            <div className="flex gap-2">
-              <Button
-                size="sm"
-                variant="outline"
-                disabled={offset === 0}
-                onClick={() => setOffset(Math.max(0, offset - LIMIT))}
-              >
-                {t('common.previous')}
-              </Button>
-              <Button
-                size="sm"
-                variant="outline"
-                disabled={offset + LIMIT >= shownTotal}
-                onClick={() => setOffset(offset + LIMIT)}
-              >
-                {t('common.next')}
-              </Button>
-            </div>
-          </div>
         </div>
       ) : null}
     </Card>

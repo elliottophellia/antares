@@ -19,6 +19,7 @@ import (
 	"github.com/enowdev/antares/internal/config"
 	"github.com/enowdev/antares/internal/llm"
 	"github.com/enowdev/antares/internal/server"
+	"github.com/enowdev/antares/internal/store"
 	"github.com/enowdev/antares/internal/version"
 )
 
@@ -324,6 +325,30 @@ func runTerminalSetup(ctx context.Context, rt *runtimeServices) error {
 		return fmt.Errorf("creating workspace: %w", err)
 	}
 
+	// 5b. Storage. SQLite is the default and needs nothing; Postgres asks for a
+	// DSN and is verified now so a bad string surfaces here, not on next start.
+	fmt.Println()
+	if promptYesNo("  Use PostgreSQL instead of the default SQLite?", false) {
+		dsn := promptLine("  Connection string (postgres://user:pass@host:5432/db?sslmode=disable): ", "")
+		dsn = strings.TrimSpace(dsn)
+		if dsn == "" {
+			fmt.Println("    " + dim("no DSN given — keeping SQLite."))
+		} else {
+			fmt.Print("  Checking the connection… ")
+			probe, err := store.Open(ctx, "postgres", dsn, 2, 5000, false)
+			if err != nil {
+				fmt.Println(warn("failed"))
+				fmt.Printf("    %s\n", dim(err.Error()))
+				fmt.Println("    " + dim("keeping SQLite. Set it later with `antares setup` or in the dashboard."))
+			} else {
+				probe.Close()
+				fmt.Println(good("ok"))
+				cfg.Database.Driver = "postgres"
+				cfg.Database.DSN = dsn
+			}
+		}
+	}
+
 	// 6. Optional extras
 	fmt.Println()
 	if promptYesNo("  Enable semantic search (RAG)?", false) {
@@ -348,6 +373,19 @@ func runTerminalSetup(ctx context.Context, rt *runtimeServices) error {
 			cfg.Gateway.Enabled = true
 			cfg.Gateway.Telegram.Enabled = true
 			cfg.Gateway.Telegram.BotToken = token
+		}
+	}
+
+	// 6b. Dashboard password (web only). The TUI never asks for it.
+	fmt.Println()
+	if promptYesNo("  Protect the web dashboard with a password?", false) {
+		pw := promptSecret("  Dashboard password (input hidden): ")
+		if pw != "" {
+			hash, err := config.HashPassword(pw)
+			if err != nil {
+				return fmt.Errorf("hashing dashboard password: %w", err)
+			}
+			cfg.Server.DashboardPasswordHash = hash
 		}
 	}
 

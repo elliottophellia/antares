@@ -3,7 +3,7 @@ import { ArrowClockwise, PuzzlePiece, Warning } from '@phosphor-icons/react'
 import { post } from '@/lib/api'
 import { useApi } from '@/lib/hooks'
 import { useI18n } from '@/lib/i18n'
-import { PageBody } from '@/components/layout/AppShell'
+import { PageLayout } from '@/components/layout/PageLayout'
 import { usePageActions } from '@/components/layout/PageChrome'
 import { Button } from '@/components/ui/button'
 import {
@@ -71,7 +71,7 @@ export default function PluginsPage() {
   const plugins = data?.plugins ?? []
 
   return (
-    <PageBody>
+    <PageLayout>
       {!data?.enabled ? (
         <Card className="border-[var(--warning)]/40 bg-[color-mix(in_oklch,var(--warning)_10%,transparent)]">
           <CardContent className="pt-4 text-xs sm:text-sm">{t('plugins.disabled')}</CardContent>
@@ -157,6 +157,6 @@ echo '{}'`}
           </pre>
         </CardContent>
       </Card>
-    </PageBody>
+    </PageLayout>
   )
 }

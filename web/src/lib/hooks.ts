@@ -121,25 +121,46 @@ export function useMediaQuery(query: string): boolean {
   return matches
 }
 
-/** Scroll an element to the bottom when `dep` changes, unless the user scrolled up. */
-export function useStickyScroll(dep: unknown) {
+/**
+ * Keep an element pinned to the bottom as `dep` grows (a streaming transcript),
+ * but ONLY while the user is at the bottom. Scroll up and auto-follow stops so
+ * you can read; scroll back to the bottom and it resumes — like a chat or a
+ * terminal.
+ *
+ * Wire the returned `onScroll` onto the scroll container as a React handler and
+ * `ref` on the same element:
+ *   <div ref={ref} onScroll={onScroll} className="overflow-y-auto"> … </div>
+ *
+ * There is deliberately no "ignore our own programmatic scroll" flag: after we
+ * scroll to the bottom the container simply IS at the bottom, so the handler
+ * keeps `stick` true. The bug that flag caused was the opposite — it swallowed
+ * the user's real scroll-up and never let following turn off.
+ */
+export function useStickyScroll<T>(dep: T) {
   const ref = useRef<HTMLDivElement>(null)
-  const stuck = useRef(true)
+  // Follow the bottom? Starts true so a restored transcript opens at the newest
+  // message. A ref, not state, so updating it never re-renders.
+  const stick = useRef(true)
+  const didInitial = useRef(false)
 
-  useEffect(() => {
+  const onScroll = useCallback(() => {
     const el = ref.current
     if (!el) return
-    const onScroll = () => {
-      stuck.current = el.scrollHeight - el.scrollTop - el.clientHeight < 120
-    }
-    el.addEventListener('scroll', onScroll, { passive: true })
-    return () => el.removeEventListener('scroll', onScroll)
+    stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80
   }, [])
 
   useEffect(() => {
     const el = ref.current
-    if (el && stuck.current) el.scrollTop = el.scrollHeight
+    if (!el || !stick.current) return
+    if (!didInitial.current) {
+      // First paint (restored history): jump instantly, no animation.
+      didInitial.current = true
+      el.scrollTop = el.scrollHeight
+      return
+    }
+    // Live updates: follow the newest content.
+    el.scrollTop = el.scrollHeight
   }, [dep])
 
-  return ref
+  return { ref, onScroll }
 }

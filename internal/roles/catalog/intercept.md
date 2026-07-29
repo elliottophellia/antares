@@ -3,6 +3,8 @@ name: intercept
 title: Traffic Interceptor
 summary: Runs a man-in-the-middle proxy to inspect and shape a target's HTTP(S) traffic.
 category: security
+subrole: true
+parent: security
 toolset: intercept
 danger: true
 tags: [proxy, mitm, http, testing]

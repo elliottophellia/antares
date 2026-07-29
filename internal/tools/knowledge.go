@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/enowdev/antares/internal/board"
 	"github.com/enowdev/antares/internal/store"
 )
 
@@ -456,6 +457,15 @@ func (todoTool) Execute(ctx context.Context, in Input) Result {
 		}
 		if err := in.Deps.Store.SetKV(ctx, key, string(blob)); err != nil {
 			return Errorf("save failed: %v", err)
+		}
+		// Mirror the list onto the Kanban board so the board page reflects the
+		// task list in realtime: pending→todo, in_progress→doing, completed→done.
+		if in.Deps.Board != nil {
+			mirror := make([]board.TodoMirror, len(args.Items))
+			for i, it := range args.Items {
+				mirror[i] = board.TodoMirror{Content: it.Content, Status: it.Status}
+			}
+			_ = in.Deps.Board.SyncTodos(in.SessionID, mirror)
 		}
 		return Result{Content: renderTodos(args.Items), Meta: map[string]any{"todos": args.Items}}
 	}

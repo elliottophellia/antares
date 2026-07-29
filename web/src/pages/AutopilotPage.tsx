@@ -3,7 +3,7 @@ import { Play, Plus, Robot, Trash } from '@phosphor-icons/react'
 import { del, post } from '@/lib/api'
 import { useApi } from '@/lib/hooks'
 import { useI18n, useTimeAgo } from '@/lib/i18n'
-import { PageBody } from '@/components/layout/AppShell'
+import { PageLayout } from '@/components/layout/PageLayout'
 import { usePageActions } from '@/components/layout/PageChrome'
 import { Button } from '@/components/ui/button'
 import { Badge, Card, EmptyState, Input, Label, Textarea } from '@/components/ui/primitives'
@@ -84,7 +84,7 @@ export default function AutopilotPage() {
   )
 
   return (
-    <PageBody>
+    <PageLayout>
       <AddDialog open={adding} onOpenChange={setAdding} onAdded={reload} />
 
       {loading && !data ? (
@@ -139,7 +139,7 @@ export default function AutopilotPage() {
           ))}
         </div>
       )}
-    </PageBody>
+    </PageLayout>
   )
 }
 

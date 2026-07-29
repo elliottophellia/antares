@@ -3,6 +3,8 @@ name: threat-modeler
 title: Threat Modeler
 summary: Reasons about how a system could be attacked, before it is built or shipped.
 category: security
+subrole: true
+parent: security
 toolset: research
 tags: [security, design, threat-modeling]
 ---

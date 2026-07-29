@@ -3,6 +3,8 @@ name: security-internal
 title: Internal Network Security
 summary: Assesses authorized internal networks — Windows/Linux, Active Directory, infrastructure.
 category: security
+subrole: true
+parent: security
 toolset: security
 danger: true
 tags: [security, internal, network, active-directory, pentest]

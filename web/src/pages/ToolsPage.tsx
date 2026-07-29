@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { Toolbox } from '@phosphor-icons/react'
 import { post } from '@/lib/api'
 import { useApi } from '@/lib/hooks'
-import { PageBody } from '@/components/layout/AppShell'
+import { PageLayout } from '@/components/layout/PageLayout'
 import {
   Badge,
   Card,
@@ -56,7 +56,7 @@ export default function ToolsPage() {
   }
 
   return (
-    <PageBody>
+    <PageLayout>
       {loading && !data ? (
         <SkeletonList count={8} />
       ) : !data ? (
@@ -116,6 +116,6 @@ export default function ToolsPage() {
           )}
         </>
       )}
-    </PageBody>
+    </PageLayout>
   )
 }

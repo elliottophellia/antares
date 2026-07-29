@@ -1,7 +1,9 @@
-import { useState } from 'react'
-import { CaretDown, CaretUp, CheckCircle, Circle, CircleNotch } from '@phosphor-icons/react'
+import { useEffect, useState } from 'react'
+import { CaretDown, CaretUp, CheckCircle, Circle, CircleNotch, UsersThree } from '@phosphor-icons/react'
+import { streamGet, type StreamEvent } from '@/lib/api'
 import { cn } from '@/lib/utils'
 import { useI18n } from '@/lib/i18n'
+import type { ActiveAgent } from '@/components/chat/SubAgentPanel'
 
 export type TodoItem = { content: string; status: string }
 
@@ -31,48 +33,131 @@ const glyph = (status: string, live: boolean) =>
     <Circle className="size-3.5 shrink-0 text-muted-foreground/40" />
   )
 
-/** A sticky task bar that butts up against the top of the composer, showing the
- *  agent's current checklist — collapsed to the active item + progress, or
- *  expanded to the full list. Mirrors a mission task bar. */
-export function TaskBar({ tasks, live = false }: { tasks: TodoItem[]; live?: boolean }) {
+/**
+ * A sticky bar that butts up against the top of the composer. It carries two
+ * views behind a small tab row: the agent's task checklist, and the live list
+ * of running sub-agents. Clicking a sub-agent asks the parent to open its live
+ * transcript (onOpenSubAgent). Mirrors a mission task bar.
+ */
+export function TaskBar({
+  tasks,
+  live = false,
+  session,
+  onOpenSubAgent,
+}: {
+  tasks: TodoItem[]
+  live?: boolean
+  // The current chat session, so the sub-agent list is scoped to workers THIS
+  // session spawned — otherwise another session's sub-agents leak in.
+  session?: string
+  onOpenSubAgent?: (agent: ActiveAgent) => void
+}) {
   const { t } = useI18n()
   const [open, setOpen] = useState(false)
-  if (tasks.length === 0) return null
+  const [tab, setTab] = useState<'tasks' | 'agents'>('tasks')
+
+  // Subscribe to the swarm so the sub-agent list tracks who is running live,
+  // scoped to this session. A session with no id yet (brand-new chat) has no
+  // sub-agents of its own, so skip the subscription and show none.
+  const [agents, setAgents] = useState<ActiveAgent[]>([])
+  useEffect(() => {
+    setAgents([])
+    if (!session) return
+    const close = streamGet(
+      `/swarm/stream?session=${encodeURIComponent(session)}`,
+      (e: StreamEvent) => {
+        const list = (e as unknown as { active?: ActiveAgent[] }).active
+        if (list) setAgents(list)
+      },
+    )
+    return close
+  }, [session])
+
+  // Nothing to show at all: no tasks and no sub-agents. Stay out of the way.
+  if (tasks.length === 0 && agents.length === 0) return null
 
   const done = tasks.filter((it) => it.status === 'completed').length
-  // Only surface a spinning "active" item while the turn is live.
   const active = live ? tasks.find((it) => it.status === 'in_progress') : undefined
 
-  return (
-    <div className="rounded-t-[var(--radius-md)] border-x border-t border-border bg-card/80 backdrop-blur">
-      <button
-        type="button"
-        onClick={() => setOpen((v) => !v)}
-        className="flex w-full items-center gap-2 px-3 py-2 text-left"
-      >
-        {active ? (
-          <>
-            <CircleNotch className="size-3.5 shrink-0 animate-spin text-primary" />
-            <span className="min-w-0 flex-1 truncate text-[12px] text-foreground">
-              {active.content}
-            </span>
-          </>
-        ) : (
-          <span className="min-w-0 flex-1 truncate text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-            {t('chat.tasks')}
-          </span>
-        )}
-        <span className="shrink-0 text-[11px] font-semibold tabular-nums text-muted-foreground">
-          {done}/{tasks.length}
-        </span>
-        {open ? (
-          <CaretDown className="size-3.5 shrink-0 text-muted-foreground" />
-        ) : (
-          <CaretUp className="size-3.5 shrink-0 text-muted-foreground" />
-        )}
-      </button>
+  // If a tab's content vanishes (e.g. all sub-agents finished), fall back to the
+  // one that still has content so the header summary stays meaningful.
+  const showAgentsTab = agents.length > 0
+  const effectiveTab = tab === 'agents' && !showAgentsTab ? 'tasks' : tab
 
-      {open ? (
+  return (
+    // Borderless: this renders inside the composer card as its top section.
+    <div>
+      <div className="flex items-center gap-2 px-3 py-2">
+        {/* Tab switch — only shows the sub-agents tab when any are running. */}
+        {showAgentsTab ? (
+          <div className="flex shrink-0 items-center gap-0.5 rounded-[var(--radius-sm)] bg-muted/60 p-0.5">
+            <button
+              type="button"
+              onClick={() => {
+                setTab('tasks')
+                setOpen(true)
+              }}
+              className={cn(
+                'rounded-[calc(var(--radius-sm)-2px)] px-2 py-0.5 text-[11px] font-medium transition',
+                effectiveTab === 'tasks'
+                  ? 'bg-background text-foreground shadow-sm'
+                  : 'text-muted-foreground hover:text-foreground',
+              )}
+            >
+              {t('chat.tasks')}
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setTab('agents')
+                setOpen(true)
+              }}
+              className={cn(
+                'flex items-center gap-1 rounded-[calc(var(--radius-sm)-2px)] px-2 py-0.5 text-[11px] font-medium transition',
+                effectiveTab === 'agents'
+                  ? 'bg-background text-foreground shadow-sm'
+                  : 'text-muted-foreground hover:text-foreground',
+              )}
+            >
+              <UsersThree className="size-3" />
+              {t('subagents.title')}
+              <span className="tabular-nums">{agents.length}</span>
+            </button>
+          </div>
+        ) : null}
+
+        {/* Summary row (clickable to expand/collapse). */}
+        <button
+          type="button"
+          onClick={() => setOpen((v) => !v)}
+          className="flex min-w-0 flex-1 items-center gap-2 text-left"
+        >
+          {effectiveTab === 'tasks' && active ? (
+            <>
+              <CircleNotch className="size-3.5 shrink-0 animate-spin text-primary" />
+              <span className="min-w-0 flex-1 truncate text-[12px] text-foreground">
+                {active.content}
+              </span>
+            </>
+          ) : (
+            <span className="min-w-0 flex-1 truncate text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+              {effectiveTab === 'tasks' ? t('chat.tasks') : t('subagents.running')}
+            </span>
+          )}
+          {effectiveTab === 'tasks' && tasks.length > 0 ? (
+            <span className="shrink-0 text-[11px] font-semibold tabular-nums text-muted-foreground">
+              {done}/{tasks.length}
+            </span>
+          ) : null}
+          {open ? (
+            <CaretDown className="size-3.5 shrink-0 text-muted-foreground" />
+          ) : (
+            <CaretUp className="size-3.5 shrink-0 text-muted-foreground" />
+          )}
+        </button>
+      </div>
+
+      {open && effectiveTab === 'tasks' && tasks.length > 0 ? (
         <ul className="max-h-48 space-y-1.5 overflow-y-auto border-t border-border px-3 py-2">
           {tasks.map((it, i) => (
             <li key={i} className="flex items-start gap-2 text-[12px] leading-snug">
@@ -93,6 +178,33 @@ export function TaskBar({ tasks, live = false }: { tasks: TodoItem[]; live?: boo
           ))}
         </ul>
       ) : null}
+
+      {open && effectiveTab === 'agents' ? (
+        <ul className="max-h-48 space-y-1 overflow-y-auto border-t border-border px-2 py-2">
+          {agents.map((a) => (
+            <li key={a.id}>
+              <button
+                type="button"
+                onClick={() => onOpenSubAgent?.(a)}
+                className="flex w-full items-start gap-2 rounded-[var(--radius-sm)] px-2 py-1.5 text-left transition hover:bg-muted"
+              >
+                <CircleNotch className="mt-0.5 size-3.5 shrink-0 animate-spin text-primary" />
+                <span className="min-w-0 flex-1">
+                  <span className="block text-[12px] font-medium text-foreground">
+                    {a.role || 'assistant'}
+                  </span>
+                  <span className="block truncate text-[11px] text-muted-foreground">{a.task}</span>
+                </span>
+                <CaretDown className="mt-0.5 size-3.5 shrink-0 -rotate-90 text-muted-foreground" />
+              </button>
+            </li>
+          ))}
+        </ul>
+      ) : null}
+
+      {/* Divider to the composer below — only present because this whole
+          component already returned null when there is nothing to show. */}
+      <div className="h-px bg-border" />
     </div>
   )
 }

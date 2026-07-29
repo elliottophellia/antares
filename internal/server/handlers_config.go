@@ -3,8 +3,10 @@ package server
 import (
 	"errors"
 	"net/http"
+	"os"
 	"sort"
 	"strings"
+	"sync"
 
 	"github.com/enowdev/antares/internal/config"
 	"github.com/enowdev/antares/internal/llm"
@@ -62,6 +64,11 @@ func (s *Server) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
 		if err := cfg.SetPath(path, value); err != nil {
 			writeError(w, http.StatusBadRequest, err)
 			return
+		}
+		// Changing (or clearing) the dashboard password must not leave old
+		// logins valid.
+		if path == "server.dashboard_password_hash" {
+			s.invalidateDashSessions()
 		}
 	}
 	if err := config.Save(cfg); err != nil {
@@ -150,6 +157,7 @@ func (s *Server) handleModelOptions(w http.ResponseWriter, r *http.Request) {
 		NeedsRegion     bool   `json:"needs_region,omitempty"`
 		NeedsAPIVersion bool   `json:"needs_api_version,omitempty"`
 		NeedsBaseURL    bool   `json:"needs_base_url,omitempty"`
+		TimeoutSecs     int    `json:"timeout_seconds,omitempty"`
 	}
 
 	// Every provider from the catalogue (configured or not), so the new kinds
@@ -164,7 +172,7 @@ func (s *Server) handleModelOptions(w http.ResponseWriter, r *http.Request) {
 			BaseURL: firstNonEmpty(p.BaseURL, sp.BaseURL), Active: sp.ID == cfg.Model.Provider,
 			Hint: sp.Hint, KeyHint: sp.KeyHint, KeyURL: sp.KeyURL, KeyLabel: sp.KeyLabel,
 			Note: sp.Note, NeedsRegion: sp.NeedsRegion, NeedsAPIVersion: sp.NeedsAPIVersion,
-			NeedsBaseURL: sp.NeedsBaseURL,
+			NeedsBaseURL: sp.NeedsBaseURL, TimeoutSecs: p.TimeoutSecs,
 		})
 		seen[sp.ID] = true
 	}
@@ -180,7 +188,7 @@ func (s *Server) handleModelOptions(w http.ResponseWriter, r *http.Request) {
 		providers = append(providers, providerInfo{
 			ID: name, Label: firstNonEmpty(p.Label, name), Kind: p.Kind, Enabled: p.Enabled,
 			HasKey: p.APIKey != "", Local: isLocalEndpoint(p.BaseURL), BaseURL: p.BaseURL,
-			Active: name == cfg.Model.Provider,
+			Active: name == cfg.Model.Provider, TimeoutSecs: p.TimeoutSecs,
 		})
 	}
 
@@ -218,6 +226,88 @@ func (s *Server) handleModelList(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"models": models})
+}
+
+// handleModelListAll fetches models from every provider that has a usable
+// credential (or is a reachable local endpoint) and returns them as one list,
+// each tagged with the provider it came from. This is what lets the Models page
+// show everything at once — pick any model and /model/set switches provider and
+// model together, so there is no separate "switch provider" step.
+func (s *Server) handleModelListAll(w http.ResponseWriter, r *http.Request) {
+	cfg := s.config()
+
+	// Which providers are worth calling: a stored key, a set key-env, or local.
+	type target struct {
+		id, label string
+	}
+	var targets []target
+	seen := map[string]bool{}
+	add := func(id, label string) {
+		if seen[id] {
+			return
+		}
+		p := cfg.Providers[id]
+		keyed := p.APIKey != "" || (p.APIKeyEnv != "" && os.Getenv(p.APIKeyEnv) != "")
+		if keyed || isLocalEndpoint(p.BaseURL) {
+			targets = append(targets, target{id: id, label: firstNonEmpty(p.Label, label, id)})
+			seen[id] = true
+		}
+	}
+	for _, sp := range setupProviderCatalogue(cfg) {
+		add(sp.ID, sp.Label)
+	}
+	for name := range cfg.Providers {
+		add(name, cfg.Providers[name].Label)
+	}
+
+	type row struct {
+		llm.ModelInfo
+		Provider      string `json:"provider"`
+		ProviderLabel string `json:"provider_label"`
+	}
+	type provErr struct {
+		Provider string `json:"provider"`
+		Label    string `json:"label"`
+		Error    string `json:"error"`
+	}
+
+	var (
+		mu     sync.Mutex
+		models []row
+		errs   []provErr
+		wg     sync.WaitGroup
+	)
+	for _, t := range targets {
+		wg.Add(1)
+		go func(t target) {
+			defer wg.Done()
+			list, err := s.agent.Models(r.Context(), t.id)
+			mu.Lock()
+			defer mu.Unlock()
+			if err != nil {
+				errs = append(errs, provErr{Provider: t.id, Label: t.label, Error: err.Error()})
+				return
+			}
+			for _, m := range list {
+				models = append(models, row{ModelInfo: m, Provider: t.id, ProviderLabel: t.label})
+			}
+		}(t)
+	}
+	wg.Wait()
+
+	sort.Slice(models, func(i, j int) bool {
+		if models[i].ProviderLabel != models[j].ProviderLabel {
+			return models[i].ProviderLabel < models[j].ProviderLabel
+		}
+		return models[i].ID < models[j].ID
+	})
+	sort.Slice(errs, func(i, j int) bool { return errs[i].Label < errs[j].Label })
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"active": map[string]string{"model": cfg.Model.Default, "provider": cfg.Model.Provider},
+		"models": models,
+		"errors": errs,
+	})
 }
 
 func (s *Server) handleModelSet(w http.ResponseWriter, r *http.Request) {

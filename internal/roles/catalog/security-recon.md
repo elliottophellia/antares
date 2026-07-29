@@ -3,6 +3,8 @@ name: security-recon
 title: Reconnaissance
 summary: Maps the attack surface of an authorized target — hosts, services, technologies.
 category: security
+subrole: true
+parent: security
 toolset: security
 danger: true
 tags: [security, recon, osint, pentest]
