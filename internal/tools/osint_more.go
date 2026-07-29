@@ -355,3 +355,106 @@ func capStrings(in []string, n int) []string {
 	}
 	return in
 }
+
+// ---- osint_pivot ------------------------------------------------------------
+
+// osintPivotTool fetches a profile or page and extracts NEW identities to
+// branch an investigation on: emails, handles, and social links found in the
+// content. It is the engine of a recursive footprint — feed it a profile URL
+// found by osint_username, and it hands back fresh leads (other accounts, a
+// contact email) to pursue. Public content only; for authorized use.
+type osintPivotTool struct{}
+
+func (osintPivotTool) Name() string { return "osint_pivot" }
+func (osintPivotTool) Description() string {
+	return "Extract new identities from a profile or page URL — emails, usernames/handles, and " +
+		"social links found in its public content — so an investigation can branch to linked accounts. " +
+		"Feed it a profile you already found; cross-search the handles and run osint_email on any emails. " +
+		"Public content only; for authorized investigations."
+}
+func (osintPivotTool) Schema() map[string]any {
+	return schema(map[string]any{
+		"url": prop("string", "The profile or page URL to mine for linked identities."),
+	}, "url")
+}
+func (osintPivotTool) RequiresApproval() bool { return false }
+
+// reHandle captures @handles mentioned in page text (bios often list other
+// accounts as "@name"). Bounded length keeps out noise.
+var reHandle = regexp.MustCompile(`@([A-Za-z0-9_.]{2,30})`)
+
+func (osintPivotTool) Execute(ctx context.Context, in Input) Result {
+	var args struct {
+		URL string `json:"url"`
+	}
+	if err := in.Bind(&args); err != nil {
+		return Errorf("%v", err)
+	}
+	target := strings.TrimSpace(args.URL)
+	if !strings.HasPrefix(target, "http://") && !strings.HasPrefix(target, "https://") {
+		return Errorf("url must start with http:// or https://")
+	}
+
+	tctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(tctx, "GET", target, nil)
+	if err != nil {
+		return Errorf("%v", err)
+	}
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0 Safari/537.36")
+	resp, err := webClient.Do(req)
+	if err != nil {
+		return Errorf("fetch failed: %v", err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
+	html := string(body)
+
+	emails := uniqueStrings(reEmail.FindAllString(html, -1))
+	socials := uniqueStrings(reSocial.FindAllString(html, -1))
+	var handles []string
+	seenH := map[string]bool{}
+	for _, m := range reHandle.FindAllStringSubmatch(html, -1) {
+		h := strings.ToLower(m[1])
+		if !seenH[h] {
+			seenH[h] = true
+			handles = append(handles, h)
+		}
+	}
+
+	var b strings.Builder
+	fmt.Fprintf(&b, "Pivot from %s (HTTP %d)\n\n", target, resp.StatusCode)
+	if m := reTitle.FindStringSubmatch(html); len(m) > 1 {
+		fmt.Fprintf(&b, "Title: %s\n\n", strings.TrimSpace(m[1]))
+	}
+	if len(emails) > 0 {
+		fmt.Fprintf(&b, "Emails to pursue (%d) — run osint_email on each:\n", len(emails))
+		for _, e := range capStrings(emails, 30) {
+			fmt.Fprintf(&b, "  - %s\n", e)
+		}
+		b.WriteString("\n")
+	}
+	if len(socials) > 0 {
+		fmt.Fprintf(&b, "Linked accounts (%d) — run osint_pivot on each:\n", len(socials))
+		for _, s := range capStrings(socials, 30) {
+			fmt.Fprintf(&b, "  - %s\n", s)
+		}
+		b.WriteString("\n")
+	}
+	if len(handles) > 0 {
+		fmt.Fprintf(&b, "Handles mentioned (%d) — cross-search with osint_username:\n", len(handles))
+		for _, h := range capStrings(handles, 30) {
+			fmt.Fprintf(&b, "  - @%s\n", h)
+		}
+		b.WriteString("\n")
+	}
+	if len(emails) == 0 && len(socials) == 0 && len(handles) == 0 {
+		b.WriteString("No new emails, links, or handles found in the public content. " +
+			"The page may be JS-rendered — try the browser tool to load it fully.\n")
+	} else {
+		b.WriteString("Branch the investigation: pursue each lead above, then correlate what points back to the same person.\n")
+	}
+	return Result{Content: b.String(), Meta: map[string]any{
+		"emails": emails, "socials": socials, "handles": handles,
+	}}
+}

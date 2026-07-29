@@ -8,9 +8,34 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
+	"regexp"
 	"strings"
 	"time"
 )
+
+// usernameCandidates derives plausible handles from an email local part (or any
+// raw handle): the part before any +tag, and variants with separators/trailing
+// digits stripped. Deduplicated, most-specific first.
+func usernameCandidates(local string) []string {
+	local = strings.ToLower(strings.TrimSpace(local))
+	if i := strings.IndexByte(local, '+'); i > 0 { // drop plus-tags: user+tag → user
+		local = local[:i]
+	}
+	seen := map[string]bool{}
+	var out []string
+	add := func(s string) {
+		s = strings.Trim(s, ".-_")
+		if len(s) >= 2 && !seen[s] {
+			seen[s] = true
+			out = append(out, s)
+		}
+	}
+	add(local)
+	add(strings.NewReplacer(".", "", "-", "", "_", "").Replace(local)) // collapse separators
+	add(regexp.MustCompile(`\d+$`).ReplaceAllString(local, ""))         // strip trailing digits
+	return out
+}
 
 // Service-backed OSINT lookups — all keyless. They use free, public endpoints
 // (no registration or API key), so every OSINT tool works out of the box.
@@ -218,7 +243,30 @@ func (osintEmailTool) Execute(ctx context.Context, in Input) Result {
 			fmt.Fprintf(&b, "  - %s\n", n)
 		}
 	}
-	return Text(b.String())
+
+	// Pivot leads: the local part is the strongest handle candidate. Derive a
+	// few normalised variants and hand them to the agent to cross-search with
+	// osint_username / osint_pivot — this is what turns an email into linked
+	// accounts instead of a dead end.
+	local := email[:strings.Index(email, "@")]
+	domain := email[strings.Index(email, "@")+1:]
+	cands := usernameCandidates(local)
+	fmt.Fprintf(&b, "\nUsername candidates (from the local part) — cross-search these:\n")
+	for _, c := range cands {
+		fmt.Fprintf(&b, "  - %s\n", c)
+	}
+	b.WriteString("\nPivot leads:\n")
+	fmt.Fprintf(&b, "  - GitHub commits by this email: https://github.com/search?q=%s&type=commits\n", url.QueryEscape(email))
+	fmt.Fprintf(&b, "  - Google dork: \"%s\"  https://www.google.com/search?q=%s\n", email, url.QueryEscape("\""+email+"\""))
+	if domain != "gmail.com" && domain != "outlook.com" && domain != "yahoo.com" && domain != "hotmail.com" && domain != "proton.me" && domain != "icloud.com" {
+		fmt.Fprintf(&b, "  - Custom domain %q — likely personal/company; run osint_domain on it.\n", domain)
+	}
+	b.WriteString("\nNext: run osint_username on the top candidate, and osint_pivot on any profile you find to extract further emails/handles.\n")
+
+	return Result{Content: b.String(), Meta: map[string]any{
+		"email": email, "local": local, "domain": domain,
+		"username_candidates": cands, "breaches": len(names),
+	}}
 }
 
 // ---- osint_shodan (keyless, Shodan InternetDB) ------------------------------
