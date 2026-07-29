@@ -142,12 +142,18 @@ type dcAuthor struct {
 }
 
 type dcMessage struct {
-	ID        string     `json:"id"`
-	ChannelID string     `json:"channel_id"`
-	GuildID   string     `json:"guild_id"`
-	Content   string     `json:"content"`
-	Author    dcAuthor   `json:"author"`
-	Mentions  []dcAuthor `json:"mentions"`
+	ID           string     `json:"id"`
+	ChannelID    string     `json:"channel_id"`
+	GuildID      string     `json:"guild_id"`
+	Content      string     `json:"content"`
+	Author       dcAuthor   `json:"author"`
+	Mentions     []dcAuthor `json:"mentions"`
+	MentionRoles []string   `json:"mention_roles"`
+	// ReferencedMessage is the message this one replies to, if any — used so a
+	// reply to the bot counts as addressing it without an explicit mention.
+	ReferencedMessage *struct {
+		Author dcAuthor `json:"author"`
+	} `json:"referenced_message"`
 	// Member is present on guild messages and carries the sender's role ids.
 	Member *struct {
 		Roles []string `json:"roles"`
@@ -476,32 +482,44 @@ func (d *Discord) handleMessage(ctx context.Context, m dcMessage) {
 		return
 	}
 	text := strings.TrimSpace(m.Content)
-	if text == "" {
-		// An empty content on a real user message almost always means the
-		// Message Content Intent is off in the Developer Portal.
-		slog.Warn("discord: received a message with empty content — enable Message Content Intent in the Developer Portal",
-			"channel", m.ChannelID, "guild", m.GuildID)
-		return
-	}
 
 	isDirect := m.GuildID == ""
 	if !isDirect {
-		// In a guild the bot only answers when mentioned.
-		mentioned := false
+		// In a guild the bot answers only when addressed: mentioned as a user
+		// (in the parsed mentions or via a raw <@id> in the content, which can
+		// happen when the mentions array lags), or replied to.
+		addressed := false
 		for _, u := range m.Mentions {
 			if u.ID == selfID {
-				mentioned = true
+				addressed = true
 				break
 			}
 		}
-		if !mentioned {
-			slog.Debug("discord: ignoring un-addressed guild message (mention the bot to talk in a server)",
-				"channel", m.ChannelID)
+		if !addressed && (strings.Contains(text, "<@"+selfID+">") || strings.Contains(text, "<@!"+selfID+">")) {
+			addressed = true
+		}
+		if !addressed && m.ReferencedMessage != nil && m.ReferencedMessage.Author.ID == selfID {
+			addressed = true
+		}
+		if !addressed {
+			// Un-addressed group chatter: ignore silently, no log — a busy
+			// channel would otherwise flood the log.
 			return
 		}
 		text = strings.TrimSpace(strings.NewReplacer(
 			"<@"+selfID+">", "", "<@!"+selfID+">", "",
 		).Replace(text))
+	}
+
+	// An empty message after stripping the mention (e.g. a bare "@bot") — or an
+	// empty content in general, which usually means Message Content Intent is
+	// off — has nothing to act on.
+	if text == "" {
+		if len(m.Content) == 0 {
+			slog.Warn("discord: empty message content — enable Message Content Intent in the Developer Portal",
+				"channel", m.ChannelID)
+		}
+		return
 	}
 
 	if len(d.cfg.AllowedGuilds) > 0 && m.GuildID != "" && !contains(d.cfg.AllowedGuilds, m.GuildID) {
