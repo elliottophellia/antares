@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"crypto/md5"
+	"crypto/sha1"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -507,23 +508,35 @@ func (osintGoogleTool) Execute(ctx context.Context, in Input) Result {
 		return Errorf("%q is not a valid email", email)
 	}
 
-	cookie := ""
+	raw := ""
 	if in.Deps != nil && in.Deps.Config != nil {
-		cookie = strings.TrimSpace(in.Deps.Config.OSINT.GoogleCookie)
+		raw = strings.TrimSpace(in.Deps.Config.OSINT.GoogleCookie)
 	}
-	if cookie == "" {
+	if raw == "" {
 		return Text("Google profile lookup is not enabled.\n\n" +
-			"It needs a logged-in Google session cookie. To enable it:\n" +
-			"  1. Sign in to any Google account in a browser.\n" +
-			"  2. Copy the full Cookie header for google.com (DevTools → Network → any request → Cookie).\n" +
-			"  3. Set it under Settings → osint.google_cookie (stored redacted).\n\n" +
-			"This is optional and ToS-sensitive — it uses your own session. " +
-			"Meanwhile, osint_email already gives you username candidates and a GitHub-commit pivot for " + email + ".")
+			"Easiest way to get the cookie:\n" +
+			"  1. Install the Cookie-Editor extension: https://chromewebstore.google.com/detail/cookie-editor/hlkenndednhfkekhgcdicdfddnkalmdm\n" +
+			"  2. Sign in to any Google account, open google.com, click the Cookie-Editor icon.\n" +
+			"  3. Click Export → Export as JSON (copies the cookie array to your clipboard).\n" +
+			"  4. Paste that JSON into Settings → OSINT → Google Cookie (stored redacted).\n\n" +
+			"A raw \"name=value; …\" Cookie header works too. The JSON must include SAPISID (the key one), " +
+			"plus SID/HSID/SSID/APISID.\n" +
+			"Note: it expires within hours–days — re-export if lookups start failing. Optional and ToS-sensitive.\n" +
+			"Meanwhile, osint_email already gives username candidates and a GitHub-commit pivot for " + email + ".")
+	}
+	cookie, sapisid := googleCookieHeader(raw)
+	if cookie == "" {
+		return Errorf("could not parse the Google cookie — paste the Cookie-Editor JSON export, or a raw \"name=value; …\" header")
+	}
+	if sapisid == "" {
+		return Text("The cookie is missing SAPISID, which Google's profile API needs. Re-export the full cookie set with Cookie-Editor.")
 	}
 
-	// Google's People API People:lookup by email. The People API endpoint with a
-	// browser session cookie returns the public profile for a resolvable
-	// address. Endpoints and gating change often; treat failure as "unknown".
+	// Google's People API People:lookup by email. It authenticates with a
+	// SAPISIDHASH built from the SAPISID cookie, a timestamp, and the origin —
+	// the same scheme browser XHRs use. Endpoints/gating change often; treat
+	// failure as "unknown".
+	const origin = "https://myaccount.google.com"
 	endpoint := "https://people-pa.clients6.google.com/v2/people/lookup?id=" + url.QueryEscape(email) +
 		"&type=EMAIL&matchType=EXACT&extensionSet.extensionNames=HANGOUTS_ADDITIONAL_DATA"
 	req, err := http.NewRequestWithContext(ctx, "GET", endpoint, nil)
@@ -531,6 +544,10 @@ func (osintGoogleTool) Execute(ctx context.Context, in Input) Result {
 		return Errorf("%v", err)
 	}
 	req.Header.Set("Cookie", cookie)
+	req.Header.Set("Authorization", sapisidHash(sapisid, origin))
+	req.Header.Set("Origin", origin)
+	req.Header.Set("Referer", origin+"/")
+	req.Header.Set("X-Origin", origin)
 	req.Header.Set("User-Agent", "Mozilla/5.0")
 	req.Header.Set("Accept", "application/json")
 	resp, err := webClient.Do(req)
@@ -566,4 +583,50 @@ func (osintGoogleTool) Execute(ctx context.Context, in Input) Result {
 		b.WriteString("\n")
 	}
 	return Text(b.String())
+}
+
+// googleCookieHeader turns the configured Google cookie — either a Cookie-Editor
+// JSON export ([{"name","value",...}]) or a raw "name=value; …" header — into a
+// Cookie header string, and returns the SAPISID value separately (the People
+// API authenticates with a SAPISIDHASH derived from it).
+func googleCookieHeader(raw string) (header, sapisid string) {
+	raw = strings.TrimSpace(raw)
+	if strings.HasPrefix(raw, "[") {
+		var entries []struct {
+			Name  string `json:"name"`
+			Value string `json:"value"`
+		}
+		if json.Unmarshal([]byte(raw), &entries) != nil {
+			return "", ""
+		}
+		parts := make([]string, 0, len(entries))
+		for _, e := range entries {
+			if e.Name == "" {
+				continue
+			}
+			parts = append(parts, e.Name+"="+e.Value)
+			if e.Name == "SAPISID" || (sapisid == "" && e.Name == "__Secure-3PAPISID") {
+				sapisid = e.Value
+			}
+		}
+		return strings.Join(parts, "; "), sapisid
+	}
+	// Raw header: also scan it for SAPISID.
+	for _, kv := range strings.Split(raw, ";") {
+		kv = strings.TrimSpace(kv)
+		if name, val, ok := strings.Cut(kv, "="); ok {
+			if name == "SAPISID" || (sapisid == "" && name == "__Secure-3PAPISID") {
+				sapisid = val
+			}
+		}
+	}
+	return raw, sapisid
+}
+
+// sapisidHash builds the Authorization value Google's *-pa APIs expect from a
+// browser session: "SAPISIDHASH <ts>_<sha1(ts + ' ' + sapisid + ' ' + origin)>".
+func sapisidHash(sapisid, origin string) string {
+	ts := time.Now().Unix()
+	sum := sha1.Sum([]byte(fmt.Sprintf("%d %s %s", ts, sapisid, origin)))
+	return fmt.Sprintf("SAPISIDHASH %d_%s", ts, hex.EncodeToString(sum[:]))
 }
