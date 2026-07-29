@@ -16,18 +16,18 @@ import {
 import { post } from '@/lib/api'
 import { useApi } from '@/lib/hooks'
 import { useI18n, useTimeAgo } from '@/lib/i18n'
+import { cn } from '@/lib/utils'
 import { PageLayout } from '@/components/layout/PageLayout'
 import { Button } from '@/components/ui/button'
 import {
   Badge,
-  Card,
-  CardDescription,
-  CardHeader,
-  CardTitle,
   EmptyState,
   Input,
   Label,
   Switch,
+  Tabs,
+  TabsList,
+  TabsTrigger,
 } from '@/components/ui/primitives'
 import {
   Dialog,
@@ -86,10 +86,10 @@ const ICONS: Record<string, React.ComponentType<{ className?: string; weight?: '
 
 export default function ChannelsPage() {
   const { t } = useI18n()
-  const timeAgo = useTimeAgo()
   const { data, loading, reload } = useApi<ChannelsResponse>('/channels')
   const [busy, setBusy] = useState('')
   const [configFor, setConfigFor] = useState<Channel | null>(null)
+  const [tab, setTab] = useState<'channels' | 'devices'>('channels')
 
   const act = async (id: string, fn: () => Promise<unknown>) => {
     setBusy(id)
@@ -101,134 +101,170 @@ export default function ChannelsPage() {
     }
   }
 
+  const channels = data?.channels ?? []
+  const pairings = data?.pairings ?? []
+  const pending = pairings.filter((p) => p.status === 'pending').length
+
+  const header = (
+    <Tabs value={tab} onValueChange={(v) => setTab(v as 'channels' | 'devices')}>
+      <TabsList>
+        <TabsTrigger value="channels">{t('channels.tabChannels')}</TabsTrigger>
+        <TabsTrigger value="devices" className="gap-1.5">
+          {t('channels.tabDevices')}
+          {pending > 0 ? (
+            <span className="rounded-full bg-[var(--warning)]/15 px-1.5 text-[10px] font-medium tabular-nums text-[var(--warning)]">
+              {pending}
+            </span>
+          ) : null}
+        </TabsTrigger>
+      </TabsList>
+    </Tabs>
+  )
+
   return (
-    <PageLayout>
+    <PageLayout header={header}>
       <ConfigDialog
         channel={configFor}
         onOpenChange={(open) => !open && setConfigFor(null)}
         onSaved={reload}
       />
 
-      {loading && !data ? (
-        <SkeletonList count={2} />
+      {tab === 'devices' ? (
+        <DevicesPanel loading={loading && !data} pairings={pairings} busy={busy} act={act} />
+      ) : loading && !data ? (
+        <SkeletonList count={4} />
       ) : (
-        <div className="space-y-3">
-          {(data?.channels ?? []).map((c) => {
+        <div className="grid gap-2.5 sm:grid-cols-2 xl:grid-cols-3">
+          {channels.map((c) => {
             const Icon = ICONS[c.id] ?? Plugs
+            const tone = c.connected
+              ? 'text-[var(--success)]'
+              : c.enabled
+                ? 'text-[var(--warning)]'
+                : 'text-muted-foreground'
             return (
-              <Card key={c.id}>
-                <CardHeader>
-                  <div className="flex items-start gap-3">
-                    <Icon className="mt-0.5 size-5 shrink-0 text-primary" weight="fill" />
-
-                    <div className="min-w-0 flex-1">
-                      <CardTitle className="flex flex-wrap items-center gap-2">
-                        {c.label}
-                        <Badge
-                          variant={c.connected ? 'success' : c.enabled ? 'warning' : 'outline'}
-                        >
-                          {c.connected
-                            ? t('channels.connected')
-                            : c.enabled
-                              ? t('channels.connecting')
-                              : t('channels.disabled')}
-                        </Badge>
-                        {c.configured ? (
-                          <Badge variant="secondary">
-                            <CheckCircle className="size-3" weight="fill" />
-                            {t('channels.tokenSet')}
-                          </Badge>
-                        ) : null}
-                      </CardTitle>
-                      <CardDescription>{c.detail}</CardDescription>
-
-                      <div className="mt-3 flex flex-wrap items-center gap-2">
-                        <Button
-                          size="sm"
-                          variant={c.configured ? 'outline' : 'default'}
-                          onClick={() => setConfigFor(c)}
-                          className="gap-1.5"
-                        >
-                          <Key className="size-4" />
-                          {c.configured ? t('channels.changeToken') : t('channels.connect')}
-                        </Button>
-                        {!c.configured ? (
-                          <span className="text-[11px] text-muted-foreground">
-                            {t('channels.tokenNeeded')}
-                          </span>
-                        ) : null}
-                      </div>
-                    </div>
-
-                    <Switch
-                      checked={c.enabled}
-                      disabled={busy === c.id || !c.configured}
-                      onCheckedChange={(v) =>
-                        act(c.id, () => post(`/channels/${c.id}/toggle`, { enabled: v }))
-                      }
-                      aria-label={`${t('common.enable')} ${c.label}`}
-                      className="mt-1 shrink-0"
-                    />
+              <div
+                key={c.id}
+                className="flex flex-col rounded-[var(--radius-lg)] border border-border bg-card p-3.5"
+              >
+                <div className="flex items-start gap-2.5">
+                  <Icon className={cn('mt-0.5 size-5 shrink-0', tone)} weight="fill" />
+                  <div className="min-w-0 flex-1">
+                    <span className="block truncate text-sm font-medium">{c.label}</span>
+                    <p className="mt-0.5 line-clamp-2 text-xs text-muted-foreground">{c.detail}</p>
                   </div>
-                </CardHeader>
-              </Card>
+                  <Switch
+                    checked={c.enabled}
+                    disabled={busy === c.id || !c.configured}
+                    onCheckedChange={(v) =>
+                      act(c.id, () => post(`/channels/${c.id}/toggle`, { enabled: v }))
+                    }
+                    aria-label={`${t('common.enable')} ${c.label}`}
+                    className="shrink-0"
+                  />
+                </div>
+
+                <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
+                  <Badge variant={c.connected ? 'success' : c.enabled ? 'warning' : 'outline'}>
+                    {c.connected
+                      ? t('channels.connected')
+                      : c.enabled
+                        ? t('channels.connecting')
+                        : t('channels.disabled')}
+                  </Badge>
+                  {c.configured ? (
+                    <Badge variant="secondary">
+                      <CheckCircle className="size-3" weight="fill" />
+                      {t('channels.tokenSet')}
+                    </Badge>
+                  ) : null}
+                </div>
+
+                <div className="mt-auto flex items-center gap-2 border-t border-border pt-2.5">
+                  <Button
+                    size="sm"
+                    variant={c.configured ? 'outline' : 'default'}
+                    onClick={() => setConfigFor(c)}
+                    className="gap-1.5"
+                  >
+                    <Key className="size-4" />
+                    {c.configured ? t('channels.changeToken') : t('channels.connect')}
+                  </Button>
+                  {!c.configured ? (
+                    <span className="text-[11px] text-muted-foreground">{t('channels.tokenNeeded')}</span>
+                  ) : null}
+                </div>
+              </div>
             )
           })}
         </div>
       )}
-
-      <div className="space-y-2">
-        <h2 className="text-sm font-semibold">{t('channels.devices')}</h2>
-        {loading && !data ? (
-          <SkeletonList count={2} />
-        ) : (data?.pairings.length ?? 0) === 0 ? (
-          <EmptyState
-            icon={<Plugs className="size-8" />}
-            title={t('channels.noDevices')}
-            description={t('channels.noDevicesDesc')}
-          />
-        ) : (
-          <div className="space-y-2">
-            {data!.pairings.map((p) => (
-              <Card key={p.id} className="flex items-center gap-3 p-3.5">
-                <div className="min-w-0 flex-1">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <Badge variant="outline">{p.platform}</Badge>
-                    <span className="truncate text-sm font-medium">
-                      {p.display_name || p.external_id}
-                    </span>
-                    <Badge variant={p.status === 'approved' ? 'success' : 'warning'}>
-                      {p.status}
-                    </Badge>
-                  </div>
-                  <p className="mt-0.5 font-mono text-[10px] text-muted-foreground">
-                    {p.external_id} · {timeAgo(p.created_at)}
-                  </p>
-                </div>
-                {p.status === 'pending' ? (
-                  <Button
-                    size="sm"
-                    loading={busy === p.id}
-                    onClick={() => act(p.id, () => post('/pairing/approve', { id: p.id }))}
-                  >
-                    {t('common.approve')}
-                  </Button>
-                ) : (
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    loading={busy === p.id}
-                    onClick={() => act(p.id, () => post('/pairing/revoke', { id: p.id }))}
-                  >
-                    {t('common.revoke')}
-                  </Button>
-                )}
-              </Card>
-            ))}
-          </div>
-        )}
-      </div>
     </PageLayout>
+  )
+}
+
+function DevicesPanel({
+  loading,
+  pairings,
+  busy,
+  act,
+}: {
+  loading: boolean
+  pairings: Pairing[]
+  busy: string
+  act: (id: string, fn: () => Promise<unknown>) => Promise<void>
+}) {
+  const { t } = useI18n()
+  const timeAgo = useTimeAgo()
+
+  if (loading) return <SkeletonList count={3} />
+  if (pairings.length === 0) {
+    return (
+      <EmptyState
+        icon={<Plugs className="size-8" />}
+        title={t('channels.noDevices')}
+        description={t('channels.noDevicesDesc')}
+      />
+    )
+  }
+  return (
+    <div className="grid gap-2.5 sm:grid-cols-2">
+      {pairings.map((p) => (
+        <div
+          key={p.id}
+          className="flex items-center gap-3 rounded-[var(--radius-lg)] border border-border bg-card p-3.5"
+        >
+          <div className="min-w-0 flex-1">
+            <div className="flex flex-wrap items-center gap-2">
+              <Badge variant="outline">{p.platform}</Badge>
+              <span className="truncate text-sm font-medium">{p.display_name || p.external_id}</span>
+              <Badge variant={p.status === 'approved' ? 'success' : 'warning'}>{p.status}</Badge>
+            </div>
+            <p className="mt-0.5 truncate font-mono text-[10px] text-muted-foreground">
+              {p.external_id} · {timeAgo(p.created_at)}
+            </p>
+          </div>
+          {p.status === 'pending' ? (
+            <Button
+              size="sm"
+              loading={busy === p.id}
+              onClick={() => act(p.id, () => post('/pairing/approve', { id: p.id }))}
+            >
+              {t('common.approve')}
+            </Button>
+          ) : (
+            <Button
+              size="sm"
+              variant="outline"
+              loading={busy === p.id}
+              onClick={() => act(p.id, () => post('/pairing/revoke', { id: p.id }))}
+            >
+              {t('common.revoke')}
+            </Button>
+          )}
+        </div>
+      ))}
+    </div>
   )
 }
 

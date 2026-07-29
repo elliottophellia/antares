@@ -525,6 +525,8 @@ const en = {
   'channels.comingOnline': 'The bot is connecting now — no restart needed.',
   'channels.tokenPlaceholder': 'paste the bot token here',
   'channels.devices': 'Linked devices',
+  'channels.tabChannels': 'Channels',
+  'channels.tabDevices': 'Devices',
   'channels.noDevices': 'No devices yet',
   'channels.noDevicesDesc': 'Send /pair to the bot to link your account.',
 
@@ -1143,6 +1145,8 @@ const id: Dict = {
   'channels.comingOnline': 'Botnya sedang tersambung sekarang — tidak perlu restart.',
   'channels.tokenPlaceholder': 'tempel token bot di sini',
   'channels.devices': 'Perangkat terhubung',
+  'channels.tabChannels': 'Kanal',
+  'channels.tabDevices': 'Perangkat',
   'channels.noDevices': 'Belum ada perangkat',
   'channels.noDevicesDesc': 'Kirim /pair ke bot untuk menautkan akunmu.',
 
@@ -1692,6 +1696,8 @@ const ja: Dict = {
   'channels.comingOnline': 'ボットは今すぐ接続します。再起動は不要です。',
   'channels.tokenPlaceholder': 'ここにボットトークンを貼り付け',
   'channels.devices': '連携済みデバイス',
+  'channels.tabChannels': 'チャンネル',
+  'channels.tabDevices': 'デバイス',
   'channels.noDevices': 'デバイスがありません',
   'channels.noDevicesDesc': 'ボットに /pair を送ってアカウントを連携してください。',
 
@@ -2233,6 +2239,8 @@ const zh: Dict = {
   'channels.comingOnline': '机器人正在连接 —— 无需重启。',
   'channels.tokenPlaceholder': '在此粘贴机器人 token',
   'channels.devices': '已连接设备',
+  'channels.tabChannels': '频道',
+  'channels.tabDevices': '设备',
   'channels.noDevices': '还没有设备',
   'channels.noDevicesDesc': '向机器人发送 /pair 来绑定账号。',
 
@@ -2777,6 +2785,8 @@ const ru: Dict = {
   'channels.comingOnline': 'Бот подключается прямо сейчас — перезапуск не нужен.',
   'channels.tokenPlaceholder': 'вставьте токен бота',
   'channels.devices': 'Привязанные устройства',
+  'channels.tabChannels': 'Каналы',
+  'channels.tabDevices': 'Устройства',
   'channels.noDevices': 'Устройств пока нет',
   'channels.noDevicesDesc': 'Отправьте боту /pair, чтобы привязать аккаунт.',
 
