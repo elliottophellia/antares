@@ -327,9 +327,21 @@ func (d *Discord) dispatch(ctx context.Context, ev gatewayPayload) {
 		}
 		d.mu.Lock()
 		d.sessionID, d.resumeURL, d.selfID = ready.SessionID, ready.ResumeGatewayURL, ready.User.ID
+		appID := d.selfID
+		token := d.cfg.BotToken
 		d.mu.Unlock()
 		d.setConnected(true)
 		slog.Info("discord connected", "bot", ready.User.Username)
+
+		// Publish slash commands so they appear natively. Off the dispatch path
+		// so a slow or failed registration never stalls the connection.
+		go func() {
+			if err := RegisterDiscordCommands(context.Background(), token, appID); err != nil {
+				slog.Warn("discord: could not register slash commands", "error", err)
+			} else {
+				slog.Info("discord slash commands registered")
+			}
+		}()
 
 	case "RESUMED":
 		d.setConnected(true)
@@ -341,7 +353,96 @@ func (d *Discord) dispatch(ctx context.Context, ev gatewayPayload) {
 			return
 		}
 		go d.handleMessage(ctx, m)
+
+	case "INTERACTION_CREATE":
+		var it dcInteraction
+		if err := json.Unmarshal(ev.D, &it); err != nil {
+			return
+		}
+		go d.handleInteraction(ctx, it)
 	}
+}
+
+// dcInteraction is a slash-command invocation. Type 2 is APPLICATION_COMMAND.
+type dcInteraction struct {
+	ID    string `json:"id"`
+	Token string `json:"token"`
+	Type  int    `json:"type"`
+	// GuildID/ChannelID locate the invocation; Member.User (guild) or User (DM)
+	// identifies the caller.
+	GuildID   string `json:"guild_id"`
+	ChannelID string `json:"channel_id"`
+	Member    *struct {
+		User dcAuthor `json:"user"`
+	} `json:"member"`
+	User *dcAuthor `json:"user"`
+	Data struct {
+		Name    string `json:"name"`
+		Options []struct {
+			Name  string `json:"name"`
+			Value any    `json:"value"`
+		} `json:"options"`
+	} `json:"data"`
+}
+
+// handleInteraction answers a slash command. It ACKs immediately (Discord
+// requires a response within 3s), runs the command as a synthetic "/name args"
+// message through the same path typed commands take, then edits the ACK with
+// the result.
+func (d *Discord) handleInteraction(ctx context.Context, it dcInteraction) {
+	if it.Type != 2 {
+		return
+	}
+	// Defer the reply (type 5) so Discord shows "thinking…" while the agent works.
+	_ = d.rest(ctx, "POST", "/interactions/"+it.ID+"/"+it.Token+"/callback",
+		map[string]any{"type": 5}, nil)
+
+	author := it.User
+	if author == nil && it.Member != nil {
+		author = &it.Member.User
+	}
+	if author == nil {
+		author = &dcAuthor{}
+	}
+
+	// Rebuild the command line from the interaction options.
+	line := "/" + it.Data.Name
+	for _, o := range it.Data.Options {
+		line += " " + fmt.Sprintf("%v", o.Value)
+	}
+
+	msg := InboundMessage{
+		Platform: "discord", ChannelID: it.ChannelID, GuildID: it.GuildID,
+		UserID: author.ID, UserName: author.Username, Text: line,
+		IsDirect: it.GuildID == "", MessageID: it.ID,
+	}
+
+	reply, err := d.mgr.handle(ctx, msg, nil)
+	if err != nil {
+		reply = "⚠️ " + err.Error()
+	}
+	if strings.TrimSpace(reply) == "" {
+		reply = "(no reply)"
+	}
+
+	// Edit the deferred reply with the first chunk; follow up with the rest.
+	chunks := splitForDiscord(reply)
+	if len(chunks) == 0 {
+		chunks = []string{"(no reply)"}
+	}
+	_ = d.rest(ctx, "PATCH", "/webhooks/"+d.appID()+"/"+it.Token+"/messages/@original",
+		map[string]any{"content": chunks[0]}, nil)
+	for _, chunk := range chunks[1:] {
+		_ = d.rest(ctx, "POST", "/webhooks/"+d.appID()+"/"+it.Token,
+			map[string]any{"content": chunk}, nil)
+	}
+}
+
+// appID returns the bot's application id (its own user id).
+func (d *Discord) appID() string {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	return d.selfID
 }
 
 // handleMessage authorises and answers one Discord message.

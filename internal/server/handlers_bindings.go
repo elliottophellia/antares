@@ -32,6 +32,55 @@ func (s *Server) handleDiscordChannels(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"channels": channels})
 }
 
+// handleChannelCommands registers or clears a platform's native command menu
+// (Discord slash commands, Telegram setMyCommands). Auto-registration also runs
+// on connect; this is the manual control, useful to clear stale commands after
+// an update. Action comes from the path: .../commands/register or /clear.
+func (s *Server) handleChannelCommands(w http.ResponseWriter, r *http.Request) {
+	id := strings.ToLower(r.PathValue("id"))
+	action := r.PathValue("action")
+	if action != "register" && action != "clear" {
+		writeError(w, http.StatusBadRequest, errors.New("action must be register or clear"))
+		return
+	}
+	cfg := s.config()
+	ctx := r.Context()
+
+	var err error
+	switch id {
+	case "discord":
+		token := cfg.Gateway.Discord.BotToken
+		if strings.TrimSpace(token) == "" {
+			writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": "connect Discord first"})
+			return
+		}
+		if action == "clear" {
+			err = gateway.ClearDiscordCommands(ctx, token, "")
+		} else {
+			err = gateway.RegisterDiscordCommands(ctx, token, "")
+		}
+	case "telegram":
+		token := cfg.Gateway.Telegram.BotToken
+		if strings.TrimSpace(token) == "" {
+			writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": "connect Telegram first"})
+			return
+		}
+		if action == "clear" {
+			err = gateway.ClearTelegramCommands(ctx, token)
+		} else {
+			err = gateway.SetTelegramCommands(ctx, token)
+		}
+	default:
+		writeError(w, http.StatusBadRequest, errors.New("commands are only supported for discord and telegram"))
+		return
+	}
+	if err != nil {
+		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
 // handleListBindings returns the configured routing bindings.
 func (s *Server) handleListBindings(w http.ResponseWriter, r *http.Request) {
 	bindings := s.config().Gateway.Bindings

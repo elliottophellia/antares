@@ -133,10 +133,19 @@ func (t *Telegram) Start(ctx context.Context) error {
 	}
 	t.mu.Lock()
 	t.me = me.Username
+	token := t.cfg.BotToken
 	t.mu.Unlock()
 	t.setConnected(true)
 	defer t.setConnected(false)
 	slog.Info("telegram connected", "bot", "@"+me.Username)
+
+	// Publish the "/" command menu. Off the main path so a hiccup never blocks
+	// polling for messages.
+	go func() {
+		if err := SetTelegramCommands(context.Background(), token); err != nil {
+			slog.Warn("telegram: could not set command menu", "error", err)
+		}
+	}()
 
 	for {
 		if err := ctx.Err(); err != nil {

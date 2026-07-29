@@ -106,6 +106,27 @@ export default function ChannelsPage() {
     }
   }
 
+  const [cmdNote, setCmdNote] = useState<Record<string, string>>({})
+  const runCommands = async (id: string, action: 'register' | 'clear') => {
+    setBusy(id + ':cmd')
+    setCmdNote((n) => ({ ...n, [id]: '' }))
+    try {
+      const r = await post<{ ok: boolean; error?: string }>(`/channels/${id}/commands/${action}`)
+      setCmdNote((n) => ({
+        ...n,
+        [id]: r.ok
+          ? action === 'clear'
+            ? t('channels.cmdCleared')
+            : t('channels.cmdRegistered')
+          : r.error || t('channels.cmdFailed'),
+      }))
+    } catch (e) {
+      setCmdNote((n) => ({ ...n, [id]: (e as Error).message }))
+    } finally {
+      setBusy('')
+    }
+  }
+
   const channels = data?.channels ?? []
   const pairings = data?.pairings ?? []
   const pending = pairings.filter((p) => p.status === 'pending').length
@@ -200,6 +221,34 @@ export default function ChannelsPage() {
                   </Button>
                   {!c.configured ? (
                     <span className="text-[11px] text-muted-foreground">{t('channels.tokenNeeded')}</span>
+                  ) : null}
+                  {c.configured && (c.id === 'discord' || c.id === 'telegram') ? (
+                    <>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        loading={busy === c.id + ':cmd'}
+                        onClick={() => void runCommands(c.id, 'register')}
+                        className="gap-1.5"
+                        title={t('channels.cmdRegisterHint')}
+                      >
+                        <Faders className="size-4" />
+                        {t('channels.cmdRegister')}
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        disabled={busy === c.id + ':cmd'}
+                        onClick={() => void runCommands(c.id, 'clear')}
+                        className="text-muted-foreground"
+                        title={t('channels.cmdClearHint')}
+                      >
+                        {t('channels.cmdClear')}
+                      </Button>
+                    </>
+                  ) : null}
+                  {cmdNote[c.id] ? (
+                    <span className="w-full text-[11px] text-muted-foreground">{cmdNote[c.id]}</span>
                   ) : null}
                 </div>
               </div>
