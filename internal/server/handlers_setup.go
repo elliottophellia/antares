@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"os"
 	"sort"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/enowdev/antares/internal/config"
 	"github.com/enowdev/antares/internal/llm"
+	"github.com/enowdev/antares/internal/store"
 )
 
 // setupProvider is one option in the onboarding picker. The catalogue lives
@@ -70,6 +72,13 @@ func setupProviderCatalogue(cfg *config.Config) []setupProvider {
 			KeyURL:  "https://aistudio.google.com/apikey",
 			BaseURL: "https://generativelanguage.googleapis.com/v1beta",
 			Models:  []string{"gemini-2.5-pro", "gemini-2.5-flash"},
+		},
+		{
+			ID: "zai", Label: "Z.ai GLM (Coding Plan)", Kind: "anthropic",
+			Hint:    "GLM models on your Z.ai coding plan.",
+			KeyHint: "your Z.ai API key", KeyURL: "https://z.ai/manage-apikey/apikey-list",
+			BaseURL: "https://api.z.ai/api/anthropic/v1",
+			Models:  []string{"glm-5.2", "glm-4.7", "glm-4.6"},
 		},
 		{
 			ID: "ollama", Label: "Ollama", Kind: "openai-compatible",
@@ -253,9 +262,10 @@ func (s *Server) handleSetupComplete(w http.ResponseWriter, r *http.Request) {
 			EnowxURL   string `json:"enowx_url"`
 			EnowxToken string `json:"enowx_token"`
 		} `json:"rag"`
-		Telegram string `json:"telegram_token"`
-		Discord  string `json:"discord_token"`
-		Language string `json:"language"`
+		Telegram          string `json:"telegram_token"`
+		Discord           string `json:"discord_token"`
+		Language          string `json:"language"`
+		DashboardPassword string `json:"dashboard_password"`
 	}
 	if err := decodeBody(r, &body); err != nil {
 		writeError(w, http.StatusBadRequest, err)
@@ -309,8 +319,23 @@ func (s *Server) handleSetupComplete(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if d := strings.TrimSpace(body.Database.Driver); d != "" {
+		dsn := strings.TrimSpace(body.Database.DSN)
+		// Verify a postgres connection now so a bad DSN is caught during
+		// onboarding rather than on the next restart. Open pings and migrates.
+		if d == "postgres" {
+			if dsn == "" {
+				writeError(w, http.StatusBadRequest, errors.New("a connection string is required for postgres"))
+				return
+			}
+			probe, err := store.Open(r.Context(), d, dsn, 2, 5000, false)
+			if err != nil {
+				writeError(w, http.StatusBadRequest, fmt.Errorf("could not connect to postgres: %w", err))
+				return
+			}
+			probe.Close()
+		}
 		cfg.Database.Driver = d
-		if dsn := strings.TrimSpace(body.Database.DSN); dsn != "" {
+		if dsn != "" {
 			cfg.Database.DSN = dsn
 		}
 	}
@@ -346,6 +371,17 @@ func (s *Server) handleSetupComplete(w http.ResponseWriter, r *http.Request) {
 	}
 	if lang := strings.TrimSpace(body.Language); lang != "" {
 		cfg.Display.Language = lang
+	}
+	// An optional dashboard password locks the web UI behind a login. It is
+	// stored hashed; the plaintext never touches config.
+	if pw := strings.TrimSpace(body.DashboardPassword); pw != "" {
+		hash, err := config.HashPassword(pw)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+		cfg.Server.DashboardPasswordHash = hash
+		s.invalidateDashSessions()
 	}
 
 	if err := config.Save(cfg); err != nil {

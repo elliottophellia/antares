@@ -82,6 +82,15 @@ type Provider struct {
 	TimeoutSecs int               `yaml:"timeout_seconds" json:"timeout_seconds"`
 	APIVersion  string            `yaml:"api_version" json:"api_version"`
 	Region      string            `yaml:"region" json:"region"`
+	// ModelMeta carries metadata for models the provider's /models endpoint does
+	// not describe — chiefly a manually added model's context window. Keyed by
+	// model id. Empty for the common case where everything is auto-discovered.
+	ModelMeta map[string]ModelMeta `yaml:"model_meta,omitempty" json:"model_meta,omitempty"`
+}
+
+// ModelMeta overrides or supplies model details the provider cannot report.
+type ModelMeta struct {
+	ContextWindow int `yaml:"context_window,omitempty" json:"context_window,omitempty"`
 }
 
 // Database picks the persistence driver.
@@ -95,13 +104,18 @@ type Database struct {
 
 // Server configures the HTTP API + dashboard host.
 type Server struct {
-	Host         string   `yaml:"host" json:"host"`
-	Port         int      `yaml:"port" json:"port"`
-	AuthToken    string   `yaml:"auth_token" json:"auth_token"`
-	AuthDisabled bool     `yaml:"auth_disabled" json:"auth_disabled"`
-	CORSOrigins  []string `yaml:"cors_origins" json:"cors_origins"`
-	PublicURL    string   `yaml:"public_url" json:"public_url"`
-	TrustProxy   bool     `yaml:"trust_proxy" json:"trust_proxy"`
+	Host         string `yaml:"host" json:"host"`
+	Port         int    `yaml:"port" json:"port"`
+	AuthToken    string `yaml:"auth_token" json:"auth_token"`
+	AuthDisabled bool   `yaml:"auth_disabled" json:"auth_disabled"`
+	// DashboardPasswordHash gates the web dashboard behind a login when set
+	// (bcrypt hash of the password). Empty leaves the dashboard open. This is
+	// web-only: the TUI, gateways, and any client presenting AuthToken as a
+	// bearer bypass it.
+	DashboardPasswordHash string   `yaml:"dashboard_password_hash" json:"dashboard_password_hash"`
+	CORSOrigins           []string `yaml:"cors_origins" json:"cors_origins"`
+	PublicURL             string   `yaml:"public_url" json:"public_url"`
+	TrustProxy            bool     `yaml:"trust_proxy" json:"trust_proxy"`
 }
 
 // Agent tunes the conversation loop.
