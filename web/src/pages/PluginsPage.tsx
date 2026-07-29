@@ -15,6 +15,9 @@ import {
   CardTitle,
   EmptyState,
   Switch,
+  Tabs,
+  TabsList,
+  TabsTrigger,
 } from '@/components/ui/primitives'
 import { SkeletonList } from '@/components/ui/skeleton'
 
@@ -37,14 +40,7 @@ export default function PluginsPage() {
     dirs?: string[]
   }>('/plugins')
   const [busy, setBusy] = useState('')
-
-  usePageActions(
-    <Button size="sm" variant="outline" onClick={() => void refresh()} className="gap-1.5">
-      <ArrowClockwise className="size-4" />
-      {t('plugins.rescan')}
-    </Button>,
-    [t],
-  )
+  const [tab, setTab] = useState<'plugins' | 'docs'>('plugins')
 
   const refresh = async () => {
     setBusy('*')
@@ -55,6 +51,14 @@ export default function PluginsPage() {
       setBusy('')
     }
   }
+
+  usePageActions(
+    <Button size="sm" variant="outline" onClick={() => void refresh()} className="gap-1.5">
+      <ArrowClockwise className="size-4" />
+      {t('plugins.rescan')}
+    </Button>,
+    [t],
+  )
 
   const toggle = async (name: string, enabled: boolean) => {
     setBusy(name)
@@ -70,80 +74,100 @@ export default function PluginsPage() {
 
   const plugins = data?.plugins ?? []
 
+  const header = (
+    <Tabs value={tab} onValueChange={(v) => setTab(v as 'plugins' | 'docs')}>
+      <TabsList>
+        <TabsTrigger value="plugins">{t('plugins.tabPlugins')}</TabsTrigger>
+        <TabsTrigger value="docs">{t('plugins.tabDocs')}</TabsTrigger>
+      </TabsList>
+    </Tabs>
+  )
+
   return (
-    <PageLayout>
-      {!data?.enabled ? (
-        <Card className="border-[var(--warning)]/40 bg-[color-mix(in_oklch,var(--warning)_10%,transparent)]">
-          <CardContent className="pt-4 text-xs sm:text-sm">{t('plugins.disabled')}</CardContent>
-        </Card>
-      ) : null}
-
-      {plugins.length === 0 ? (
-        <EmptyState
-          icon={<PuzzlePiece className="size-8" />}
-          title={t('plugins.none')}
-          description={t('plugins.noneDesc', { dir: data?.dirs?.[0] ?? '~/.antares/plugins' })}
-        />
+    <PageLayout header={header}>
+      {tab === 'docs' ? (
+        <PluginDocs />
       ) : (
-        <div className="space-y-3">
-          {plugins.map((p) => (
-            <Card key={p.name}>
-              <CardHeader>
-                <div className="flex items-start gap-3">
-                  <PuzzlePiece
-                    className={p.error ? 'mt-0.5 size-5 shrink-0 text-destructive' : 'mt-0.5 size-5 shrink-0 text-primary'}
-                    weight="fill"
-                  />
-                  <div className="min-w-0 flex-1">
-                    <CardTitle className="flex flex-wrap items-center gap-2">
-                      {p.name}
-                      {p.version ? <Badge variant="outline">{p.version}</Badge> : null}
-                      {p.error ? (
-                        <Badge variant="destructive">
-                          <Warning className="size-3" weight="fill" />
-                          {t('plugins.broken')}
-                        </Badge>
-                      ) : null}
-                      {p.hooks?.map((h) => (
-                        <Badge key={h} variant="secondary" className="font-mono text-[10px]">
-                          {h}
-                        </Badge>
-                      ))}
-                    </CardTitle>
-                    {p.description ? <CardDescription>{p.description}</CardDescription> : null}
-                    {p.error ? (
-                      <CardDescription className="break-words text-destructive">
-                        {p.error}
-                      </CardDescription>
-                    ) : null}
-                    <p className="mt-1 break-all font-mono text-[10px] text-muted-foreground">
-                      {p.dir}
-                      {p.command ? ` · ${p.command}` : ''}
-                    </p>
-                  </div>
-                  {!p.error ? (
-                    <Switch
-                      checked={p.enabled}
-                      disabled={busy === p.name || busy === '*'}
-                      onCheckedChange={(v) => toggle(p.name, v)}
-                      aria-label={`${t('common.enable')} ${p.name}`}
-                      className="mt-1 shrink-0"
-                    />
-                  ) : null}
-                </div>
-              </CardHeader>
+        <>
+          {!data?.enabled ? (
+            <Card className="border-[var(--warning)]/40 bg-[color-mix(in_oklch,var(--warning)_10%,transparent)]">
+              <CardContent className="pt-4 text-xs sm:text-sm">{t('plugins.disabled')}</CardContent>
             </Card>
-          ))}
-        </div>
-      )}
+          ) : null}
 
-      <Card>
-        <CardHeader>
-          <CardTitle>{t('plugins.howto')}</CardTitle>
-          <CardDescription>{t('plugins.howtoDesc')}</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <pre className="overflow-x-auto rounded-[var(--radius-sm)] bg-muted/50 p-3 font-mono text-[11px] leading-relaxed">
+          {plugins.length === 0 ? (
+            <EmptyState
+              icon={<PuzzlePiece className="size-8" />}
+              title={t('plugins.none')}
+              description={t('plugins.noneDesc', { dir: data?.dirs?.[0] ?? '~/.antares/plugins' })}
+            />
+          ) : (
+            <div className="grid gap-2.5 sm:grid-cols-2 xl:grid-cols-3">
+              {plugins.map((p) => (
+                <div
+                  key={p.name}
+                  className={`flex flex-col rounded-[var(--radius-lg)] border border-border bg-card p-3.5 ${p.error ? 'border-destructive/40' : ''}`}
+                >
+                  <div className="flex items-start gap-2">
+                    <PuzzlePiece
+                      className={p.error ? 'mt-0.5 size-4 shrink-0 text-destructive' : 'mt-0.5 size-4 shrink-0 text-primary'}
+                      weight="fill"
+                    />
+                    <span className="min-w-0 flex-1 truncate text-sm font-medium">{p.name}</span>
+                    {!p.error ? (
+                      <Switch
+                        checked={p.enabled}
+                        disabled={busy === p.name || busy === '*'}
+                        onCheckedChange={(v) => toggle(p.name, v)}
+                        aria-label={`${t('common.enable')} ${p.name}`}
+                        className="shrink-0"
+                      />
+                    ) : null}
+                  </div>
+                  {p.description ? (
+                    <p className="mt-1.5 line-clamp-2 text-xs text-muted-foreground">{p.description}</p>
+                  ) : null}
+                  {p.error ? (
+                    <p className="mt-1.5 break-words text-[11px] text-destructive">{p.error}</p>
+                  ) : null}
+                  <div className="mt-2 flex flex-wrap gap-1.5">
+                    {p.version ? <Badge variant="outline">{p.version}</Badge> : null}
+                    {p.error ? (
+                      <Badge variant="destructive">
+                        <Warning className="size-3" weight="fill" />
+                        {t('plugins.broken')}
+                      </Badge>
+                    ) : null}
+                    {p.hooks?.map((h) => (
+                      <Badge key={h} variant="secondary" className="font-mono text-[10px]">
+                        {h}
+                      </Badge>
+                    ))}
+                  </div>
+                  <p className="mt-2 break-all border-t border-border pt-2 font-mono text-[10px] text-muted-foreground">
+                    {p.dir}
+                    {p.command ? ` · ${p.command}` : ''}
+                  </p>
+                </div>
+              ))}
+            </div>
+          )}
+        </>
+      )}
+    </PageLayout>
+  )
+}
+
+function PluginDocs() {
+  const { t } = useI18n()
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>{t('plugins.howto')}</CardTitle>
+        <CardDescription>{t('plugins.howtoDesc')}</CardDescription>
+      </CardHeader>
+      <CardContent>
+        <pre className="overflow-x-auto rounded-[var(--radius-sm)] bg-muted/50 p-3 font-mono text-[11px] leading-relaxed">
 {`# ~/.antares/plugins/audit/plugin.yaml
 name: audit
 description: Log every terminal command
@@ -154,9 +178,9 @@ hooks: [pre_tool_call]
 #!/bin/sh
 cat >> ~/antares-audit.log
 echo '{}'`}
-          </pre>
-        </CardContent>
-      </Card>
-    </PageLayout>
+        </pre>
+        <p className="mt-3 text-xs text-muted-foreground">{t('plugins.docsHint')}</p>
+      </CardContent>
+    </Card>
   )
 }
