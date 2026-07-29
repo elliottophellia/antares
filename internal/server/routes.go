@@ -173,6 +173,12 @@ func (s *Server) routes() {
 	m.HandleFunc("POST /api/channels/{id}/toggle", s.handleToggleChannel)
 	m.HandleFunc("POST /api/channels/{id}/token", s.handleSetChannelToken)
 	m.HandleFunc("POST /api/channels/{id}/config", s.handleSetChannelConfig)
+	// Per-channel routing bindings + Discord discovery.
+	m.HandleFunc("GET /api/channels/discord/guilds", s.handleDiscordGuilds)
+	m.HandleFunc("GET /api/channels/discord/guilds/{id}/channels", s.handleDiscordChannels)
+	m.HandleFunc("GET /api/channels/bindings", s.handleListBindings)
+	m.HandleFunc("POST /api/channels/bindings", s.handleSaveBinding)
+	m.HandleFunc("DELETE /api/channels/bindings/{id}", s.handleDeleteBinding)
 
 	m.HandleFunc("GET /api/autopilot", s.handleAutopilotList)
 	m.HandleFunc("POST /api/autopilot", s.handleAutopilotAdd)

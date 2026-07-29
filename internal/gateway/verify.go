@@ -77,6 +77,83 @@ func verifyTelegram(ctx context.Context, token string) (*Identity, error) {
 	}, nil
 }
 
+// DiscordGuild is a server the bot belongs to.
+type DiscordGuild struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+	Icon string `json:"icon,omitempty"`
+}
+
+// DiscordChannel is a channel within a guild. Type 0 is a text channel, 5 an
+// announcement channel — the ones a bot can post to and worth binding.
+type DiscordChannel struct {
+	ID       string `json:"id"`
+	Name     string `json:"name"`
+	Type     int    `json:"type"`
+	ParentID string `json:"parent_id,omitempty"`
+}
+
+func discordGET(ctx context.Context, token, path string, out any) error {
+	req, err := http.NewRequestWithContext(ctx, "GET", discordAPI+path, nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bot "+strings.TrimSpace(token))
+	req.Header.Set("User-Agent", "DiscordBot (https://github.com/enowdev/antares, "+version.Version+")")
+	resp, err := verifyClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("cannot reach Discord: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusUnauthorized {
+		return fmt.Errorf("Discord rejected this token")
+	}
+	if resp.StatusCode >= 400 {
+		return fmt.Errorf("Discord returned %d", resp.StatusCode)
+	}
+	return json.NewDecoder(resp.Body).Decode(out)
+}
+
+// ListDiscordGuilds returns the servers the bot is a member of.
+func ListDiscordGuilds(ctx context.Context, token string) ([]DiscordGuild, error) {
+	token = strings.TrimSpace(token)
+	if token == "" {
+		return nil, fmt.Errorf("connect Discord first")
+	}
+	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	var guilds []DiscordGuild
+	if err := discordGET(ctx, token, "/users/@me/guilds", &guilds); err != nil {
+		return nil, err
+	}
+	return guilds, nil
+}
+
+// ListDiscordChannels returns the text and announcement channels of a guild.
+func ListDiscordChannels(ctx context.Context, token, guildID string) ([]DiscordChannel, error) {
+	token = strings.TrimSpace(token)
+	if token == "" {
+		return nil, fmt.Errorf("connect Discord first")
+	}
+	if strings.TrimSpace(guildID) == "" {
+		return nil, fmt.Errorf("guild id is required")
+	}
+	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	var all []DiscordChannel
+	if err := discordGET(ctx, token, "/guilds/"+guildID+"/channels", &all); err != nil {
+		return nil, err
+	}
+	// Keep only channels a bot can post text to.
+	out := make([]DiscordChannel, 0, len(all))
+	for _, c := range all {
+		if c.Type == 0 || c.Type == 5 {
+			out = append(out, c)
+		}
+	}
+	return out, nil
+}
+
 func verifyDiscord(ctx context.Context, token string) (*Identity, error) {
 	req, err := http.NewRequestWithContext(ctx, "GET", discordAPI+"/users/@me", nil)
 	if err != nil {

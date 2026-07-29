@@ -6,14 +6,18 @@ import {
   DiscordLogo,
   Eye,
   EyeSlash,
+  Faders,
   Key,
+  PencilSimple,
   Plugs,
+  Plus,
   SlackLogo,
   TelegramLogo,
+  Trash,
   Warning,
   WhatsappLogo,
 } from '@phosphor-icons/react'
-import { post } from '@/lib/api'
+import { del, get, post } from '@/lib/api'
 import { useApi } from '@/lib/hooks'
 import { useI18n, useTimeAgo } from '@/lib/i18n'
 import { cn } from '@/lib/utils'
@@ -28,6 +32,7 @@ import {
   Tabs,
   TabsList,
   TabsTrigger,
+  Textarea,
 } from '@/components/ui/primitives'
 import {
   Dialog,
@@ -89,7 +94,7 @@ export default function ChannelsPage() {
   const { data, loading, reload } = useApi<ChannelsResponse>('/channels')
   const [busy, setBusy] = useState('')
   const [configFor, setConfigFor] = useState<Channel | null>(null)
-  const [tab, setTab] = useState<'channels' | 'devices'>('channels')
+  const [tab, setTab] = useState<'channels' | 'devices' | 'routing'>('channels')
 
   const act = async (id: string, fn: () => Promise<unknown>) => {
     setBusy(id)
@@ -106,7 +111,7 @@ export default function ChannelsPage() {
   const pending = pairings.filter((p) => p.status === 'pending').length
 
   const header = (
-    <Tabs value={tab} onValueChange={(v) => setTab(v as 'channels' | 'devices')}>
+    <Tabs value={tab} onValueChange={(v) => setTab(v as 'channels' | 'devices' | 'routing')}>
       <TabsList>
         <TabsTrigger value="channels">{t('channels.tabChannels')}</TabsTrigger>
         <TabsTrigger value="devices" className="gap-1.5">
@@ -117,6 +122,7 @@ export default function ChannelsPage() {
             </span>
           ) : null}
         </TabsTrigger>
+        <TabsTrigger value="routing">{t('channels.tabRouting')}</TabsTrigger>
       </TabsList>
     </Tabs>
   )
@@ -129,7 +135,9 @@ export default function ChannelsPage() {
         onSaved={reload}
       />
 
-      {tab === 'devices' ? (
+      {tab === 'routing' ? (
+        <RoutingPanel />
+      ) : tab === 'devices' ? (
         <DevicesPanel loading={loading && !data} pairings={pairings} busy={busy} act={act} />
       ) : loading && !data ? (
         <SkeletonList count={4} />
@@ -427,6 +435,528 @@ function ConfigDialog({
               {t('channels.verifyAndSave')}
             </Button>
           ) : null}
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+/* ---------- Routing (channel → agent bindings) ---------- */
+
+interface Binding {
+  id: string
+  platform: 'discord' | 'telegram'
+  guild_id: string
+  channel_id: string
+  label: string
+  enabled: boolean
+  role: string
+  model: string
+  toolset: string
+  allowed_users: string[]
+  reply_mode: string
+  prompt_prefix: string
+  relevance_filter: string
+}
+
+interface Role {
+  name: string
+  title: string
+  summary: string
+  category: string
+  subrole?: boolean
+}
+
+interface ModelInfo {
+  id: string
+  name: string
+  provider: string
+  provider_label: string
+}
+
+const emptyBinding = (): Binding => ({
+  id: '',
+  platform: 'discord',
+  guild_id: '',
+  channel_id: '',
+  label: '',
+  enabled: true,
+  role: '',
+  model: '',
+  toolset: '',
+  allowed_users: [],
+  reply_mode: 'mention',
+  prompt_prefix: '',
+  relevance_filter: '',
+})
+
+const selectClass =
+  'flex h-9 w-full rounded-[var(--radius-sm)] border border-input bg-background px-3 text-sm transition-colors focus-visible:border-ring disabled:cursor-not-allowed disabled:opacity-50'
+
+/**
+ * Routing binds a specific chat channel to an agent role / model / toolset so
+ * different rooms can behave differently. The list is a compact card grid; the
+ * dialog does create and edit against POST /channels/bindings.
+ */
+function RoutingPanel() {
+  const { t } = useI18n()
+  const { data, loading, reload } = useApi<{ bindings: Binding[] }>('/channels/bindings')
+  const [editing, setEditing] = useState<Binding | null>(null)
+  const [removing, setRemoving] = useState('')
+
+  const bindings = data?.bindings ?? []
+
+  const remove = async (b: Binding) => {
+    if (!confirm(t('common.delete') + '?')) return
+    setRemoving(b.id)
+    try {
+      await del(`/channels/bindings/${encodeURIComponent(b.id)}`)
+      reload()
+    } finally {
+      setRemoving('')
+    }
+  }
+
+  const toggle = async (b: Binding, enabled: boolean) => {
+    await post('/channels/bindings', { ...b, enabled })
+    reload()
+  }
+
+  if (loading && !data) return <SkeletonList count={3} />
+
+  return (
+    <div className="space-y-3">
+      <BindingDialog
+        binding={editing}
+        onOpenChange={(open) => !open && setEditing(null)}
+        onSaved={reload}
+      />
+
+      <div className="flex justify-end">
+        <Button size="sm" onClick={() => setEditing(emptyBinding())} className="gap-1.5">
+          <Plus className="size-4" />
+          {t('channels.addBinding')}
+        </Button>
+      </div>
+
+      {bindings.length === 0 ? (
+        <EmptyState
+          icon={<Faders className="size-8" />}
+          title={t('channels.noBindings')}
+          description={t('channels.noBindingsDesc')}
+          action={
+            <Button size="sm" onClick={() => setEditing(emptyBinding())} className="gap-1.5">
+              <Plus className="size-4" />
+              {t('channels.addBinding')}
+            </Button>
+          }
+        />
+      ) : (
+        <div className="grid gap-2.5 sm:grid-cols-2">
+          {bindings.map((b) => {
+            const Icon = ICONS[b.platform] ?? Plugs
+            const title = b.label || b.channel_id || b.guild_id || b.platform
+            return (
+              <div
+                key={b.id}
+                className="flex flex-col rounded-[var(--radius-lg)] border border-border bg-card p-3.5"
+              >
+                <div className="flex items-start gap-2.5">
+                  <Icon className="mt-0.5 size-5 shrink-0 text-muted-foreground" weight="fill" />
+                  <div className="min-w-0 flex-1">
+                    <span className="block truncate text-sm font-medium">{title}</span>
+                    <p className="mt-0.5 truncate font-mono text-[10px] text-muted-foreground">
+                      {b.guild_id ? `${b.guild_id} · ` : ''}
+                      {b.channel_id || t('channels.bChannelAll')}
+                    </p>
+                  </div>
+                  <Switch
+                    checked={b.enabled}
+                    onCheckedChange={(v) => void toggle(b, v)}
+                    aria-label={t('channels.bEnabled')}
+                    className="shrink-0"
+                  />
+                </div>
+
+                <div className="mb-3 mt-2.5 flex flex-wrap items-center gap-1.5">
+                  <Badge variant="outline">{b.platform}</Badge>
+                  <Badge variant="secondary">{b.role || t('channels.bRoleDefault')}</Badge>
+                  {b.model ? <Badge variant="outline">{b.model}</Badge> : null}
+                </div>
+
+                <div className="mt-auto flex items-center gap-x-2 border-t border-border pt-3">
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => setEditing(b)}
+                    className="gap-1.5"
+                  >
+                    <PencilSimple className="size-4" />
+                    {t('channels.editBinding')}
+                  </Button>
+                  <button
+                    onClick={() => void remove(b)}
+                    disabled={removing === b.id}
+                    aria-label={t('common.delete')}
+                    className="ml-auto shrink-0 text-muted-foreground transition-colors hover:text-destructive disabled:opacity-50"
+                  >
+                    <Trash className="size-4" />
+                  </button>
+                </div>
+              </div>
+            )
+          })}
+        </div>
+      )}
+    </div>
+  )
+}
+
+interface DiscoverGuild {
+  id: string
+  name: string
+  icon?: string
+}
+interface DiscoverChannel {
+  id: string
+  name: string
+  type: number
+  parent_id?: string
+}
+
+function BindingDialog({
+  binding,
+  onOpenChange,
+  onSaved,
+}: {
+  binding: Binding | null
+  onOpenChange: (open: boolean) => void
+  onSaved: () => void
+}) {
+  const { t } = useI18n()
+  const [form, setForm] = useState<Binding>(emptyBinding())
+  const [allowedUsers, setAllowedUsers] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string>()
+
+  // Discovery + pickers, loaded when the dialog opens.
+  const [roles, setRoles] = useState<Role[]>([])
+  const [toolsets, setToolsets] = useState<string[]>([])
+  const [models, setModels] = useState<ModelInfo[]>([])
+  const [guilds, setGuilds] = useState<DiscoverGuild[]>([])
+  const [guildsError, setGuildsError] = useState<string>()
+  const [channels, setChannels] = useState<DiscoverChannel[]>([])
+  const [channelsError, setChannelsError] = useState<string>()
+
+  const update = <K extends keyof Binding>(key: K, value: Binding[K]) =>
+    setForm((f) => ({ ...f, [key]: value }))
+
+  // Reset + load pickers whenever a binding is opened.
+  useEffect(() => {
+    if (!binding) return
+    setForm(binding)
+    setAllowedUsers(binding.allowed_users.join(', '))
+    setError(undefined)
+    setChannels([])
+    setChannelsError(undefined)
+
+    void get<{ roles: Role[]; toolsets: string[] }>('/roles')
+      .then((r) => {
+        setRoles((r.roles ?? []).filter((role) => !role.subrole))
+        setToolsets(r.toolsets ?? [])
+      })
+      .catch(() => {})
+    void get<{ active: string; models: ModelInfo[] }>('/model/list-all')
+      .then((r) => setModels(r.models ?? []))
+      .catch(() => {})
+  }, [binding])
+
+  // Discord guild discovery.
+  useEffect(() => {
+    if (!binding || form.platform !== 'discord') return
+    void get<{ guilds: DiscoverGuild[]; error?: string }>('/channels/discord/guilds')
+      .then((r) => {
+        setGuilds(r.guilds ?? [])
+        setGuildsError(r.error)
+      })
+      .catch((e: Error) => setGuildsError(e.message))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [binding, form.platform])
+
+  // Discord channel discovery, once a guild is picked.
+  useEffect(() => {
+    if (!binding || form.platform !== 'discord' || !form.guild_id) {
+      setChannels([])
+      return
+    }
+    setChannelsError(undefined)
+    void get<{ channels: DiscoverChannel[]; error?: string }>(
+      `/channels/discord/guilds/${encodeURIComponent(form.guild_id)}/channels`,
+    )
+      .then((r) => {
+        setChannels(r.channels ?? [])
+        setChannelsError(r.error)
+      })
+      .catch((e: Error) => setChannelsError(e.message))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [binding, form.platform, form.guild_id])
+
+  const save = async () => {
+    setBusy(true)
+    setError(undefined)
+    try {
+      const body: Binding = {
+        ...form,
+        allowed_users: allowedUsers
+          .split(',')
+          .map((s) => s.trim())
+          .filter(Boolean),
+      }
+      const r = await post<{ ok: boolean; error?: string; binding?: Binding }>(
+        '/channels/bindings',
+        body,
+      )
+      if (!r.ok) {
+        setError(r.error ?? t('channels.discoverFailed'))
+        return
+      }
+      onSaved()
+      onOpenChange(false)
+    } catch (e) {
+      setError((e as Error).message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const valid =
+    form.platform === 'telegram' ? !!form.channel_id.trim() : !!form.guild_id.trim()
+
+  return (
+    <Dialog open={!!binding} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-lg">
+        <DialogHeader>
+          <DialogTitle>
+            {binding?.id ? t('channels.editBinding') : t('channels.addBinding')}
+          </DialogTitle>
+        </DialogHeader>
+        <DialogBody>
+          {/* Platform */}
+          <div className="grid gap-1.5">
+            <Label>{t('channels.bPlatform')}</Label>
+            <div className="inline-flex w-fit rounded-[var(--radius-sm)] border border-border p-0.5">
+              {(['discord', 'telegram'] as const).map((p) => (
+                <button
+                  key={p}
+                  onClick={() => update('platform', p)}
+                  className={cn(
+                    'rounded-[calc(var(--radius-sm)-2px)] px-3 py-1 text-xs font-medium transition-colors',
+                    form.platform === p
+                      ? 'bg-primary text-primary-foreground'
+                      : 'text-muted-foreground hover:text-foreground',
+                  )}
+                >
+                  {p}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {form.platform === 'discord' ? (
+            <>
+              <div className="grid gap-1.5">
+                <Label htmlFor="b-server">{t('channels.bServer')}</Label>
+                <select
+                  id="b-server"
+                  className={selectClass}
+                  value={form.guild_id}
+                  onChange={(e) => {
+                    update('guild_id', e.target.value)
+                    update('channel_id', '')
+                  }}
+                >
+                  <option value="">—</option>
+                  {guilds.map((g) => (
+                    <option key={g.id} value={g.id}>
+                      {g.name}
+                    </option>
+                  ))}
+                </select>
+                {guildsError ? (
+                  <p className="text-[11px] text-destructive">{guildsError}</p>
+                ) : null}
+              </div>
+
+              <div className="grid gap-1.5">
+                <Label htmlFor="b-channel">{t('channels.bChannel')}</Label>
+                <select
+                  id="b-channel"
+                  className={selectClass}
+                  value={form.channel_id}
+                  onChange={(e) => update('channel_id', e.target.value)}
+                  disabled={!form.guild_id}
+                >
+                  <option value="">{t('channels.bChannelAll')}</option>
+                  {channels.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      #{c.name}
+                    </option>
+                  ))}
+                </select>
+                {channelsError ? (
+                  <p className="text-[11px] text-destructive">{channelsError}</p>
+                ) : null}
+              </div>
+            </>
+          ) : (
+            <div className="grid gap-1.5">
+              <Label htmlFor="b-chatid">{t('channels.bChatId')}</Label>
+              <Input
+                id="b-chatid"
+                value={form.channel_id}
+                onChange={(e) => update('channel_id', e.target.value)}
+                placeholder="123456789"
+                className="font-mono text-xs"
+              />
+              <p className="text-[11px] text-muted-foreground">{t('channels.bChatIdHint')}</p>
+            </div>
+          )}
+
+          {/* Label */}
+          <div className="grid gap-1.5">
+            <Label htmlFor="b-label">{t('channels.bLabel')}</Label>
+            <Input
+              id="b-label"
+              value={form.label}
+              onChange={(e) => update('label', e.target.value)}
+            />
+          </div>
+
+          {/* Role */}
+          <div className="grid gap-1.5">
+            <Label htmlFor="b-role">{t('channels.bRole')}</Label>
+            <select
+              id="b-role"
+              className={selectClass}
+              value={form.role}
+              onChange={(e) => update('role', e.target.value)}
+            >
+              <option value="">{t('channels.bRoleDefault')}</option>
+              {roles.map((r) => (
+                <option key={r.name} value={r.name}>
+                  {r.title || r.name}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          {/* Model */}
+          <div className="grid gap-1.5">
+            <Label htmlFor="b-model">{t('channels.bModel')}</Label>
+            <select
+              id="b-model"
+              className={selectClass}
+              value={form.model}
+              onChange={(e) => update('model', e.target.value)}
+            >
+              <option value="">{t('channels.bModelDefault')}</option>
+              {models.map((m) => (
+                <option key={m.id} value={m.id}>
+                  {m.name} — {m.provider_label}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          {/* Toolset */}
+          <div className="grid gap-1.5">
+            <Label htmlFor="b-toolset">{t('channels.bToolset')}</Label>
+            <select
+              id="b-toolset"
+              className={selectClass}
+              value={form.toolset}
+              onChange={(e) => update('toolset', e.target.value)}
+            >
+              <option value="">{t('channels.bToolsetDefault')}</option>
+              {toolsets.map((ts) => (
+                <option key={ts} value={ts}>
+                  {ts}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          {/* Reply mode */}
+          <div className="grid gap-1.5">
+            <Label htmlFor="b-reply">{t('channels.bReplyMode')}</Label>
+            <select
+              id="b-reply"
+              className={selectClass}
+              value={form.reply_mode || 'mention'}
+              onChange={(e) => update('reply_mode', e.target.value)}
+            >
+              <option value="mention">mention</option>
+              <option value="always">always</option>
+            </select>
+          </div>
+
+          {/* Allowed users */}
+          <div className="grid gap-1.5">
+            <Label htmlFor="b-users">{t('channels.bAllowedUsers')}</Label>
+            <Input
+              id="b-users"
+              value={allowedUsers}
+              onChange={(e) => setAllowedUsers(e.target.value)}
+              className="font-mono text-xs"
+            />
+            <p className="text-[11px] text-muted-foreground">{t('channels.bAllowedUsersHint')}</p>
+          </div>
+
+          {/* Prompt prefix */}
+          <div className="grid gap-1.5">
+            <Label htmlFor="b-prefix">{t('channels.bPromptPrefix')}</Label>
+            <Textarea
+              id="b-prefix"
+              rows={2}
+              value={form.prompt_prefix}
+              onChange={(e) => update('prompt_prefix', e.target.value)}
+            />
+            <p className="text-[11px] text-muted-foreground">{t('channels.bPromptPrefixHint')}</p>
+          </div>
+
+          {/* Relevance filter */}
+          <div className="grid gap-1.5">
+            <Label htmlFor="b-relevance">{t('channels.bRelevance')}</Label>
+            <Textarea
+              id="b-relevance"
+              rows={2}
+              value={form.relevance_filter}
+              onChange={(e) => update('relevance_filter', e.target.value)}
+            />
+            <p className="text-[11px] text-muted-foreground">{t('channels.bRelevanceHint')}</p>
+          </div>
+
+          {/* Enabled */}
+          <div className="flex items-center justify-between">
+            <Label htmlFor="b-enabled">{t('channels.bEnabled')}</Label>
+            <Switch
+              id="b-enabled"
+              checked={form.enabled}
+              onCheckedChange={(v) => update('enabled', v)}
+            />
+          </div>
+
+          {error ? <p className="text-xs text-destructive">{error}</p> : null}
+        </DialogBody>
+        <DialogFooter>
+          <DialogClose asChild>
+            <Button variant="outline" size="sm">
+              {t('common.close')}
+            </Button>
+          </DialogClose>
+          <Button size="sm" disabled={!valid} loading={busy} onClick={() => void save()}>
+            {t('common.save')}
+          </Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>

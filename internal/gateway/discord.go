@@ -381,7 +381,7 @@ func (d *Discord) handleMessage(ctx context.Context, m dcMessage) {
 	}
 
 	msg := InboundMessage{
-		Platform: "discord", ChannelID: m.ChannelID, UserID: m.Author.ID,
+		Platform: "discord", ChannelID: m.ChannelID, GuildID: m.GuildID, UserID: m.Author.ID,
 		UserName: m.Author.Username, Text: text, IsDirect: isDirect, MessageID: m.ID,
 	}
 

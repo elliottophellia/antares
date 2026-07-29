@@ -307,14 +307,44 @@ func (rt *runtimeServices) handleGatewayMessage(ctx context.Context, msg gateway
 		return rt.runGatewayCommand(ctx, key, sessionID, name, args)
 	}
 
+	// Per-channel routing. When a platform has any binding, it answers ONLY in
+	// bound channels; an unbound channel is silently ignored (strict allowlist).
+	bindings := config.Get().Gateway.Bindings
+	binding := gateway.ResolveBinding(bindings, msg.Platform, msg.GuildID, msg.ChannelID)
+	if binding == nil {
+		if gateway.HasBindings(bindings, msg.Platform) {
+			return "", nil // unregistered channel — stay silent
+		}
+		// No bindings for this platform at all: fall through to the default agent.
+	} else {
+		// A per-scope allow list overrides who may use the bot here.
+		if !gateway.BindingAllowsUser(binding, msg.UserID) {
+			return "", nil
+		}
+		// Relevance gate: a cheap model call decides whether the message fits
+		// the channel's criteria before the full agent runs.
+		if strings.TrimSpace(binding.RelevanceFilter) != "" {
+			if ok := rt.messageIsRelevant(ctx, binding, msg.Text); !ok {
+				return "", nil
+			}
+		}
+	}
+
 	var reply strings.Builder
-	res, err := rt.agent.Run(ctx, agent.Request{
+	req := agent.Request{
 		SessionID: sessionID,
 		Message:   msg.Text,
 		Platform:  msg.Platform,
 		UserID:    msg.UserID,
 		ChannelID: msg.ChannelID,
-	}, func(e agent.Event) error {
+	}
+	if binding != nil {
+		req.Role = binding.Role
+		req.Model = binding.Model
+		req.Toolset = binding.Toolset
+		req.SystemExtra = strings.TrimSpace(binding.PromptPrefix)
+	}
+	res, err := rt.agent.Run(ctx, req, func(e agent.Event) error {
 		switch e.Type {
 		case agent.EventSession:
 			if e.ID != "" && e.ID != sessionID {
@@ -336,6 +366,40 @@ func (rt *runtimeServices) handleGatewayMessage(ctx context.Context, msg gateway
 		return res.Reply, nil
 	}
 	return reply.String(), nil
+}
+
+// messageIsRelevant runs a cheap, quiet one-shot classification: does the
+// message fit the channel binding's relevance criteria? It keeps a busy channel
+// quiet — the bot answers on-topic questions and ignores chatter — without
+// paying for a full agent turn. On any error it fails OPEN (answers), so a
+// classifier hiccup never makes the bot go mute.
+func (rt *runtimeServices) messageIsRelevant(ctx context.Context, b *config.Binding, text string) bool {
+	prompt := "You are a message filter for a chat bot. Criteria for messages worth answering:\n" +
+		strings.TrimSpace(b.RelevanceFilter) +
+		"\n\nMessage:\n" + strings.TrimSpace(text) +
+		"\n\nDoes this message fit the criteria and deserve a reply? Answer with exactly one word: YES or NO."
+
+	var out strings.Builder
+	_, err := rt.agent.Run(ctx, agent.Request{
+		Message:         prompt,
+		Model:           b.Model, // use the binding's model (or default) for the gate
+		Toolset:         "minimal",
+		Quiet:           true,
+		MaxTurns:        1,
+		ReasoningEffort: "low",
+	}, func(e agent.Event) error {
+		if e.Type == agent.EventText {
+			out.WriteString(e.Delta)
+		}
+		return nil
+	})
+	if err != nil {
+		slog.Warn("relevance gate failed, answering anyway", "error", err)
+		return true
+	}
+	ans := strings.ToUpper(strings.TrimSpace(out.String()))
+	// Fail open: only a clear NO suppresses the reply.
+	return !strings.HasPrefix(ans, "NO")
 }
 
 // runGatewayCommand answers a slash command typed in a chat platform. The few

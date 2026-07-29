@@ -21,9 +21,12 @@ import (
 type InboundMessage struct {
 	Platform  string
 	ChannelID string
-	UserID    string
-	UserName  string
-	Text      string
+	// GuildID is the server a channel belongs to (Discord). Empty for platforms
+	// without a server concept (Telegram) and for direct messages.
+	GuildID  string
+	UserID   string
+	UserName string
+	Text     string
 	// IsDirect marks a 1:1 chat, where the agent replies without being addressed.
 	IsDirect bool
 	// MessageID lets adapters edit their own reply while streaming.

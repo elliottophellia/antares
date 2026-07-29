@@ -368,6 +368,34 @@ type Gateway struct {
 	Signal   Signal   `yaml:"signal" json:"signal"`
 	WhatsApp WhatsApp `yaml:"whatsapp" json:"whatsapp"`
 	Feishu   Feishu   `yaml:"feishu" json:"feishu"`
+	// Bindings route a specific server/channel to a specific agent, model, and
+	// policy. When any binding exists for a platform, that platform answers ONLY
+	// in bound channels — an unbound channel is ignored (a strict allowlist).
+	Bindings []Binding `yaml:"bindings" json:"bindings"`
+}
+
+// Binding is a per-scope routing and policy rule for a messaging channel. The
+// most specific match wins: a rule naming both guild and channel beats one
+// naming only the guild, which beats a platform-wide rule.
+type Binding struct {
+	ID        string `yaml:"id" json:"id"`
+	Platform  string `yaml:"platform" json:"platform"`   // discord|telegram
+	GuildID   string `yaml:"guild_id" json:"guild_id"`   // discord server; empty = any
+	ChannelID string `yaml:"channel_id" json:"channel_id"` // channel/chat id; empty = any in guild
+	Label     string `yaml:"label" json:"label"`         // human label for the UI
+	Enabled   bool   `yaml:"enabled" json:"enabled"`
+
+	// Policy applied when this binding matches.
+	Role         string   `yaml:"role" json:"role"`                   // agent/role name; empty = default
+	Model        string   `yaml:"model" json:"model"`                 // model override; empty = default
+	Toolset      string   `yaml:"toolset" json:"toolset"`             // toolset override; empty = role/default
+	AllowedUsers []string `yaml:"allowed_users" json:"allowed_users"` // platform user ids; empty = anyone paired
+	ReplyMode    string   `yaml:"reply_mode" json:"reply_mode"`       // mention|always (groups only)
+	PromptPrefix string   `yaml:"prompt_prefix" json:"prompt_prefix"` // appended to the system prompt
+	// RelevanceFilter, when set, gates messages: a cheap model call decides
+	// whether the message fits the criteria before the full agent runs. Empty
+	// answers everything.
+	RelevanceFilter string `yaml:"relevance_filter" json:"relevance_filter"`
 }
 
 // Signal talks to a signal-cli REST API daemon (bbernhard/signal-cli-rest-api),
