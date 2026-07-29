@@ -499,6 +499,7 @@ func (s *Server) handleListChannels(w http.ResponseWriter, r *http.Request) {
 		Configured bool           `json:"configured"`
 		HasToken   bool           `json:"has_token"` // kept for backward compatibility
 		BotName    string         `json:"bot_name,omitempty"`
+		ReplyStyle string         `json:"reply_style,omitempty"`
 		Detail     string         `json:"detail"`
 		Docs       string         `json:"docs,omitempty"`
 		Fields     []channelField `json:"fields"`
@@ -515,10 +516,18 @@ func (s *Server) handleListChannels(w http.ResponseWriter, r *http.Request) {
 		if s.db != nil {
 			botName, _ = s.db.GetKV(r.Context(), "channel_botname:"+spec.ID)
 		}
+		replyStyle := ""
+		if spec.ID == "discord" {
+			replyStyle = cfg.Gateway.Discord.ReplyStyle
+			if replyStyle == "" {
+				replyStyle = "embed"
+			}
+		}
 		out = append(out, channel{
 			ID: spec.ID, Label: spec.Label, Detail: spec.Detail, Docs: spec.Docs,
 			Enabled: channelEnabled(cfg, spec.ID), Connected: live[spec.ID],
-			Configured: configured, HasToken: configured, BotName: botName, Fields: fields,
+			Configured: configured, HasToken: configured, BotName: botName,
+			ReplyStyle: replyStyle, Fields: fields,
 		})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"channels": out, "pairings": pairings})

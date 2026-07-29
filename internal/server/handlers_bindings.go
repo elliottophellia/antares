@@ -81,6 +81,47 @@ func (s *Server) handleChannelCommands(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
+// handleSetChannelStyle sets how a channel renders replies. Currently only
+// Discord distinguishes styles ("plain" vs "embed"); the value is written to
+// config and the gateway reconnects so it takes effect at once.
+func (s *Server) handleSetChannelStyle(w http.ResponseWriter, r *http.Request) {
+	id := strings.ToLower(r.PathValue("id"))
+	var body struct {
+		Style string `json:"style"`
+	}
+	if err := decodeBody(r, &body); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	style := strings.ToLower(strings.TrimSpace(body.Style))
+	if style != "plain" && style != "embed" {
+		writeError(w, http.StatusBadRequest, errors.New("style must be plain or embed"))
+		return
+	}
+	if id != "discord" {
+		writeError(w, http.StatusBadRequest, errors.New("reply style is only configurable for discord"))
+		return
+	}
+	cfg, err := config.Reload()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	cfg.Gateway.Discord.ReplyStyle = style
+	if err := config.Save(cfg); err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	if err := s.applyReload(); err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	if s.gateway != nil {
+		_ = s.gateway.Sync(id)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "style": style})
+}
+
 // handleListBindings returns the configured routing bindings.
 func (s *Server) handleListBindings(w http.ResponseWriter, r *http.Request) {
 	bindings := s.config().Gateway.Bindings

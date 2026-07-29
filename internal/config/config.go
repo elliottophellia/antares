@@ -475,6 +475,9 @@ type Discord struct {
 	AllowedGuilds  []string `yaml:"allowed_guilds" json:"allowed_guilds"`
 	RequirePairing bool     `yaml:"require_pairing" json:"require_pairing"`
 	Intents        int      `yaml:"intents" json:"intents"`
+	// ReplyStyle is how the bot renders answers: "embed" (coloured card, the
+	// default) or "plain" (a normal message). Empty means embed.
+	ReplyStyle string `yaml:"reply_style" json:"reply_style"`
 }
 
 // Delegation bounds subagent recursion.

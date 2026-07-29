@@ -64,6 +64,7 @@ interface Channel {
   detail: string
   docs?: string
   bot_name?: string
+  reply_style?: string
   fields: ChannelField[]
 }
 
@@ -474,8 +475,9 @@ function ChannelSettingsDialog({
   onOpenChange: (open: boolean) => void
 }) {
   const { t } = useI18n()
-  const [subTab, setSubTab] = useState<'routing' | 'commands'>('routing')
+  const [subTab, setSubTab] = useState<'routing' | 'commands' | 'appearance'>('routing')
   const platform = channel?.id === 'telegram' ? 'telegram' : 'discord'
+  const isDiscord = channel?.id === 'discord'
 
   useEffect(() => {
     if (channel) setSubTab('routing')
@@ -490,14 +492,19 @@ function ChannelSettingsDialog({
           </DialogTitle>
         </DialogHeader>
         <DialogBody>
-          <Tabs value={subTab} onValueChange={(v) => setSubTab(v as 'routing' | 'commands')}>
+          <Tabs value={subTab} onValueChange={(v) => setSubTab(v as typeof subTab)}>
             <TabsList className="mb-3">
               <TabsTrigger value="routing">{t('channels.tabRouting')}</TabsTrigger>
               <TabsTrigger value="commands">{t('channels.tabCommands')}</TabsTrigger>
+              {isDiscord ? (
+                <TabsTrigger value="appearance">{t('channels.tabAppearance')}</TabsTrigger>
+              ) : null}
             </TabsList>
           </Tabs>
           {subTab === 'routing' ? (
             <RoutingPanel platform={platform} />
+          ) : subTab === 'appearance' && channel ? (
+            <AppearancePanel id={channel.id} current={channel.reply_style ?? 'embed'} />
           ) : channel ? (
             <CommandsPanel id={channel.id} />
           ) : null}
@@ -571,6 +578,63 @@ function CommandsPanel({ id }: { id: string }) {
         <p className="text-[11px] leading-relaxed text-muted-foreground">
           {t('channels.cmdClearHint')}
         </p>
+      </div>
+      {note ? <p className="text-xs text-muted-foreground">{note}</p> : null}
+    </div>
+  )
+}
+
+/**
+ * Reply style: how Discord answers are rendered — a coloured embed card or a
+ * plain message. Plain gets a blank first line so text sits under the bot name.
+ */
+function AppearancePanel({ id, current }: { id: string; current: string }) {
+  const { t } = useI18n()
+  const [style, setStyle] = useState(current === 'plain' ? 'plain' : 'embed')
+  const [busy, setBusy] = useState(false)
+  const [note, setNote] = useState('')
+
+  const choose = async (next: 'plain' | 'embed') => {
+    if (next === style) return
+    setStyle(next)
+    setBusy(true)
+    setNote('')
+    try {
+      const r = await post<{ ok: boolean; error?: string }>(`/channels/${id}/style`, { style: next })
+      setNote(r.ok ? t('channels.styleSaved') : r.error || t('channels.styleFailed'))
+    } catch (e) {
+      setNote((e as Error).message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const options: { value: 'plain' | 'embed'; label: string; desc: string }[] = [
+    { value: 'embed', label: t('channels.styleEmbed'), desc: t('channels.styleEmbedDesc') },
+    { value: 'plain', label: t('channels.stylePlain'), desc: t('channels.stylePlainDesc') },
+  ]
+
+  return (
+    <div className="space-y-3">
+      <Label>{t('channels.replyStyle')}</Label>
+      <div className="grid gap-2 sm:grid-cols-2">
+        {options.map((o) => (
+          <button
+            key={o.value}
+            disabled={busy}
+            onClick={() => void choose(o.value)}
+            className={cn(
+              'rounded-[var(--radius-md)] border p-3 text-left transition-colors',
+              style === o.value ? 'border-primary bg-primary/8' : 'border-border hover:border-primary/40',
+            )}
+          >
+            <div className="flex items-center gap-2 text-sm font-medium">
+              {style === o.value ? <CheckCircle className="size-4 text-primary" weight="fill" /> : null}
+              {o.label}
+            </div>
+            <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">{o.desc}</p>
+          </button>
+        ))}
       </div>
       {note ? <p className="text-xs text-muted-foreground">{note}</p> : null}
     </div>

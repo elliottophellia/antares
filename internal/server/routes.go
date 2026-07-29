@@ -180,6 +180,7 @@ func (s *Server) routes() {
 	m.HandleFunc("POST /api/channels/bindings", s.handleSaveBinding)
 	m.HandleFunc("DELETE /api/channels/bindings/{id}", s.handleDeleteBinding)
 	m.HandleFunc("POST /api/channels/{id}/commands/{action}", s.handleChannelCommands)
+	m.HandleFunc("POST /api/channels/{id}/style", s.handleSetChannelStyle)
 
 	m.HandleFunc("GET /api/autopilot", s.handleAutopilotList)
 	m.HandleFunc("POST /api/autopilot", s.handleAutopilotAdd)

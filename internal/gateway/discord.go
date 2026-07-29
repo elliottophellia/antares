@@ -427,21 +427,26 @@ func (d *Discord) handleInteraction(ctx context.Context, it dcInteraction) {
 		reply = "(no reply)"
 	}
 
-	// Answer the deferred interaction with coloured embeds, matching the look of
-	// an ordinary message reply. Edit the original with the first part, follow
-	// up with the rest.
-	parts := splitForEmbed(reply)
+	// Answer the deferred interaction in the channel's configured style. Edit
+	// the original with the first part, follow up with the rest.
+	plain := strings.EqualFold(d.cfg.ReplyStyle, "plain")
+	splitter := splitForEmbed
+	if plain {
+		splitter = splitForDiscord
+	}
+	parts := splitter(reply)
 	if len(parts) == 0 {
 		parts = []string{"(no reply)"}
 	}
-	embed := func(part string) []map[string]any {
-		return []map[string]any{{"description": part, "color": embedColor(kind)}}
+	body := func(part string) map[string]any {
+		if plain {
+			return map[string]any{"content": part}
+		}
+		return map[string]any{"embeds": []map[string]any{{"description": part, "color": embedColor(kind)}}}
 	}
-	_ = d.rest(ctx, "PATCH", "/webhooks/"+d.appID()+"/"+it.Token+"/messages/@original",
-		map[string]any{"embeds": embed(parts[0])}, nil)
+	_ = d.rest(ctx, "PATCH", "/webhooks/"+d.appID()+"/"+it.Token+"/messages/@original", body(parts[0]), nil)
 	for _, part := range parts[1:] {
-		_ = d.rest(ctx, "POST", "/webhooks/"+d.appID()+"/"+it.Token,
-			map[string]any{"embeds": embed(part)}, nil)
+		_ = d.rest(ctx, "POST", "/webhooks/"+d.appID()+"/"+it.Token, body(part), nil)
 	}
 }
 
@@ -534,9 +539,7 @@ func (d *Discord) handleMessage(ctx context.Context, m dcMessage) {
 	if strings.TrimSpace(reply) == "" {
 		reply = "(no reply)"
 	}
-	// Every answer is a coloured embed: the content sits in its own card under
-	// the bot name, and the colour signals normal vs error at a glance.
-	if e := d.sendEmbeds(ctx, m.ChannelID, reply, kind); e != nil {
+	if e := d.sendReply(ctx, m.ChannelID, reply, kind); e != nil {
 		slog.Warn("discord: send failed", "error", e)
 	}
 }
@@ -591,6 +594,31 @@ func embedColor(k embedKind) int {
 // embedLimit is Discord's per-embed description cap. Content messages cap at
 // 2000; an embed description allows up to 4096.
 const embedLimit = 4000
+
+// sendReply renders a reply according to the channel's configured style:
+// "plain" (a normal message) or "embed" (a coloured card, the default).
+func (d *Discord) sendReply(ctx context.Context, channelID, text string, kind embedKind) error {
+	if strings.EqualFold(d.cfg.ReplyStyle, "plain") {
+		return d.sendPlain(ctx, channelID, text)
+	}
+	return d.sendEmbeds(ctx, channelID, text, kind)
+}
+
+// sendPlain posts the reply as ordinary messages. Discord renders the first
+// line beside the author name, so a leading zero-width space + newline pushes
+// the content onto its own line under the name. Only the first chunk needs it.
+func (d *Discord) sendPlain(ctx context.Context, channelID, text string) error {
+	chunks := splitForDiscord(text)
+	for i, chunk := range chunks {
+		if i == 0 {
+			chunk = "​\n" + chunk
+		}
+		if _, err := d.Send(ctx, Reply{ChannelID: channelID, Text: chunk}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
 
 // sendEmbeds posts a reply as one or more coloured embeds. Long text is split
 // on the embed limit (without cutting fenced code blocks apart); each part is
