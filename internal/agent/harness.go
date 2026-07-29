@@ -793,10 +793,21 @@ func trackSubAgent(role, task, parent string) (string, func()) {
 
 // ActiveAgents lists the sub-agents running now, oldest first.
 func (a *Agent) ActiveAgents() []ActiveAgent {
+	return a.ActiveAgentsFor("")
+}
+
+// ActiveAgentsFor lists the sub-agents running now for one delegating session,
+// oldest first. An empty parent returns all of them (the process-wide view). A
+// non-empty parent scopes the list so one chat only sees the sub-agents IT
+// spawned — otherwise a workers running for an old session leak into a new one.
+func (a *Agent) ActiveAgentsFor(parent string) []ActiveAgent {
 	swarm.mu.Lock()
 	defer swarm.mu.Unlock()
 	out := make([]ActiveAgent, 0, len(swarm.agents))
 	for _, ag := range swarm.agents {
+		if parent != "" && ag.Parent != parent {
+			continue
+		}
 		out = append(out, ag)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].StartedAt.Before(out[j].StartedAt) })

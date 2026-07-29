@@ -235,7 +235,8 @@ function Inline({ text }: { text: string }) {
           rel="noreferrer noopener"
           className="text-primary underline underline-offset-2"
         >
-          {link[1]}
+          {/* Recurse so bold/code inside a link label renders, not raw **. */}
+          <Inline text={link[1]} />
         </a>,
       )
     } else if (token.startsWith('http')) {

@@ -13,6 +13,9 @@ import (
 // ends. This drives the "Sub-agents" tab so it tracks the swarm live without
 // polling.
 func (s *Server) handleSwarmStream(w http.ResponseWriter, r *http.Request) {
+	// Scope to the delegating session so a chat only sees the sub-agents it
+	// spawned; without this, workers from another session leak into this list.
+	session := r.URL.Query().Get("session")
 	sse, err := newSSE(w)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
@@ -22,7 +25,7 @@ func (s *Server) handleSwarmStream(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 
 	send := func() error {
-		return sse.send(map[string]any{"active": s.agent.ActiveAgents()})
+		return sse.send(map[string]any{"active": s.agent.ActiveAgentsFor(session)})
 	}
 	if err := send(); err != nil {
 		return

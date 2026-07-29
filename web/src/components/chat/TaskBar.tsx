@@ -42,25 +42,36 @@ const glyph = (status: string, live: boolean) =>
 export function TaskBar({
   tasks,
   live = false,
+  session,
   onOpenSubAgent,
 }: {
   tasks: TodoItem[]
   live?: boolean
+  // The current chat session, so the sub-agent list is scoped to workers THIS
+  // session spawned — otherwise another session's sub-agents leak in.
+  session?: string
   onOpenSubAgent?: (agent: ActiveAgent) => void
 }) {
   const { t } = useI18n()
   const [open, setOpen] = useState(false)
   const [tab, setTab] = useState<'tasks' | 'agents'>('tasks')
 
-  // Subscribe to the swarm so the sub-agent list tracks who is running live.
+  // Subscribe to the swarm so the sub-agent list tracks who is running live,
+  // scoped to this session. A session with no id yet (brand-new chat) has no
+  // sub-agents of its own, so skip the subscription and show none.
   const [agents, setAgents] = useState<ActiveAgent[]>([])
   useEffect(() => {
-    const close = streamGet('/swarm/stream', (e: StreamEvent) => {
-      const list = (e as unknown as { active?: ActiveAgent[] }).active
-      if (list) setAgents(list)
-    })
+    setAgents([])
+    if (!session) return
+    const close = streamGet(
+      `/swarm/stream?session=${encodeURIComponent(session)}`,
+      (e: StreamEvent) => {
+        const list = (e as unknown as { active?: ActiveAgent[] }).active
+        if (list) setAgents(list)
+      },
+    )
     return close
-  }, [])
+  }, [session])
 
   // Nothing to show at all: no tasks and no sub-agents. Stay out of the way.
   if (tasks.length === 0 && agents.length === 0) return null

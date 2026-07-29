@@ -851,7 +851,12 @@ export default function ChatPage() {
         }
         topSlot={
           withTasks ? (
-            <TaskBar tasks={tasks} live={streaming} onOpenSubAgent={setViewingAgent} />
+            <TaskBar
+              tasks={tasks}
+              live={streaming}
+              session={sessionId}
+              onOpenSubAgent={setViewingAgent}
+            />
           ) : undefined
         }
       />
