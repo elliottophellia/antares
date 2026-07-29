@@ -112,7 +112,10 @@ func Default() *Config {
 			CreationNudgeInterval: 25, AutoCreate: true,
 		},
 		Cron:          Cron{Enabled: true, Timezone: "Local", MaxConcurrent: 3, HistoryLimit: 200},
-		Gateway:       Gateway{Enabled: false, Telegram: Telegram{RequirePairing: true, StreamEdits: true}, Discord: Discord{RequirePairing: true, Intents: 33280}},
+		// Discord.Intents left 0 so the adapter applies its own DefaultIntents
+		// (guild messages + message content + direct messages). A hardcoded value
+		// here once dropped DIRECT_MESSAGES and broke DMs.
+		Gateway:       Gateway{Enabled: false, Telegram: Telegram{RequirePairing: true, StreamEdits: true}, Discord: Discord{RequirePairing: true}},
 		Delegation:    Delegation{Enabled: true, MaxIterations: 40, MaxDepth: 2, MaxParallel: 4},
 		CodeExecution: CodeExecution{Enabled: true, Timeout: 120, MaxToolCalls: 50},
 		Guardrails:    Guardrails{WarningsEnabled: true, HardStopEnabled: true, WarnAfter: 25, HardStopAfter: 60},

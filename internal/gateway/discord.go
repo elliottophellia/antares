@@ -456,6 +456,10 @@ func (d *Discord) handleMessage(ctx context.Context, m dcMessage) {
 	}
 	text := strings.TrimSpace(m.Content)
 	if text == "" {
+		// An empty content on a real user message almost always means the
+		// Message Content Intent is off in the Developer Portal.
+		slog.Warn("discord: received a message with empty content — enable Message Content Intent in the Developer Portal",
+			"channel", m.ChannelID, "guild", m.GuildID)
 		return
 	}
 
@@ -470,6 +474,8 @@ func (d *Discord) handleMessage(ctx context.Context, m dcMessage) {
 			}
 		}
 		if !mentioned {
+			slog.Debug("discord: ignoring un-addressed guild message (mention the bot to talk in a server)",
+				"channel", m.ChannelID)
 			return
 		}
 		text = strings.TrimSpace(strings.NewReplacer(
@@ -520,12 +526,12 @@ func (d *Discord) handleMessage(ctx context.Context, m dcMessage) {
 		reply = "(no reply)"
 	}
 
-	for i, chunk := range splitForDiscord(reply) {
-		out := Reply{ChannelID: m.ChannelID, Text: chunk}
-		if i == 0 {
-			out.ReplyTo = m.ID
-		}
-		if _, err := d.Send(ctx, out); err != nil {
+	// Post as a normal message rather than a reply-reference: a reply renders
+	// the first line inline beside the bot's name, which reads badly for a long
+	// answer. A plain message puts the whole reply on its own lines under the
+	// name.
+	for _, chunk := range splitForDiscord(reply) {
+		if _, err := d.Send(ctx, Reply{ChannelID: m.ChannelID, Text: chunk}); err != nil {
 			slog.Warn("discord: send failed", "error", err)
 			return
 		}
