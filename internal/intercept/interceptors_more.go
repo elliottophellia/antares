@@ -16,6 +16,7 @@ import (
 func OtherInterceptors() []Interceptor {
 	return []Interceptor{
 		&terminalInterceptor{},
+		&androidInterceptor{}, // real implementation (see android.go)
 		&gatedInterceptor{
 			id: "firefox", label: "Firefox", category: "browser", tool: "certutil",
 			hint: "Firefox interception needs the NSS 'certutil' tool (libnss3-tools / brew install nss) to trust the CA in its profile.",
@@ -24,10 +25,6 @@ func OtherInterceptors() []Interceptor {
 			id: "electron", label: "Electron app", category: "app", tool: "",
 			hint: "Electron interception attaches to a Node inspector (--inspect-brk); packaged/fused apps can't be hooked. Not yet enabled in this build.",
 			always: true,
-		},
-		&gatedInterceptor{
-			id: "android", label: "Android device", category: "mobile", tool: "adb",
-			hint: "Android interception needs 'adb' (Android platform-tools: brew install android-platform-tools). Unrooted devices intercept only user-cert-trusting apps.",
 		},
 		&gatedInterceptor{
 			id: "docker", label: "Docker container", category: "container", tool: "docker",

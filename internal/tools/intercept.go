@@ -76,6 +76,11 @@ func InterceptActivate(ctx context.Context, id string, extra map[string]any) (in
 		return nil, fmt.Errorf("%s", reason)
 	}
 	_, addr := p.Status()
+	if extra == nil {
+		extra = map[string]any{}
+	}
+	// The Android interceptor's root cert-push needs the CA subject hash.
+	extra["subject_hash"] = intercept.SubjectHashOld(p.CA().Cert())
 	sess, err := ic.Activate(ctx, intercept.ActivateOpts{
 		ProxyAddr:       addr,
 		CACertPath:      config.Path("intercept", "ca-cert.pem"),
@@ -93,9 +98,14 @@ type interceptTool struct{}
 
 func (interceptTool) Name() string { return "intercept" }
 func (interceptTool) Description() string {
-	return "Run and inspect a man-in-the-middle HTTP(S) proxy for authorized debugging/testing of properties " +
-		"you control. Start it, point a browser or app at it (and trust the antares CA), then list captured " +
-		"request/response exchanges, inspect one, or add rules that block or mock matching requests."
+	return "Man-in-the-middle HTTP(S) proxy for authorized debugging/testing of properties you control. Actions:\n" +
+		"- Proxy: `start` (begin listening), `stop`, `status`, `clear` (empty the capture log).\n" +
+		"- Traffic: `list` (recent exchanges, newest first), `get` (one exchange by id — full headers+bodies).\n" +
+		"- Rules (shape traffic by URL substring): `rule_add` with match + one of block=true / mock_status+mock_body / breakpoint=true; `rule_list`; `rule_delete`.\n" +
+		"- Breakpoints (from a breakpoint rule): `bp_list` shows paused requests; `bp_resume` id=<id> forwards it; `bp_abort` id=<id> refuses it.\n" +
+		"- Trust the CA: `ca` prints the cert path; `cert_install` prints ready per-OS trust commands (macOS/Linux/Windows/Firefox-NSS/Android).\n" +
+		"- Interceptors (hook a real client to the proxy, auto-starting it): `interceptors` lists them with availability; `activate` interceptor=<id> (e.g. fresh-chrome opens a throwaway Chrome already trusting the proxy; terminal returns the env exports to paste; android sets the device proxy over adb and, if rooted, pushes the CA); `deactivate` session=<id>.\n" +
+		"Use it to observe, block, mock, or pause-and-edit a target's requests, or to launch/point a client through the proxy."
 }
 func (interceptTool) Schema() map[string]any {
 	return schema(map[string]any{
