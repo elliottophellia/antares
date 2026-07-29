@@ -330,6 +330,9 @@ type OSINT struct {
 	// profile (GHunt-style). Optional and ToS-sensitive: supplying your own
 	// session cookie is your decision. Empty disables the tool with a hint.
 	GoogleCookie string `yaml:"google_cookie" json:"google_cookie"`
+	// GoogleAuthUser selects which account in a multi-account cookie session the
+	// Google lookups act as — the /u/<N>/ index. 0 is the default account.
+	GoogleAuthUser int `yaml:"google_authuser" json:"google_authuser"`
 }
 
 // Roles configures the specialist agent roles.

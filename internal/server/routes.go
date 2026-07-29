@@ -128,6 +128,10 @@ func (s *Server) routes() {
 	m.HandleFunc("POST /api/cron/jobs/{id}/toggle", s.handleToggleCron)
 	m.HandleFunc("POST /api/cron/jobs/{id}/run", s.handleRunCron)
 	m.HandleFunc("GET /api/cron/jobs/{id}/runs", s.handleCronRuns)
+	// OSINT
+	m.HandleFunc("POST /api/osint/google/verify", s.handleGoogleVerify)
+	m.HandleFunc("POST /api/osint/google/select", s.handleGoogleSelect)
+
 	// MCP
 	m.HandleFunc("GET /api/mcp", s.handleMCPStatus)
 	m.HandleFunc("POST /api/mcp/servers", s.handleAddMCPServer)
