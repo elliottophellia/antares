@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Broom, Pause, Play, Terminal } from '@phosphor-icons/react'
+import { Broom, DownloadSimple, Pause, Play, Terminal } from '@phosphor-icons/react'
 import { get } from '@/lib/api'
 import { cn } from '@/lib/utils'
 import { PageLayout } from '@/components/layout/PageLayout'
@@ -25,6 +25,13 @@ const LEVEL_TONE: Record<string, string> = {
   ERROR: 'text-destructive',
 }
 
+const LEVEL_DOT: Record<string, string> = {
+  DEBUG: 'bg-muted-foreground',
+  INFO: 'bg-[var(--success)]',
+  WARN: 'bg-[var(--warning)]',
+  ERROR: 'bg-destructive',
+}
+
 export default function LogsPage() {
   const { t, locale } = useI18n()
   const timeAgo = useTimeAgo()
@@ -40,6 +47,10 @@ export default function LogsPage() {
       <Button variant="outline" size="sm" onClick={() => setLive((v) => !v)} className="gap-1.5">
         {live ? <Pause className="size-4" /> : <Play className="size-4" />}
         {live ? t('common.pause') : t('common.resume')}
+      </Button>
+      <Button variant="outline" size="sm" onClick={() => download()} className="gap-1.5">
+        <DownloadSimple className="size-4" />
+        <span className="hidden sm:inline">{t('logs.download')}</span>
       </Button>
       <Button variant="outline" size="sm" onClick={() => setEntries([])} className="gap-1.5">
         <Broom className="size-4" />
@@ -82,17 +93,64 @@ export default function LogsPage() {
     return entries.filter((e) => e.message.toLowerCase().includes(q))
   }, [entries, filter])
 
+  // Count entries per level for the tab badges (from the full unfiltered set).
+  const counts = useMemo(() => {
+    const c: Record<string, number> = {}
+    for (const e of entries) c[e.level] = (c[e.level] ?? 0) + 1
+    return c
+  }, [entries])
+
+  // Download the currently visible lines as a plain text file, client-side.
+  const download = () => {
+    const text = visible
+      .map((e) => {
+        const attrs = e.attrs
+          ? ' ' +
+            Object.entries(e.attrs)
+              .map(([k, v]) => `${k}=${String(v)}`)
+              .join(' ')
+          : ''
+        return `${e.time} ${e.level} ${e.message}${attrs}`
+      })
+      .join('\n')
+    const url = URL.createObjectURL(new Blob([text], { type: 'text/plain' }))
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `antares-logs-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')}.log`
+    document.body.appendChild(a)
+    a.click()
+    a.remove()
+    URL.revokeObjectURL(url)
+  }
+
   return (
     <PageLayout
       header={
         <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
           <Tabs value={level} onValueChange={setLevel}>
             <TabsList>
-              {LEVELS.map((l) => (
-                <TabsTrigger key={l} value={l}>
-                  {l}
-                </TabsTrigger>
-              ))}
+              {LEVELS.map((l) => {
+                const n = l === 'ALL' ? entries.length : (counts[l] ?? 0)
+                return (
+                  <TabsTrigger key={l} value={l} className="gap-1.5">
+                    {l}
+                    {n > 0 ? (
+                      <span
+                        className={cn(
+                          'rounded-full px-1.5 text-[10px] font-medium tabular-nums',
+                          l === 'ERROR' && counts.ERROR
+                            ? 'bg-destructive/15 text-destructive'
+                            : l === 'WARN' && counts.WARN
+                              ? 'bg-[var(--warning)]/15 text-[var(--warning)]'
+                              : 'bg-muted text-muted-foreground',
+                        )}
+                      >
+                        {n}
+                      </span>
+                    ) : null}
+                  </TabsTrigger>
+                )
+              })}
             </TabsList>
           </Tabs>
           <Input
@@ -116,7 +174,13 @@ export default function LogsPage() {
         <div className="overflow-hidden rounded-[var(--radius-lg)] border border-border bg-card">
           <div className="p-3 font-mono text-[11px] leading-relaxed">
             {visible.map((e, i) => (
-              <div key={i} className="flex gap-2 py-0.5">
+              <div key={i} className="flex items-baseline gap-2 py-0.5">
+                <span
+                  className={cn(
+                    'mt-1.5 size-1.5 shrink-0 self-start rounded-full',
+                    LEVEL_DOT[e.level] ?? 'bg-muted-foreground',
+                  )}
+                />
                 <span className="shrink-0 text-muted-foreground">
                   {new Date(e.time).toLocaleTimeString(locale, { hour12: false })}
                 </span>

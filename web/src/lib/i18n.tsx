@@ -561,6 +561,7 @@ const en = {
   'logs.desc': 'Live Antares runtime log.',
   'logs.filterPlaceholder': 'Filter messages…',
   'logs.none': 'No log entries yet',
+  'logs.download': 'Download',
   'logs.lines': '{n} lines · updated {time}',
 
   'config.essentials': 'Essentials',
@@ -1178,6 +1179,7 @@ const id: Dict = {
   'logs.desc': 'Aliran log runtime Antares.',
   'logs.filterPlaceholder': 'Saring pesan…',
   'logs.none': 'Belum ada log',
+  'logs.download': 'Unduh',
   'logs.lines': '{n} baris · diperbarui {time}',
 
   'config.essentials': 'Yang penting',
@@ -1726,6 +1728,7 @@ const ja: Dict = {
   'logs.desc': 'Antares ランタイムのログ。',
   'logs.filterPlaceholder': 'メッセージを絞り込み…',
   'logs.none': 'ログがありません',
+  'logs.download': 'ダウンロード',
   'logs.lines': '{n} 行 · 更新 {time}',
 
   'config.essentials': '基本設定',
@@ -2266,6 +2269,7 @@ const zh: Dict = {
   'logs.desc': 'Antares 运行时日志。',
   'logs.filterPlaceholder': '筛选消息…',
   'logs.none': '还没有日志',
+  'logs.download': '下载',
   'logs.lines': '{n} 行 · 更新于 {time}',
 
   'config.essentials': '核心设置',
@@ -2809,6 +2813,7 @@ const ru: Dict = {
   'logs.desc': 'Поток логов Antares.',
   'logs.filterPlaceholder': 'Фильтр сообщений…',
   'logs.none': 'Записей пока нет',
+  'logs.download': 'Скачать',
   'logs.lines': 'строк: {n} · обновлено {time}',
 
   'config.essentials': 'Основное',
