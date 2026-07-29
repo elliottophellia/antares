@@ -15,20 +15,21 @@ import (
 	"github.com/enowdev/antares/internal/config"
 )
 
-// The Proxies API is a global proxy store: a list of named HTTP/SOCKS proxies
-// plus which one is "active". Features that can route through a proxy
-// (osint_email_full, the browser, …) read the active entry via
-// config.ActiveProxyURL() rather than each holding its own proxy setting.
+// The Proxies API is a global proxy store: a list of named HTTP/SOCKS proxies,
+// nothing more. It does not decide when a proxy is used — a tool or the agent
+// picks an entry by id/label (config.Proxies.Find) when it wants one, e.g. the
+// list_proxies tool and osint_email_full's optional `proxy` argument.
 
 // handleListProxies returns the saved proxies (passwords masked) and the active
-// id, so the dashboard can render the store and highlight the selected one.
+// so the dashboard can render the store. Proxies is pure storage — there is no
+// "active" one; a tool or the agent picks an entry by id when it wants a proxy.
 func (s *Server) handleListProxies(w http.ResponseWriter, r *http.Request) {
 	cfg := s.config()
 	out := make([]map[string]any, 0, len(cfg.Proxies.Entries))
 	for _, e := range cfg.Proxies.Entries {
 		out = append(out, proxyView(e))
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"active": cfg.Proxies.Active, "entries": out})
+	writeJSON(w, http.StatusOK, map[string]any{"entries": out})
 }
 
 // proxyView renders one entry for the API with its password masked; the URL is
@@ -82,7 +83,6 @@ func (s *Server) handleAddProxy(w http.ResponseWriter, r *http.Request) {
 		Username string `json:"username"`
 		Password string `json:"password"`
 		URL      string `json:"url"`
-		Active   *bool  `json:"active"` // when true, also make this the active proxy
 	}
 	if err := decodeBody(r, &body); err != nil {
 		writeError(w, http.StatusBadRequest, err)
@@ -135,9 +135,6 @@ func (s *Server) handleAddProxy(w http.ResponseWriter, r *http.Request) {
 		}
 		cfg.Proxies.Entries = append(cfg.Proxies.Entries, entry)
 	}
-	if body.Active != nil && *body.Active {
-		cfg.Proxies.Active = entry.ID
-	}
 
 	if err := config.Save(cfg); err != nil {
 		writeError(w, http.StatusInternalServerError, err)
@@ -147,11 +144,69 @@ func (s *Server) handleAddProxy(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "id": entry.ID, "active": cfg.Proxies.Active})
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "id": entry.ID})
 }
 
-// handleDeleteProxy removes an entry; if it was the active one, the store falls
-// back to no proxy (direct).
+// handleBatchAddProxy parses a pasted list of proxies (one per line, any of the
+// forms config.ParseProxyLine accepts) and appends the valid ones. It reports
+// how many were added and which lines failed, so a bad line never silently
+// vanishes.
+func (s *Server) handleBatchAddProxy(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Text string `json:"text"`
+	}
+	if err := decodeBody(r, &body); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+
+	cfg, err := config.Reload()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+
+	// De-dupe against what's already stored, by dial URL.
+	seen := map[string]bool{}
+	for _, e := range cfg.Proxies.Entries {
+		seen[e.ProxyURL()] = true
+	}
+
+	var added []string
+	var failed []map[string]any
+	lines := strings.Split(strings.ReplaceAll(body.Text, "\r\n", "\n"), "\n")
+	for i, ln := range lines {
+		if strings.TrimSpace(ln) == "" || strings.HasPrefix(strings.TrimSpace(ln), "#") {
+			continue
+		}
+		entry, perr := config.ParseProxyLine(ln)
+		if perr != nil {
+			failed = append(failed, map[string]any{"line": i + 1, "text": strings.TrimSpace(ln), "error": perr.Error()})
+			continue
+		}
+		if seen[entry.ProxyURL()] {
+			continue // skip duplicates silently
+		}
+		seen[entry.ProxyURL()] = true
+		entry.ID = newProxyID()
+		cfg.Proxies.Entries = append(cfg.Proxies.Entries, entry)
+		added = append(added, entry.ID)
+	}
+
+	if len(added) > 0 {
+		if err := config.Save(cfg); err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+		if err := s.applyReload(); err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "added": len(added), "failed": failed})
+}
+
+// handleDeleteProxy removes an entry from the store.
 func (s *Server) handleDeleteProxy(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	cfg, err := config.Reload()
@@ -173,9 +228,6 @@ func (s *Server) handleDeleteProxy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	cfg.Proxies.Entries = kept
-	if cfg.Proxies.Active == id {
-		cfg.Proxies.Active = ""
-	}
 	if err := config.Save(cfg); err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
@@ -185,46 +237,6 @@ func (s *Server) handleDeleteProxy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
-}
-
-// handleSelectProxy sets (or clears, with an empty id) the active proxy.
-func (s *Server) handleSelectProxy(w http.ResponseWriter, r *http.Request) {
-	var body struct {
-		ID string `json:"id"`
-	}
-	if err := decodeBody(r, &body); err != nil {
-		writeError(w, http.StatusBadRequest, err)
-		return
-	}
-	cfg, err := config.Reload()
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err)
-		return
-	}
-	id := strings.TrimSpace(body.ID)
-	if id != "" {
-		ok := false
-		for _, e := range cfg.Proxies.Entries {
-			if e.ID == id {
-				ok = true
-				break
-			}
-		}
-		if !ok {
-			writeError(w, http.StatusNotFound, errors.New("proxy not found"))
-			return
-		}
-	}
-	cfg.Proxies.Active = id
-	if err := config.Save(cfg); err != nil {
-		writeError(w, http.StatusInternalServerError, err)
-		return
-	}
-	if err := s.applyReload(); err != nil {
-		writeError(w, http.StatusInternalServerError, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "active": id})
 }
 
 // handleTestProxy dials a saved entry (by id) or an ad-hoc entry from the body

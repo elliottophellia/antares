@@ -135,7 +135,7 @@ func (s *Server) routes() {
 	// Proxies — global proxy store
 	m.HandleFunc("GET /api/proxies", s.handleListProxies)
 	m.HandleFunc("POST /api/proxies", s.handleAddProxy)
-	m.HandleFunc("POST /api/proxies/select", s.handleSelectProxy)
+	m.HandleFunc("POST /api/proxies/batch", s.handleBatchAddProxy)
 	m.HandleFunc("POST /api/proxies/test", s.handleTestProxy)
 	m.HandleFunc("DELETE /api/proxies/{id}", s.handleDeleteProxy)
 

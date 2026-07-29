@@ -48,6 +48,7 @@ func (osintEmailFullTool) Schema() map[string]any {
 	return schema(map[string]any{
 		"email":           prop("string", "The email address to investigate."),
 		"timeout_seconds": propDefault("integer", "Overall budget for the solve + stream.", 120),
+		"proxy":           prop("string", "Optional. Route through a stored proxy — its id or label (see list_proxies). Use this if a direct request is rate-limited (HTTP 429). Omit for a direct connection."),
 	}, "email")
 }
 func (osintEmailFullTool) RequiresApproval() bool { return false }
@@ -56,6 +57,7 @@ func (osintEmailFullTool) Execute(ctx context.Context, in Input) Result {
 	var args struct {
 		Email   string `json:"email"`
 		Timeout int    `json:"timeout_seconds"`
+		Proxy   string `json:"proxy"`
 	}
 	if err := in.Bind(&args); err != nil {
 		return Errorf("%v", err)
@@ -75,20 +77,30 @@ func (osintEmailFullTool) Execute(ctx context.Context, in Input) Result {
 		return Errorf("emailosint.org needs a Turnstile token, which requires the browser — enable tools.browser.enabled")
 	}
 
+	// Resolve an agent-chosen proxy (id or label) to a dial URL. An unknown ref
+	// is an error rather than a silent direct connection.
+	proxyURL := ""
+	if ref := strings.TrimSpace(args.Proxy); ref != "" {
+		proxyURL = cfg.Proxies.Find(ref)
+		if proxyURL == "" {
+			return Errorf("no stored proxy matches %q — check list_proxies", ref)
+		}
+	}
+
 	ctx, cancel := context.WithTimeout(ctx, time.Duration(args.Timeout)*time.Second)
 	defer cancel()
 
 	// 1. Harvest a fresh Turnstile token in the real browser. The token is
 	// single-use and short-lived, so we solve immediately before the request.
 	in.Emit(Progress{Tool: "osint_email_full", Message: "solving Turnstile challenge…"})
-	token, err := emailOSINTToken(ctx, in)
+	token, err := emailOSINTToken(ctx, in, proxyURL)
 	if err != nil {
 		return Errorf("could not obtain a Turnstile token: %v", err)
 	}
 
 	// 2. Run the whole lookup over HTTP against the SSE endpoint.
 	in.Emit(Progress{Tool: "osint_email_full", Message: "querying emailosint.org…"})
-	res, err := emailOSINTStreamLookup(ctx, in, email, token)
+	res, err := emailOSINTStreamLookup(ctx, in, email, token, proxyURL)
 	if err != nil {
 		return Errorf("lookup failed: %v", err)
 	}
@@ -103,17 +115,17 @@ func (osintEmailFullTool) Execute(ctx context.Context, in Input) Result {
 // with the same sitekey and page origin yields an equally valid token on demand
 // and on a deterministic callback we can poll. The browser having already
 // cleared Cloudflare's page challenge is what lets the widget resolve silently.
-func emailOSINTToken(ctx context.Context, in Input) (string, error) {
+func emailOSINTToken(ctx context.Context, in Input, proxyURL string) (string, error) {
 	// Turnstile clears reliably only in a real, visible browser; a headless
 	// launch here fails the challenge (and often the debug-port handshake). Force
 	// a headed session for the token step regardless of the global default, on
 	// its own session key so it never disturbs the conversation's main browser.
 	cfg := *in.Deps.Config
 	cfg.Tools.Browser.Headed = true
-	// Route the solve through the global active proxy too, so the token is minted
-	// from the same IP the lookup will use (some challenges bind token to IP).
-	if p := in.Deps.Config.ActiveProxyURL(); p != "" {
-		cfg.Tools.Browser.Proxy = p
+	// Solve through the same proxy the lookup will use, so the token is minted
+	// from the same IP (some challenges bind the token to the requesting IP).
+	if proxyURL != "" {
+		cfg.Tools.Browser.Proxy = proxyURL
 	}
 	s := sessionFor("emailosint:"+in.SessionID, &cfg)
 	if !s.Started() {
@@ -194,7 +206,7 @@ type sseAccount struct {
 
 // emailOSINTStreamLookup POSTs the email to the SSE endpoint with the harvested
 // Turnstile token and folds the event stream into a single structured report.
-func emailOSINTStreamLookup(ctx context.Context, in Input, email, token string) (Result, error) {
+func emailOSINTStreamLookup(ctx context.Context, in Input, email, token, proxyURL string) (Result, error) {
 	payload, _ := json.Marshal(map[string]string{"email": email})
 	req, err := http.NewRequestWithContext(ctx, "POST", emailOSINTStream, strings.NewReader(string(payload)))
 	if err != nil {
@@ -208,10 +220,10 @@ func emailOSINTStreamLookup(ctx context.Context, in Input, email, token string) 
 	req.Header.Set("User-Agent", emailOSINTClientUA)
 
 	client := webClient
-	if p := in.Deps.Config.ActiveProxyURL(); p != "" {
-		pc, err := config.ProxyHTTPClient(p, 5*time.Minute)
+	if proxyURL != "" {
+		pc, err := config.ProxyHTTPClient(proxyURL, 5*time.Minute)
 		if err != nil {
-			return Result{}, fmt.Errorf("invalid proxy %q: %w", p, err)
+			return Result{}, fmt.Errorf("invalid proxy: %w", err)
 		}
 		client = pc
 	}

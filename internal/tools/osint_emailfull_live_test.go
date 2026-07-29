@@ -31,11 +31,18 @@ func TestEmailFullLive(t *testing.T) {
 	cfg.Tools.Browser.Stealth = true
 	// Leave Headed at the default (false) on purpose: the tool must force a headed
 	// session for the Turnstile step itself. This proves that override works.
-	if p := cfg.ActiveProxyURL(); p != "" {
-		t.Logf("routing through active proxy")
+
+	// Optionally route through a stored proxy by id/label (ANTARES_LIVE_PROXY),
+	// or the first saved proxy when ANTARES_LIVE_PROXY=first.
+	proxyRef := os.Getenv("ANTARES_LIVE_PROXY")
+	if proxyRef == "first" && len(cfg.Proxies.Entries) > 0 {
+		proxyRef = cfg.Proxies.Entries[0].ID
+	}
+	if proxyRef != "" {
+		t.Logf("routing through proxy %q", proxyRef)
 	}
 
-	args, _ := json.Marshal(map[string]any{"email": email, "timeout_seconds": 240})
+	args, _ := json.Marshal(map[string]any{"email": email, "timeout_seconds": 240, "proxy": proxyRef})
 	in := Input{
 		SessionID: "live-emailfull-test",
 		Args:      args,

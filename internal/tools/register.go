@@ -45,6 +45,8 @@ func init() {
 		osintDomainTool{}, osintPhoneTool{}, osintScrapeTool{}, osintPasteTool{},
 		osintFootprintTool{}, osintDorksLiveTool{}, osintPivotTool{}, osintGoogleTool{},
 		osintEmailFullTool{},
+		// Global proxy store lookup — lets the agent pick a stored proxy.
+		listProxiesTool{},
 		// Anti-detect CAPTCHA solver (reuses the stealth browser).
 		solveCaptchaTool{},
 		// Native MITM intercept proxy.
