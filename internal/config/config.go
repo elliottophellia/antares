@@ -390,7 +390,12 @@ type Binding struct {
 	Model        string   `yaml:"model" json:"model"`                 // model override; empty = default
 	Toolset      string   `yaml:"toolset" json:"toolset"`             // toolset override; empty = role/default
 	AllowedUsers []string `yaml:"allowed_users" json:"allowed_users"` // platform user ids; empty = anyone paired
-	ReplyMode    string   `yaml:"reply_mode" json:"reply_mode"`       // mention|always (groups only)
+	// AllowedRoles gates a Discord server binding by the sender's server roles:
+	// the bot answers only members holding one of these role ids. Empty means
+	// NO ONE in the server is served by this binding (strict — a server binding
+	// with no roles is off). Ignored for DMs and Telegram.
+	AllowedRoles []string `yaml:"allowed_roles" json:"allowed_roles"`
+	ReplyMode    string   `yaml:"reply_mode" json:"reply_mode"` // mention|always (groups only)
 	PromptPrefix string   `yaml:"prompt_prefix" json:"prompt_prefix"` // appended to the system prompt
 	// RelevanceFilter, when set, gates messages: a cheap model call decides
 	// whether the message fits the criteria before the full agent runs. Empty

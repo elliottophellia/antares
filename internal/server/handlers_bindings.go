@@ -122,6 +122,18 @@ func (s *Server) handleSetChannelStyle(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "style": style})
 }
 
+// handleDiscordRoles lists a guild's roles for the binding UI's access
+// allow-list.
+func (s *Server) handleDiscordRoles(w http.ResponseWriter, r *http.Request) {
+	token := s.config().Gateway.Discord.BotToken
+	roles, err := gateway.ListDiscordRoles(r.Context(), token, r.PathValue("id"))
+	if err != nil {
+		writeJSON(w, http.StatusOK, map[string]any{"roles": []any{}, "error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"roles": roles})
+}
+
 // handleListBindings returns the configured routing bindings.
 func (s *Server) handleListBindings(w http.ResponseWriter, r *http.Request) {
 	bindings := s.config().Gateway.Bindings

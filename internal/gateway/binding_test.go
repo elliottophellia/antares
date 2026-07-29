@@ -51,6 +51,27 @@ func TestResolveBindingPlatformIsolation(t *testing.T) {
 	}
 }
 
+func TestBindingAllowsRoles(t *testing.T) {
+	// DMs are never gated by roles.
+	if !BindingAllowsRoles(&config.Binding{}, true, nil) {
+		t.Error("a DM should never be role-gated")
+	}
+	// A server binding with no roles serves no one.
+	if BindingAllowsRoles(&config.Binding{}, false, []string{"r1"}) {
+		t.Error("empty AllowedRoles on a server binding must deny")
+	}
+	b := &config.Binding{AllowedRoles: []string{"mod", "dev"}}
+	if !BindingAllowsRoles(b, false, []string{"member", "dev"}) {
+		t.Error("sender holding 'dev' should be allowed")
+	}
+	if BindingAllowsRoles(b, false, []string{"member"}) {
+		t.Error("sender without an allowed role should be denied")
+	}
+	if BindingAllowsRoles(b, false, nil) {
+		t.Error("sender with no roles should be denied when roles are required")
+	}
+}
+
 func TestBindingAllowsUser(t *testing.T) {
 	if !BindingAllowsUser(nil, "u1") {
 		t.Error("nil binding should allow anyone")

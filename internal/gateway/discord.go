@@ -148,6 +148,10 @@ type dcMessage struct {
 	Content   string     `json:"content"`
 	Author    dcAuthor   `json:"author"`
 	Mentions  []dcAuthor `json:"mentions"`
+	// Member is present on guild messages and carries the sender's role ids.
+	Member *struct {
+		Roles []string `json:"roles"`
+	} `json:"member"`
 }
 
 // Start connects to the gateway and processes events until ctx is cancelled.
@@ -372,8 +376,9 @@ type dcInteraction struct {
 	// identifies the caller.
 	GuildID   string `json:"guild_id"`
 	ChannelID string `json:"channel_id"`
-	Member    *struct {
-		User dcAuthor `json:"user"`
+	Member *struct {
+		User  dcAuthor `json:"user"`
+		Roles []string `json:"roles"`
 	} `json:"member"`
 	User *dcAuthor `json:"user"`
 	Data struct {
@@ -411,9 +416,13 @@ func (d *Discord) handleInteraction(ctx context.Context, it dcInteraction) {
 		line += " " + fmt.Sprintf("%v", o.Value)
 	}
 
+	var roles []string
+	if it.Member != nil {
+		roles = it.Member.Roles
+	}
 	msg := InboundMessage{
 		Platform: "discord", ChannelID: it.ChannelID, GuildID: it.GuildID,
-		UserID: author.ID, UserName: author.Username, Text: line,
+		UserID: author.ID, UserName: author.Username, Roles: roles, Text: line,
 		IsDirect: it.GuildID == "", MessageID: it.ID,
 	}
 
@@ -499,9 +508,13 @@ func (d *Discord) handleMessage(ctx context.Context, m dcMessage) {
 		return
 	}
 
+	var roles []string
+	if m.Member != nil {
+		roles = m.Member.Roles
+	}
 	msg := InboundMessage{
 		Platform: "discord", ChannelID: m.ChannelID, GuildID: m.GuildID, UserID: m.Author.ID,
-		UserName: m.Author.Username, Text: text, IsDirect: isDirect, MessageID: m.ID,
+		UserName: m.Author.Username, Roles: roles, Text: text, IsDirect: isDirect, MessageID: m.ID,
 	}
 
 	// Pairing (and its code) is a DM-only handshake. In a server, access is

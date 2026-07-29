@@ -326,6 +326,11 @@ func (rt *runtimeServices) handleGatewayMessage(ctx context.Context, msg gateway
 		if !gateway.BindingAllowsUser(binding, msg.UserID) {
 			return "", nil
 		}
+		// In a server, gate by the sender's Discord roles. An empty role list on
+		// a server binding serves no one; a DM is never gated by roles.
+		if !gateway.BindingAllowsRoles(binding, msg.IsDirect, msg.Roles) {
+			return "", nil
+		}
 		// Relevance gate: a cheap model call decides whether the message fits
 		// the channel's criteria before the full agent runs.
 		if strings.TrimSpace(binding.RelevanceFilter) != "" {

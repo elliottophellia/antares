@@ -129,6 +129,44 @@ func ListDiscordGuilds(ctx context.Context, token string) ([]DiscordGuild, error
 	return guilds, nil
 }
 
+// DiscordRole is a server role the bot can gate access by.
+type DiscordRole struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}
+
+// ListDiscordRoles returns a guild's roles (excluding @everyone), so the UI can
+// offer them as an access allow-list.
+func ListDiscordRoles(ctx context.Context, token, guildID string) ([]DiscordRole, error) {
+	token = strings.TrimSpace(token)
+	if token == "" {
+		return nil, fmt.Errorf("connect Discord first")
+	}
+	if strings.TrimSpace(guildID) == "" {
+		return nil, fmt.Errorf("guild id is required")
+	}
+	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	var all []struct {
+		ID       string `json:"id"`
+		Name     string `json:"name"`
+		Managed  bool   `json:"managed"`
+		Position int    `json:"position"`
+	}
+	if err := discordGET(ctx, token, "/guilds/"+guildID+"/roles", &all); err != nil {
+		return nil, err
+	}
+	out := make([]DiscordRole, 0, len(all))
+	for _, r := range all {
+		// @everyone has the guild id as its role id; skip it and bot-managed roles.
+		if r.ID == guildID || r.Managed {
+			continue
+		}
+		out = append(out, DiscordRole{ID: r.ID, Name: r.Name})
+	}
+	return out, nil
+}
+
 // ListDiscordChannels returns the text and announcement channels of a guild.
 func ListDiscordChannels(ctx context.Context, token, guildID string) ([]DiscordChannel, error) {
 	token = strings.TrimSpace(token)

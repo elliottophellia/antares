@@ -176,6 +176,7 @@ func (s *Server) routes() {
 	// Per-channel routing bindings + Discord discovery.
 	m.HandleFunc("GET /api/channels/discord/guilds", s.handleDiscordGuilds)
 	m.HandleFunc("GET /api/channels/discord/guilds/{id}/channels", s.handleDiscordChannels)
+	m.HandleFunc("GET /api/channels/discord/guilds/{id}/roles", s.handleDiscordRoles)
 	m.HandleFunc("GET /api/channels/bindings", s.handleListBindings)
 	m.HandleFunc("POST /api/channels/bindings", s.handleSaveBinding)
 	m.HandleFunc("DELETE /api/channels/bindings/{id}", s.handleDeleteBinding)

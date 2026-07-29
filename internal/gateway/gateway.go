@@ -26,7 +26,10 @@ type InboundMessage struct {
 	GuildID  string
 	UserID   string
 	UserName string
-	Text     string
+	// Roles are the sender's server-role ids (Discord guild members). Used to
+	// gate a server binding by role. Empty in DMs and on platforms without roles.
+	Roles []string
+	Text  string
 	// IsDirect marks a 1:1 chat, where the agent replies without being addressed.
 	IsDirect bool
 	// MessageID lets adapters edit their own reply while streaming.

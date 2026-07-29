@@ -68,3 +68,23 @@ func BindingAllowsUser(b *config.Binding, userID string) bool {
 	}
 	return contains(b.AllowedUsers, userID)
 }
+
+// BindingAllowsRoles gates a Discord server binding by the sender's server
+// roles. It applies only to guild (non-direct) messages. The sender must hold
+// at least one of the binding's AllowedRoles. An EMPTY AllowedRoles denies
+// everyone — a server binding with no roles chosen serves no one (by design).
+// Direct messages are never gated by roles (they have none).
+func BindingAllowsRoles(b *config.Binding, isDirect bool, roles []string) bool {
+	if b == nil || isDirect {
+		return true
+	}
+	if len(b.AllowedRoles) == 0 {
+		return false
+	}
+	for _, r := range roles {
+		if contains(b.AllowedRoles, r) {
+			return true
+		}
+	}
+	return false
+}
