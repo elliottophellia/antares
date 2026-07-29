@@ -1,5 +1,22 @@
 # Intercept subsystem — HTTP Toolkit port status
 
+## Done (this port)
+- **Foundation** (`internal/intercept`): CA.SPKIFingerprint/Cert/CertDER, trust.go (SubjectHashOld/Fingerprint/InstallLocations), interceptor Registry + Session contract, breakpoint pause/resume seam on the proxy.
+- **Browser launchers** (native): fresh Chrome/Chromium/Edge/Brave/Opera via --proxy-server + <-loopback> + --ignore-certificate-errors-spki-list (zero cert install). Only installed ones offered.
+- **Terminal env-override** (native): returns HTTP(S)_PROXY + per-runtime *_CA_BUNDLE exports.
+- **Breakpoints** (native): Breakpoint rule pauses a request; pause→edit→resume/abort via tool actions, HTTP endpoints, and an SSE stream. Dashboard Breakpoints tab.
+- **CA install helper**: per-OS trust commands (macOS security / Linux update-ca-* / Windows certutil / NSS / Android adb), gated by PATH. `cert_install` action + GET /api/intercept/cert.
+- **Dashboard**: Interceptors + Breakpoints tabs.
+
+## Dependency-gated (stub now, reports "install X"; real impl pending)
+- Firefox (needs certutil/NSS), Electron (Node inspector attach), Android (adb), Docker (CLI+daemon), JVM (JDK + agent jar).
+
+## Deferred / impractical in one Go binary
+- Frida (iOS/Android SSL-pinning bypass) — flagged by cyber-safeguards; needs frida-server; not mapped.
+- Docker daemon-proxy socket + SOCKS tunnel/DNS; JVM runtime-attach agent jar; DNS server; WebExtension; existing-browser (kill+relaunch) variant.
+
+---
+
 # Antares Intercept Subsystem — Port Implementation Plan
 
 Grounded against the live code: `internal/tools/intercept.go` (shared `InterceptProxy()` singleton, flat `intercept.Rule`, `RequiresApproval()==true`, `ca` action prints a path), `internal/intercept/{proxy.go,ca.go}` (CONNECT-based plain-HTTP MITM, per-host leaf signing, `Status()`, `CACertPEM()`, `Exchanges()`, `Rules()`).
