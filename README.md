@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="antares.png" alt="Antares" width="180">
+  <img src=".github/antares.png" alt="Antares" width="180">
 </p>
 
 <h1 align="center">Antares</h1>
@@ -362,4 +362,7 @@ between versions. Please report anything that surprises you.
 
 ## License
 
-MIT
+[Apache License 2.0](LICENSE). You may use, modify, and distribute Antares,
+including commercially; in return, keep the license and attribution notices,
+mark any files you change, and note that the license includes an express patent
+grant that terminates for anyone who brings a patent claim against the project.
