@@ -177,6 +177,10 @@ func loadManifest(dir string) (Manifest, error) {
 	return man, nil
 }
 
+// IsValidEvent reports whether e names a hook a manifest may declare. Exported
+// so the dashboard can validate a plugin form before writing it to disk.
+func IsValidEvent(e Event) bool { return validEvent(e) }
+
 func validEvent(e Event) bool {
 	for _, known := range AllEvents {
 		if known == e {

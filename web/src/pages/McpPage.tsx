@@ -1,5 +1,14 @@
 import { useState } from 'react'
-import { CaretDown, CheckCircle, PlugsConnected, Storefront, XCircle } from '@phosphor-icons/react'
+import {
+  CaretDown,
+  CheckCircle,
+  PlugsConnected,
+  Plus,
+  Storefront,
+  Trash,
+  XCircle,
+} from '@phosphor-icons/react'
+import { del, post } from '@/lib/api'
 import { useApi } from '@/lib/hooks'
 import { useI18n } from '@/lib/i18n'
 import { cn } from '@/lib/utils'
@@ -12,10 +21,21 @@ import {
   CardHeader,
   CardTitle,
   EmptyState,
+  Input,
+  Label,
   Tabs,
   TabsList,
   TabsTrigger,
 } from '@/components/ui/primitives'
+import {
+  Dialog,
+  DialogBody,
+  DialogClose,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
 import { SkeletonList } from '@/components/ui/skeleton'
 import { Button } from '@/components/ui/button'
 import { usePageActions } from '@/components/layout/PageChrome'
@@ -38,15 +58,34 @@ export default function McpPage() {
   const { data, loading, reload } = useApi<{ enabled: boolean; servers: McpServer[] }>('/mcp')
   const [open, setOpen] = useState<string | null>(null)
   const [browsing, setBrowsing] = useState(false)
+  const [adding, setAdding] = useState(false)
+  const [removing, setRemoving] = useState('')
   const [tab, setTab] = useState<'servers' | 'docs'>('servers')
 
   usePageActions(
-    <Button size="sm" onClick={() => setBrowsing(true)} className="gap-1.5">
-      <Storefront className="size-4" />
-      {t('hub.browse')}
-    </Button>,
+    <>
+      <Button size="sm" variant="outline" onClick={() => setAdding(true)} className="gap-1.5">
+        <Plus className="size-4" />
+        {t('mcp.add')}
+      </Button>
+      <Button size="sm" onClick={() => setBrowsing(true)} className="gap-1.5">
+        <Storefront className="size-4" />
+        {t('hub.browse')}
+      </Button>
+    </>,
     [t],
   )
+
+  const remove = async (name: string) => {
+    if (!confirm(t('mcp.removeConfirm', { name }))) return
+    setRemoving(name)
+    try {
+      await del(`/mcp/servers/${encodeURIComponent(name)}`)
+      reload()
+    } finally {
+      setRemoving('')
+    }
+  }
 
   if (loading && !data) return <SkeletonList count={3} />
 
@@ -64,6 +103,7 @@ export default function McpPage() {
   return (
     <PageLayout header={header}>
       <HubDialog kind="mcp" open={browsing} onOpenChange={setBrowsing} onInstalled={reload} />
+      <AddMcpDialog open={adding} onOpenChange={setAdding} onAdded={reload} />
 
       {tab === 'docs' ? (
         <McpDocs />
@@ -101,6 +141,14 @@ export default function McpPage() {
                       <XCircle className="mt-0.5 size-4 shrink-0 text-destructive" weight="fill" />
                     )}
                     <span className="min-w-0 flex-1 truncate text-sm font-medium">{s.name}</span>
+                    <button
+                      onClick={() => void remove(s.name)}
+                      disabled={removing === s.name}
+                      aria-label={t('common.delete')}
+                      className="shrink-0 text-muted-foreground transition-colors hover:text-destructive disabled:opacity-50"
+                    >
+                      <Trash className="size-4" />
+                    </button>
                   </div>
                   <div className="mt-2 flex flex-wrap gap-1.5">
                     <Badge variant={s.connected ? 'success' : 'destructive'}>
@@ -176,5 +224,159 @@ function McpDocs() {
         <p className="mt-3 text-xs text-muted-foreground">{t('mcp.docsHint')}</p>
       </CardContent>
     </Card>
+  )
+}
+
+function AddMcpDialog({
+  open,
+  onOpenChange,
+  onAdded,
+}: {
+  open: boolean
+  onOpenChange: (v: boolean) => void
+  onAdded: () => void
+}) {
+  const { t } = useI18n()
+  const [transport, setTransport] = useState<'stdio' | 'http'>('stdio')
+  const [name, setName] = useState('')
+  const [command, setCommand] = useState('')
+  const [args, setArgs] = useState('')
+  const [url, setUrl] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string>()
+
+  const reset = () => {
+    setTransport('stdio')
+    setName('')
+    setCommand('')
+    setArgs('')
+    setUrl('')
+    setError(undefined)
+  }
+
+  const submit = async () => {
+    setBusy(true)
+    setError(undefined)
+    try {
+      const body =
+        transport === 'stdio'
+          ? {
+              name,
+              transport,
+              command,
+              args: args.split(/\s+/).filter(Boolean),
+            }
+          : { name, transport, url }
+      const r = await post<{ ok: boolean; error?: string }>('/mcp/servers', body)
+      if (!r.ok) {
+        setError(r.error ?? t('mcp.addFailed'))
+        return
+      }
+      onAdded()
+      reset()
+      onOpenChange(false)
+    } catch (e) {
+      setError((e as Error).message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const valid = name.trim() && (transport === 'stdio' ? command.trim() : url.trim())
+
+  return (
+    <Dialog
+      open={open}
+      onOpenChange={(v) => {
+        if (!v) reset()
+        onOpenChange(v)
+      }}
+    >
+      <DialogContent className="sm:max-w-lg">
+        <DialogHeader>
+          <DialogTitle>{t('mcp.addTitle')}</DialogTitle>
+        </DialogHeader>
+        <DialogBody>
+          <div className="grid gap-1.5">
+            <Label htmlFor="mcp-name">{t('mcp.fieldName')}</Label>
+            <Input
+              id="mcp-name"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="my-server"
+              autoFocus
+            />
+          </div>
+
+          <div className="grid gap-1.5">
+            <Label>{t('mcp.fieldTransport')}</Label>
+            <div className="inline-flex w-fit rounded-[var(--radius-sm)] border border-border p-0.5">
+              {(['stdio', 'http'] as const).map((tp) => (
+                <button
+                  key={tp}
+                  onClick={() => setTransport(tp)}
+                  className={cn(
+                    'rounded-[calc(var(--radius-sm)-2px)] px-3 py-1 text-xs font-medium transition-colors',
+                    transport === tp
+                      ? 'bg-primary text-primary-foreground'
+                      : 'text-muted-foreground hover:text-foreground',
+                  )}
+                >
+                  {tp}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {transport === 'stdio' ? (
+            <>
+              <div className="grid gap-1.5">
+                <Label htmlFor="mcp-cmd">{t('mcp.fieldCommand')}</Label>
+                <Input
+                  id="mcp-cmd"
+                  value={command}
+                  onChange={(e) => setCommand(e.target.value)}
+                  placeholder="npx"
+                  className="font-mono text-xs"
+                />
+              </div>
+              <div className="grid gap-1.5">
+                <Label htmlFor="mcp-args">{t('mcp.fieldArgs')}</Label>
+                <Input
+                  id="mcp-args"
+                  value={args}
+                  onChange={(e) => setArgs(e.target.value)}
+                  placeholder="-y @modelcontextprotocol/server-filesystem /home/you"
+                  className="font-mono text-xs"
+                />
+              </div>
+            </>
+          ) : (
+            <div className="grid gap-1.5">
+              <Label htmlFor="mcp-url">{t('mcp.fieldUrl')}</Label>
+              <Input
+                id="mcp-url"
+                value={url}
+                onChange={(e) => setUrl(e.target.value)}
+                placeholder="https://example.com/mcp"
+                className="font-mono text-xs"
+              />
+            </div>
+          )}
+
+          {error ? <p className="text-xs text-destructive">{error}</p> : null}
+        </DialogBody>
+        <DialogFooter>
+          <DialogClose asChild>
+            <Button variant="outline" size="sm">
+              {t('common.close')}
+            </Button>
+          </DialogClose>
+          <Button size="sm" disabled={!valid} loading={busy} onClick={() => void submit()}>
+            {t('mcp.add')}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   )
 }

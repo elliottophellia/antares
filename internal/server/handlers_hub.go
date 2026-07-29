@@ -66,6 +66,51 @@ func (s *Server) handleHubInstallSkill(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// handleHubPlugins lists the plugins on offer, marking the ones already on
+// disk. Everything is bundled, so this never touches the network.
+func (s *Server) handleHubPlugins(w http.ResponseWriter, r *http.Request) {
+	installed := map[string]bool{}
+	if mgr := s.agent.Plugins(); mgr != nil {
+		for _, p := range mgr.List() {
+			installed[p.Name] = true
+		}
+	}
+	found := hub.SearchPlugins(r.Context(), r.URL.Query().Get("q"), installed)
+	writeJSON(w, http.StatusOK, map[string]any{"plugins": found})
+}
+
+// handleHubInstallPlugin writes a catalogue plugin to disk and rescans. Because
+// a plugin runs code, the dashboard shows its command before this is called —
+// the confirmation is the UI's, and the install is the commit.
+func (s *Server) handleHubInstallPlugin(w http.ResponseWriter, r *http.Request) {
+	mgr := s.agent.Plugins()
+	if mgr == nil {
+		writeError(w, http.StatusBadRequest, errors.New("plugins are switched off"))
+		return
+	}
+	var body struct {
+		ID string `json:"id"`
+	}
+	if err := decodeBody(r, &body); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	if strings.TrimSpace(body.ID) == "" {
+		writeError(w, http.StatusBadRequest, errors.New("id is required"))
+		return
+	}
+	entry, dest, err := hub.InstallPlugin(body.ID, s.pluginDir())
+	if err != nil {
+		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": err.Error()})
+		return
+	}
+	if err := mgr.Load(); err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "name": entry.Name, "dir": dest})
+}
+
 // handleHubMCP lists the MCP servers on offer.
 func (s *Server) handleHubMCP(w http.ResponseWriter, r *http.Request) {
 	found := hub.SearchMCP(r.Context(), r.URL.Query().Get("q"), s.config())

@@ -35,6 +35,10 @@ export interface HubEntry {
   installed: boolean
   setup?: string
   needs_keys?: string[]
+  // plugins only: the executable that will run, shown before install.
+  command?: string
+  args?: string[]
+  hooks?: string[]
 }
 
 /**
@@ -48,7 +52,7 @@ export function HubDialog({
   onOpenChange,
   onInstalled,
 }: {
-  kind: 'skills' | 'mcp'
+  kind: 'skills' | 'mcp' | 'plugins'
   open: boolean
   onOpenChange: (v: boolean) => void
   onInstalled: () => void
@@ -66,11 +70,14 @@ export function HubDialog({
       setLoading(true)
       setError(undefined)
       try {
-        const path = kind === 'skills' ? '/hub/skills' : '/hub/mcp'
-        const r = await get<{ skills?: HubEntry[]; servers?: HubEntry[]; error?: string }>(
-          `${path}?q=${encodeURIComponent(q)}`,
-        )
-        setEntries(r.skills ?? r.servers ?? [])
+        const path = kind === 'skills' ? '/hub/skills' : kind === 'mcp' ? '/hub/mcp' : '/hub/plugins'
+        const r = await get<{
+          skills?: HubEntry[]
+          servers?: HubEntry[]
+          plugins?: HubEntry[]
+          error?: string
+        }>(`${path}?q=${encodeURIComponent(q)}`)
+        setEntries(r.skills ?? r.servers ?? r.plugins ?? [])
         setError(r.error)
       } catch (e) {
         setError((e as Error).message)
@@ -102,7 +109,12 @@ export function HubDialog({
     setNote(undefined)
     setError(undefined)
     try {
-      const path = kind === 'skills' ? '/hub/skills/install' : '/hub/mcp/install'
+      const path =
+        kind === 'skills'
+          ? '/hub/skills/install'
+          : kind === 'mcp'
+            ? '/hub/mcp/install'
+            : '/hub/plugins/install'
       const r = await post<{ ok: boolean; error?: string; missing_keys?: string[] }>(path, {
         id: entry.id,
       })
@@ -128,9 +140,19 @@ export function HubDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-2xl">
         <DialogHeader>
-          <DialogTitle>{kind === 'skills' ? t('hub.skillsTitle') : t('hub.mcpTitle')}</DialogTitle>
+          <DialogTitle>
+            {kind === 'skills'
+              ? t('hub.skillsTitle')
+              : kind === 'mcp'
+                ? t('hub.mcpTitle')
+                : t('hub.pluginsTitle')}
+          </DialogTitle>
           <DialogDescription>
-            {kind === 'skills' ? t('hub.skillsDesc') : t('hub.mcpDesc')}
+            {kind === 'skills'
+              ? t('hub.skillsDesc')
+              : kind === 'mcp'
+                ? t('hub.mcpDesc')
+                : t('hub.pluginsDesc')}
           </DialogDescription>
         </DialogHeader>
 
@@ -141,7 +163,13 @@ export function HubDialog({
               autoFocus
               value={query}
               onChange={(e) => setQuery(e.target.value)}
-              placeholder={kind === 'skills' ? t('hub.searchSkills') : t('hub.searchMcp')}
+              placeholder={
+                kind === 'skills'
+                  ? t('hub.searchSkills')
+                  : kind === 'mcp'
+                    ? t('hub.searchMcp')
+                    : t('hub.searchPlugins')
+              }
               className="pl-9"
             />
           </div>
@@ -189,6 +217,13 @@ export function HubDialog({
                       ) : null}
                     </div>
                     <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{e.summary}</p>
+                    {kind === 'plugins' && e.command ? (
+                      <p className="mt-1.5 break-all rounded-[var(--radius-sm)] bg-muted/50 px-2 py-1 font-mono text-[10px] text-foreground">
+                        $ {e.command}
+                        {e.args?.length ? ' ' + e.args.join(' ') : ''}
+                        {e.hooks?.length ? `  · ${e.hooks.join(', ')}` : ''}
+                      </p>
+                    ) : null}
                     <div className="mt-1 flex flex-wrap items-center gap-2">
                       <span className="break-all font-mono text-[10px] text-muted-foreground">
                         {e.id}
@@ -224,6 +259,12 @@ export function HubDialog({
 
           {kind === 'skills' ? (
             <p className="text-[11px] leading-relaxed text-muted-foreground">{t('hub.sourceHint')}</p>
+          ) : null}
+          {kind === 'plugins' ? (
+            <div className="flex items-start gap-2 rounded-[var(--radius-sm)] border border-[var(--warning)]/40 bg-[color-mix(in_oklch,var(--warning)_10%,transparent)] p-3 text-[11px] leading-relaxed">
+              <Warning className="mt-0.5 size-4 shrink-0 text-[var(--warning)]" weight="fill" />
+              <span className="min-w-0">{t('hub.pluginsWarn')}</span>
+            </div>
           ) : null}
         </DialogBody>
 

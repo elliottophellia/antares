@@ -129,6 +129,8 @@ func (s *Server) routes() {
 	m.HandleFunc("GET /api/cron/jobs/{id}/runs", s.handleCronRuns)
 	// MCP
 	m.HandleFunc("GET /api/mcp", s.handleMCPStatus)
+	m.HandleFunc("POST /api/mcp/servers", s.handleAddMCPServer)
+	m.HandleFunc("DELETE /api/mcp/servers/{name}", s.handleDeleteMCPServer)
 
 	// Roles and the swarm
 	m.HandleFunc("GET /api/roles", s.handleRoles)
@@ -141,6 +143,7 @@ func (s *Server) routes() {
 
 	// Plugins
 	m.HandleFunc("GET /api/plugins", s.handlePlugins)
+	m.HandleFunc("POST /api/plugins", s.handleAddPlugin)
 	m.HandleFunc("POST /api/plugins/{name}/toggle", s.handleTogglePlugin)
 	m.HandleFunc("POST /api/plugins/reload", s.handleReloadPlugins)
 
@@ -157,6 +160,8 @@ func (s *Server) routes() {
 	m.HandleFunc("POST /api/hub/skills/install", s.handleHubInstallSkill)
 	m.HandleFunc("GET /api/hub/mcp", s.handleHubMCP)
 	m.HandleFunc("POST /api/hub/mcp/install", s.handleHubInstallMCP)
+	m.HandleFunc("GET /api/hub/plugins", s.handleHubPlugins)
+	m.HandleFunc("POST /api/hub/plugins/install", s.handleHubInstallPlugin)
 
 	// Slash commands, shared with the TUI and the messaging gateways.
 	m.HandleFunc("GET /api/commands", s.handleCommandList)

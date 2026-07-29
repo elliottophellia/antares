@@ -15,7 +15,7 @@ import (
 	"sync"
 )
 
-//go:embed catalog/skills/*.md catalog/mcp.json
+//go:embed catalog/skills/*.md catalog/mcp.json catalog/plugins.json
 var bundled embed.FS
 
 // Entry is one catalogue item, whether a skill or an MCP server.

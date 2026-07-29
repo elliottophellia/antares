@@ -1,8 +1,9 @@
 import { useState } from 'react'
-import { ArrowClockwise, PuzzlePiece, Warning } from '@phosphor-icons/react'
+import { ArrowClockwise, Plus, PuzzlePiece, Storefront, Warning } from '@phosphor-icons/react'
 import { post } from '@/lib/api'
 import { useApi } from '@/lib/hooks'
 import { useI18n } from '@/lib/i18n'
+import { cn } from '@/lib/utils'
 import { PageLayout } from '@/components/layout/PageLayout'
 import { usePageActions } from '@/components/layout/PageChrome'
 import { Button } from '@/components/ui/button'
@@ -14,11 +15,23 @@ import {
   CardHeader,
   CardTitle,
   EmptyState,
+  Input,
+  Label,
   Switch,
   Tabs,
   TabsList,
   TabsTrigger,
 } from '@/components/ui/primitives'
+import {
+  Dialog,
+  DialogBody,
+  DialogClose,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
+import { HubDialog } from '@/components/hub/HubDialog'
 import { SkeletonList } from '@/components/ui/skeleton'
 
 interface Plugin {
@@ -41,6 +54,8 @@ export default function PluginsPage() {
   }>('/plugins')
   const [busy, setBusy] = useState('')
   const [tab, setTab] = useState<'plugins' | 'docs'>('plugins')
+  const [adding, setAdding] = useState(false)
+  const [browsing, setBrowsing] = useState(false)
 
   const refresh = async () => {
     setBusy('*')
@@ -53,10 +68,20 @@ export default function PluginsPage() {
   }
 
   usePageActions(
-    <Button size="sm" variant="outline" onClick={() => void refresh()} className="gap-1.5">
-      <ArrowClockwise className="size-4" />
-      {t('plugins.rescan')}
-    </Button>,
+    <>
+      <Button size="sm" variant="outline" onClick={() => void refresh()} className="gap-1.5">
+        <ArrowClockwise className="size-4" />
+        {t('plugins.rescan')}
+      </Button>
+      <Button size="sm" variant="outline" onClick={() => setBrowsing(true)} className="gap-1.5">
+        <Storefront className="size-4" />
+        {t('hub.browse')}
+      </Button>
+      <Button size="sm" onClick={() => setAdding(true)} className="gap-1.5">
+        <Plus className="size-4" />
+        {t('plugins.add')}
+      </Button>
+    </>,
     [t],
   )
 
@@ -85,6 +110,8 @@ export default function PluginsPage() {
 
   return (
     <PageLayout header={header}>
+      <HubDialog kind="plugins" open={browsing} onOpenChange={setBrowsing} onInstalled={reload} />
+      <AddPluginDialog open={adding} onOpenChange={setAdding} onAdded={reload} />
       {tab === 'docs' ? (
         <PluginDocs />
       ) : (
@@ -182,5 +209,159 @@ echo '{}'`}
         <p className="mt-3 text-xs text-muted-foreground">{t('plugins.docsHint')}</p>
       </CardContent>
     </Card>
+  )
+}
+
+const HOOKS = ['pre_tool_call', 'post_tool_call', 'session_start', 'session_end', 'turn_end'] as const
+
+function AddPluginDialog({
+  open,
+  onOpenChange,
+  onAdded,
+}: {
+  open: boolean
+  onOpenChange: (v: boolean) => void
+  onAdded: () => void
+}) {
+  const { t } = useI18n()
+  const [name, setName] = useState('')
+  const [description, setDescription] = useState('')
+  const [command, setCommand] = useState('')
+  const [args, setArgs] = useState('')
+  const [hooks, setHooks] = useState<string[]>([])
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string>()
+
+  const reset = () => {
+    setName('')
+    setDescription('')
+    setCommand('')
+    setArgs('')
+    setHooks([])
+    setError(undefined)
+  }
+
+  const toggleHook = (h: string) =>
+    setHooks((prev) => (prev.includes(h) ? prev.filter((x) => x !== h) : [...prev, h]))
+
+  const submit = async () => {
+    setBusy(true)
+    setError(undefined)
+    try {
+      const r = await post<{ ok: boolean; error?: string }>('/plugins', {
+        name,
+        description,
+        command,
+        args: args.split(/\s+/).filter(Boolean),
+        hooks,
+      })
+      if (!r.ok) {
+        setError(r.error ?? t('plugins.addFailed'))
+        return
+      }
+      onAdded()
+      reset()
+      onOpenChange(false)
+    } catch (e) {
+      setError((e as Error).message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const valid = name.trim() && command.trim() && hooks.length > 0
+
+  return (
+    <Dialog
+      open={open}
+      onOpenChange={(v) => {
+        if (!v) reset()
+        onOpenChange(v)
+      }}
+    >
+      <DialogContent className="sm:max-w-lg">
+        <DialogHeader>
+          <DialogTitle>{t('plugins.addTitle')}</DialogTitle>
+        </DialogHeader>
+        <DialogBody>
+          <div className="grid gap-1.5">
+            <Label htmlFor="pl-name">{t('plugins.fieldName')}</Label>
+            <Input
+              id="pl-name"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="audit"
+              autoFocus
+            />
+          </div>
+          <div className="grid gap-1.5">
+            <Label htmlFor="pl-desc">{t('plugins.fieldDesc')}</Label>
+            <Input
+              id="pl-desc"
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+              placeholder={t('plugins.fieldDescHint')}
+            />
+          </div>
+          <div className="grid gap-1.5">
+            <Label htmlFor="pl-cmd">{t('plugins.fieldCommand')}</Label>
+            <Input
+              id="pl-cmd"
+              value={command}
+              onChange={(e) => setCommand(e.target.value)}
+              placeholder="./run.sh"
+              className="font-mono text-xs"
+            />
+            <p className="text-[11px] text-muted-foreground">{t('plugins.fieldCommandHint')}</p>
+          </div>
+          <div className="grid gap-1.5">
+            <Label htmlFor="pl-args">{t('plugins.fieldArgs')}</Label>
+            <Input
+              id="pl-args"
+              value={args}
+              onChange={(e) => setArgs(e.target.value)}
+              placeholder="--verbose"
+              className="font-mono text-xs"
+            />
+          </div>
+          <div className="grid gap-1.5">
+            <Label>{t('plugins.fieldHooks')}</Label>
+            <div className="flex flex-wrap gap-1.5">
+              {HOOKS.map((h) => (
+                <button
+                  key={h}
+                  onClick={() => toggleHook(h)}
+                  className={cn(
+                    'rounded-[var(--radius-sm)] border px-2 py-1 font-mono text-[11px] transition-colors',
+                    hooks.includes(h)
+                      ? 'border-primary bg-primary text-primary-foreground'
+                      : 'border-border text-muted-foreground hover:border-primary/40',
+                  )}
+                >
+                  {h}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="flex items-start gap-2 rounded-[var(--radius-sm)] bg-muted/50 p-3 text-[11px] leading-relaxed text-muted-foreground">
+            <PuzzlePiece className="mt-0.5 size-4 shrink-0" />
+            <span className="min-w-0">{t('plugins.addHint')}</span>
+          </div>
+
+          {error ? <p className="text-xs text-destructive">{error}</p> : null}
+        </DialogBody>
+        <DialogFooter>
+          <DialogClose asChild>
+            <Button variant="outline" size="sm">
+              {t('common.close')}
+            </Button>
+          </DialogClose>
+          <Button size="sm" disabled={!valid} loading={busy} onClick={() => void submit()}>
+            {t('plugins.add')}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   )
 }

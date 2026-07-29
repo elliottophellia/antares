@@ -1,0 +1,28 @@
+[
+  {
+    "id": "audit-log",
+    "name": "audit-log",
+    "summary": "Append every tool call to ~/antares-audit.log. Observes only — never blocks or rewrites.",
+    "author": "Antares",
+    "tags": ["logging", "observe", "official"],
+    "command": "./run.sh",
+    "hooks": ["pre_tool_call"],
+    "timeout_ms": 3000,
+    "description": "Record each tool call to an audit log",
+    "script_name": "run.sh",
+    "script": "#!/bin/sh\n# Reads one JSON event on stdin, appends it, answers with an empty object.\ncat >> \"$HOME/antares-audit.log\"\nprintf '\\n' >> \"$HOME/antares-audit.log\"\necho '{}'\n"
+  },
+  {
+    "id": "block-rm-rf",
+    "name": "block-rm-rf",
+    "summary": "Refuse terminal commands that run 'rm -rf' on a home or root path. A safety net, not a sandbox.",
+    "author": "Antares",
+    "tags": ["safety", "guard", "official"],
+    "command": "./guard.sh",
+    "hooks": ["pre_tool_call"],
+    "timeout_ms": 3000,
+    "description": "Deny dangerous recursive deletes",
+    "script_name": "guard.sh",
+    "script": "#!/bin/sh\n# Deny a terminal call whose arguments delete a home or root directory.\npayload=$(cat)\nargs=$(printf '%s' \"$payload\" | tr -d '\\n')\ncase \"$args\" in\n  *rm*-rf*/\\ * | *rm*-rf*\\$HOME* | *rm*-rf*~*)\n    echo '{\"deny\":true,\"reason\":\"block-rm-rf refused a recursive delete of a home or root path.\"}'\n    ;;\n  *)\n    echo '{}'\n    ;;\nesac\n"
+  }
+]
