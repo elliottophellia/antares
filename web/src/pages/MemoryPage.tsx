@@ -1,5 +1,12 @@
 import { useEffect, useState } from 'react'
-import { Brain, Database, MagnifyingGlass, Plus, Trash } from '@phosphor-icons/react'
+import {
+  Brain,
+  Database,
+  MagnifyingGlass,
+  PencilSimple,
+  Plus,
+  TrashSimple,
+} from '@phosphor-icons/react'
 import { del, get, post } from '@/lib/api'
 import { useApi } from '@/lib/hooks'
 import { useI18n, useTimeAgo } from '@/lib/i18n'
@@ -17,7 +24,6 @@ import {
   Input,
   Label,
   Tabs,
-  TabsContent,
   TabsList,
   TabsTrigger,
   Textarea,
@@ -27,7 +33,6 @@ import {
   DialogBody,
   DialogClose,
   DialogContent,
-  DialogDescription,
   DialogFooter,
   DialogHeader,
   DialogTitle,
@@ -50,61 +55,21 @@ interface RagStatus {
   detail: string
 }
 
+const PAGE = 24
+
 export default function MemoryPage() {
   const { t } = useI18n()
-  const [tab, setTab] = useState('memory')
-  const [offset, setOffset] = useState(0)
-  const [footer, setFooter] = useState<{ total: number; searching: boolean }>({ total: 0, searching: false })
-  const PAGE = 20
-  return (
-    <PageLayout
-      footer={
-        tab === 'memory' && !footer.searching ? (
-          <Pagination offset={offset} limit={PAGE} total={footer.total} onChange={setOffset} />
-        ) : undefined
-      }
-    >
-      <Tabs value={tab} onValueChange={setTab}>
-        {/* The tab bar stays pinned while the tab's content scrolls beneath it. */}
-        <div className="sticky top-0 z-10 -mx-1 bg-background px-1 pb-3">
-          <TabsList>
-            <TabsTrigger value="memory" className="gap-1.5">
-              <Brain className="size-3.5" /> {t('memory.tabMemory')}
-            </TabsTrigger>
-            <TabsTrigger value="rag" className="gap-1.5">
-              <Database className="size-3.5" /> {t('memory.tabRag')}
-            </TabsTrigger>
-          </TabsList>
-        </div>
-        <TabsContent value="memory">
-          <MemoryTab offset={offset} limit={PAGE} setOffset={setOffset} onListChange={setFooter} />
-        </TabsContent>
-        <TabsContent value="rag">
-          <RagTab />
-        </TabsContent>
-      </Tabs>
-    </PageLayout>
-  )
-}
+  const [tab, setTab] = useState<'memory' | 'rag'>('memory')
 
-function MemoryTab({
-  offset,
-  limit,
-  setOffset,
-  onListChange,
-}: {
-  offset: number
-  limit: number
-  setOffset: (v: number) => void
-  onListChange: (v: { total: number; searching: boolean }) => void
-}) {
-  const { t } = useI18n()
-  const timeAgo = useTimeAgo()
+  // Memory state lives here so the search box (in the sticky header) and the
+  // grid (in the scrolling body) share it.
+  const { data, loading, reload } = useApi<{ memories: MemoryItem[] }>('/memory')
   const [query, setQuery] = useState('')
   const [results, setResults] = useState<MemoryItem[] | null>(null)
-  const [busy, setBusy] = useState(false)
-  const [adding, setAdding] = useState(false)
-  const { data, loading, reload } = useApi<{ memories: MemoryItem[] }>('/memory')
+  const [searchBusy, setSearchBusy] = useState(false)
+  const [offset, setOffset] = useState(0)
+  const [editing, setEditing] = useState<MemoryItem | null>(null)
+  const [creating, setCreating] = useState(false)
 
   const search = async () => {
     const q = query.trim()
@@ -112,146 +77,196 @@ function MemoryTab({
       setResults(null)
       return
     }
-    setBusy(true)
+    setSearchBusy(true)
     try {
       const r = await get<{ memories: MemoryItem[] }>(`/memory/search?q=${encodeURIComponent(q)}`)
       setResults(r.memories)
     } finally {
-      setBusy(false)
-    }
-  }
-
-  const remove = async (id: string) => {
-    setBusy(true)
-    try {
-      await del(`/memory/${id}`)
-      reload()
-      setResults((r) => r?.filter((m) => m.id !== id) ?? null)
-    } finally {
-      setBusy(false)
+      setSearchBusy(false)
     }
   }
 
   const searching = results !== null
   const items = results ?? data?.memories ?? []
-  const paged = searching ? items : items.slice(offset, offset + limit)
+  const paged = searching ? items : items.slice(offset, offset + PAGE)
+  useEffect(() => setOffset(0), [searching])
 
-  useEffect(() => setOffset(0), [searching, setOffset])
-  useEffect(() => onListChange({ total: items.length, searching }), [items.length, searching, onListChange])
+  const remove = async (id: string) => {
+    await del(`/memory/${id}`)
+    reload()
+    setResults((r) => r?.filter((m) => m.id !== id) ?? null)
+  }
+
+  const header = (
+    <div className="space-y-3">
+      <Tabs value={tab} onValueChange={(v) => setTab(v as 'memory' | 'rag')}>
+        <TabsList>
+          <TabsTrigger value="memory" className="gap-1.5">
+            <Brain className="size-3.5" /> {t('memory.tabMemory')}
+          </TabsTrigger>
+          <TabsTrigger value="rag" className="gap-1.5">
+            <Database className="size-3.5" /> {t('memory.tabRag')}
+          </TabsTrigger>
+        </TabsList>
+      </Tabs>
+
+      {tab === 'memory' ? (
+        <div className="flex gap-2">
+          <div className="relative min-w-0 flex-1">
+            <MagnifyingGlass className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+            <Input
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && search()}
+              placeholder={t('memory.searchPlaceholder')}
+              className="pl-9"
+            />
+          </div>
+          <Button variant="outline" onClick={search} loading={searchBusy} className="shrink-0">
+            {t('common.search')}
+          </Button>
+          <Button onClick={() => setCreating(true)} className="shrink-0 gap-1.5">
+            <Plus className="size-4" />
+            <span className="hidden sm:inline">{t('common.new')}</span>
+          </Button>
+        </div>
+      ) : null}
+    </div>
+  )
+
+  const footer =
+    tab === 'memory' && !searching ? (
+      <Pagination offset={offset} limit={PAGE} total={items.length} onChange={setOffset} />
+    ) : undefined
 
   return (
-    <div className="space-y-4">
-      <AddMemoryDialog open={adding} onOpenChange={setAdding} onSaved={reload} />
+    <PageLayout header={header} footer={footer}>
+      {(editing || creating) && (
+        <MemoryEditor
+          item={editing}
+          onClose={() => {
+            setEditing(null)
+            setCreating(false)
+          }}
+          onSaved={() => {
+            setEditing(null)
+            setCreating(false)
+            setResults(null)
+            reload()
+          }}
+        />
+      )}
 
-      {/* Search and the add action share one row: the list is what matters here,
-          so the rarely used form stays behind a button. */}
-      <div className="flex gap-2">
-        <div className="relative min-w-0 flex-1">
-          <MagnifyingGlass className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
-          <Input
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            onKeyDown={(e) => e.key === 'Enter' && search()}
-            placeholder={t('memory.searchPlaceholder')}
-            className="pl-9"
-          />
-        </div>
-        <Button variant="outline" onClick={search} loading={busy} className="shrink-0">
-          {t('common.search')}
-        </Button>
-        <Button onClick={() => setAdding(true)} className="shrink-0 gap-1.5">
-          <Plus className="size-4" />
-          <span className="hidden sm:inline">{t('common.new')}</span>
-        </Button>
-      </div>
-
-      {loading && !data ? (
-        <SkeletonList count={4} />
+      {tab === 'rag' ? (
+        <RagTab />
+      ) : loading && !data ? (
+        <SkeletonList count={6} />
       ) : items.length === 0 ? (
         <EmptyState
           icon={<Brain className="size-8" />}
-          title={t('memory.none')}
-          description={t('memory.noneDesc')}
+          title={searching ? t('memory.noMatch') : t('memory.none')}
+          description={searching ? undefined : t('memory.noneDesc')}
           action={
-            <Button size="sm" onClick={() => setAdding(true)}>
-              {t('memory.add')}
-            </Button>
+            !searching ? (
+              <Button size="sm" onClick={() => setCreating(true)}>
+                {t('memory.add')}
+              </Button>
+            ) : undefined
           }
         />
       ) : (
-        <div className="space-y-2">
+        <div className="grid gap-2.5 sm:grid-cols-2 xl:grid-cols-3">
           {paged.map((m) => (
-            <Card key={m.id} className="flex items-start gap-3 p-3.5">
-              <div className="min-w-0 flex-1">
-                <div className="flex flex-wrap items-center gap-2">
-                  <Badge variant="outline">{m.scope}</Badge>
-                  <span className="font-mono text-[11px] font-medium">{m.key}</span>
-                  <span className="text-[10px] text-muted-foreground">{timeAgo(m.updated_at)}</span>
-                </div>
-                <p className="mt-1 text-xs">{m.content}</p>
-              </div>
-              <Button
-                variant="ghost"
-                size="icon-sm"
-                onClick={() => remove(m.id)}
-                aria-label={t('common.delete')}
-                className="text-muted-foreground hover:text-destructive"
-              >
-                <Trash className="size-4" />
-              </Button>
-            </Card>
+            <MemoryCard key={m.id} m={m} onEdit={() => setEditing(m)} onDelete={() => remove(m.id)} />
           ))}
         </div>
       )}
+    </PageLayout>
+  )
+}
+
+function MemoryCard({
+  m,
+  onEdit,
+  onDelete,
+}: {
+  m: MemoryItem
+  onEdit: () => void
+  onDelete: () => void
+}) {
+  const { t } = useI18n()
+  const timeAgo = useTimeAgo()
+  return (
+    <div className="group flex flex-col rounded-[var(--radius-lg)] border border-border bg-card p-3.5 transition-colors hover:border-primary/40">
+      <button onClick={onEdit} className="min-w-0 flex-1 text-left">
+        <div className="flex flex-wrap items-center gap-2">
+          <Badge variant="outline">{m.scope}</Badge>
+          {m.key ? <span className="min-w-0 truncate font-mono text-[11px] font-medium">{m.key}</span> : null}
+          <PencilSimple className="ml-auto size-3.5 shrink-0 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100" />
+        </div>
+        <p className="mt-1.5 line-clamp-4 text-xs">{m.content}</p>
+      </button>
+      <div className="mt-2.5 flex items-center justify-between border-t border-border pt-2">
+        <span className="text-[10px] text-muted-foreground">{timeAgo(m.updated_at)}</span>
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          onClick={onDelete}
+          aria-label={t('common.delete')}
+          className="text-muted-foreground hover:text-destructive"
+        >
+          <TrashSimple className="size-4" />
+        </Button>
+      </div>
     </div>
   )
 }
 
-function AddMemoryDialog({
-  open,
-  onOpenChange,
+function MemoryEditor({
+  item,
+  onClose,
   onSaved,
 }: {
-  open: boolean
-  onOpenChange: (v: boolean) => void
+  item: MemoryItem | null
+  onClose: () => void
   onSaved: () => void
 }) {
   const { t } = useI18n()
-  const [draft, setDraft] = useState({ key: '', content: '' })
+  const isNew = !item
+  const [draft, setDraft] = useState({
+    key: item?.key ?? '',
+    content: item?.content ?? '',
+    scope: item?.scope ?? 'global',
+  })
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string>()
-
-  useEffect(() => {
-    if (open) {
-      setDraft({ key: '', content: '' })
-      setError(undefined)
-    }
-  }, [open])
 
   const save = async () => {
     if (!draft.content.trim()) return
     setSaving(true)
     setError(undefined)
     try {
-      await post('/memory', { key: draft.key, content: draft.content, scope: 'global' })
+      // Sending the existing id upserts (edit); omitting it creates a new one.
+      await post('/memory', {
+        id: item?.id ?? '',
+        key: draft.key,
+        content: draft.content,
+        scope: draft.scope || 'global',
+      })
       onSaved()
-      onOpenChange(false)
     } catch (e) {
       setError((e as Error).message)
-    } finally {
       setSaving(false)
     }
   }
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog open onOpenChange={(o) => (!o ? onClose() : null)}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>{t('memory.add')}</DialogTitle>
-          <DialogDescription>{t('memory.addDesc')}</DialogDescription>
+          <DialogTitle>{isNew ? t('memory.add') : t('memory.editMemory')}</DialogTitle>
         </DialogHeader>
-
-        <DialogBody>
+        <DialogBody className="space-y-3.5">
           <div className="space-y-1.5">
             <Label htmlFor="mem-content">{t('memory.content')}</Label>
             <Textarea
@@ -260,23 +275,33 @@ function AddMemoryDialog({
               value={draft.content}
               onChange={(e) => setDraft((d) => ({ ...d, content: e.target.value }))}
               placeholder={t('memory.contentPlaceholder')}
-              className="h-24"
+              className="h-32"
             />
           </div>
-          <div className="space-y-1.5">
-            <Label htmlFor="mem-key">
-              {t('memory.key')} ({t('common.optional')})
-            </Label>
-            <Input
-              id="mem-key"
-              value={draft.key}
-              onChange={(e) => setDraft((d) => ({ ...d, key: e.target.value }))}
-              placeholder={t('memory.keyPlaceholder')}
-            />
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-1.5">
+              <Label htmlFor="mem-key">
+                {t('memory.key')} ({t('common.optional')})
+              </Label>
+              <Input
+                id="mem-key"
+                value={draft.key}
+                onChange={(e) => setDraft((d) => ({ ...d, key: e.target.value }))}
+                placeholder={t('memory.keyPlaceholder')}
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="mem-scope">{t('memory.scope')}</Label>
+              <Input
+                id="mem-scope"
+                value={draft.scope}
+                onChange={(e) => setDraft((d) => ({ ...d, scope: e.target.value }))}
+                placeholder="global"
+              />
+            </div>
           </div>
           {error ? <p className="text-xs text-destructive">{error}</p> : null}
         </DialogBody>
-
         <DialogFooter>
           <DialogClose asChild>
             <Button variant="outline" size="sm">
@@ -292,6 +317,15 @@ function AddMemoryDialog({
   )
 }
 
+// ---- RAG ---------------------------------------------------------------------
+
+interface RagResult {
+  content: string
+  path?: string
+  doc_id?: string
+  score: number
+}
+
 function RagTab() {
   const { t } = useI18n()
   const { data, loading, reload } = useApi<RagStatus>('/rag/status')
@@ -299,6 +333,12 @@ function RagTab() {
   const [collection, setCollection] = useState('')
   const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState<string>()
+
+  // Search-the-index state.
+  const [query, setQuery] = useState('')
+  const [searching, setSearching] = useState(false)
+  const [results, setResults] = useState<RagResult[] | null>(null)
+  const [searchErr, setSearchErr] = useState<string>()
 
   const index = async () => {
     if (!path.trim()) return
@@ -316,6 +356,29 @@ function RagTab() {
     } finally {
       setBusy(false)
     }
+  }
+
+  const runSearch = async () => {
+    if (!query.trim()) return
+    setSearching(true)
+    setSearchErr(undefined)
+    try {
+      const r = await post<{ results: RagResult[] }>('/rag/search', {
+        query: query.trim(),
+        collection: collection.trim(),
+      })
+      setResults(r.results ?? [])
+    } catch (e) {
+      setSearchErr((e as Error).message)
+      setResults(null)
+    } finally {
+      setSearching(false)
+    }
+  }
+
+  const removeCollection = async (name: string) => {
+    await del(`/rag/collections/${encodeURIComponent(name)}`).catch(() => {})
+    reload()
   }
 
   if (loading && !data) return <SkeletonList count={3} />
@@ -341,14 +404,83 @@ function RagTab() {
         {data?.collections?.length ? (
           <CardContent className="flex flex-wrap gap-1.5">
             {data.collections.map((c) => (
-              <Badge key={c} variant="secondary">
+              <span
+                key={c}
+                className="group inline-flex items-center gap-1 rounded-full border border-border bg-muted/40 py-0.5 pl-2.5 pr-1 text-xs"
+              >
                 {c}
-              </Badge>
+                <button
+                  onClick={() => removeCollection(c)}
+                  aria-label={t('common.delete')}
+                  className="rounded-full p-0.5 text-muted-foreground/50 transition-colors hover:bg-background hover:text-destructive"
+                >
+                  <TrashSimple className="size-3" />
+                </button>
+              </span>
             ))}
           </CardContent>
         ) : null}
       </Card>
 
+      {/* Search the index. */}
+      <Card>
+        <CardHeader>
+          <CardTitle>{t('memory.ragSearch')}</CardTitle>
+          <CardDescription>{t('memory.ragSearchDesc')}</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <div className="flex gap-2">
+            <div className="relative min-w-0 flex-1">
+              <MagnifyingGlass className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+              <Input
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                onKeyDown={(e) => e.key === 'Enter' && runSearch()}
+                placeholder={t('memory.ragSearchPlaceholder')}
+                className="pl-9"
+                disabled={!data?.enabled}
+              />
+            </div>
+            <Button
+              variant="outline"
+              onClick={runSearch}
+              loading={searching}
+              disabled={!data?.enabled || !query.trim()}
+              className="shrink-0"
+            >
+              {t('common.search')}
+            </Button>
+          </div>
+          {searchErr ? <p className="text-xs text-destructive">{searchErr}</p> : null}
+          {results !== null ? (
+            results.length === 0 ? (
+              <p className="text-xs text-muted-foreground">{t('memory.ragNoHits')}</p>
+            ) : (
+              <div className="space-y-2">
+                {results.map((r, i) => (
+                  <div key={i} className="rounded-[var(--radius-sm)] border border-border p-2.5">
+                    <div className="mb-1 flex items-center gap-2">
+                      {r.path ? (
+                        <span className="min-w-0 truncate font-mono text-[11px] text-muted-foreground">
+                          {r.path}
+                        </span>
+                      ) : null}
+                      <Badge variant="secondary" className="ml-auto shrink-0 tabular-nums">
+                        {r.score.toFixed(3)}
+                      </Badge>
+                    </div>
+                    <p className="whitespace-pre-wrap break-words text-[11px] leading-relaxed text-foreground/90">
+                      {r.content.length > 500 ? r.content.slice(0, 500) + '…' : r.content}
+                    </p>
+                  </div>
+                ))}
+              </div>
+            )
+          ) : null}
+        </CardContent>
+      </Card>
+
+      {/* Index a path. */}
       <Card>
         <CardHeader>
           <CardTitle>{t('memory.indexDocs')}</CardTitle>
