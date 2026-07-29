@@ -39,6 +39,7 @@ type Server struct {
 	mcp     *mcp.Manager
 	mux     *http.ServeMux
 	hub     *liveHub
+	wake    *wakeQueue
 	started time.Time
 
 	// distFS holds the embedded dashboard build, when present.
@@ -46,6 +47,11 @@ type Server struct {
 
 	mu       sync.RWMutex
 	reloadFn func() error
+
+	// dashSessions holds active dashboard login session tokens (cookie value →
+	// expiry). Guarded by its own mutex; cleared when the password changes.
+	dashMu       sync.Mutex
+	dashSessions map[string]time.Time
 }
 
 // Options configures a Server.
@@ -78,9 +84,17 @@ func New(o Options) *Server {
 		mcp:      o.MCP,
 		mux:      http.NewServeMux(),
 		hub:      newLiveHub(),
+		wake:     newWakeQueue(),
 		started:  time.Now(),
 		distFS:   o.Dist,
 		reloadFn: o.Reload,
+
+		dashSessions: map[string]time.Time{},
+	}
+	// Finished background sub-agents resume (or wake) the delegating session
+	// instead of the main agent polling for them.
+	if s.agent != nil {
+		s.agent.OnBackgroundDone(s.onBackgroundDone)
 	}
 	s.routes()
 	return s
@@ -88,7 +102,7 @@ func New(o Options) *Server {
 
 // Handler returns the root handler with middleware applied.
 func (s *Server) Handler() http.Handler {
-	return s.withRecovery(s.withLogging(s.withCORS(s.withAuth(s.mux))))
+	return s.withRecovery(s.withLogging(s.withCORS(s.withAuth(s.withDashboardAuth(s.mux)))))
 }
 
 // Addr returns the configured listen address.

@@ -7,17 +7,19 @@ import (
 	"time"
 )
 
-// taskTool polls and manages the background sub-agents that delegate_task
-// started with background=true.
+// taskTool manages the background sub-agents that delegate_task started with
+// background=true. It is NOT for polling — a finished sub-agent resumes you
+// automatically — but for the occasional manual check or follow-up.
 type taskTool struct{}
 
 func (taskTool) Name() string { return "task" }
 
 func (taskTool) Description() string {
-	return "Check on background sub-agents started with delegate_task(background=true). " +
-		"`list` shows all tasks and their state, `status` reports one task, `output` returns a finished task's answer " +
-		"(or says it is still running), `send` gives a finished task a follow-up instruction and runs it further on the " +
-		"same context, and `stop` cancels one. Launch several long workstreams, keep working, then collect or continue them here."
+	return "Manage background sub-agents started with delegate_task(background=true). " +
+		"You do NOT need to poll: when a sub-agent finishes you are resumed automatically with its result. " +
+		"Do not loop on status/output and never sleep to wait. Use this only for a rare one-off check or follow-up: " +
+		"`list` shows all tasks, `status` reports one, `output` returns a finished task's answer, " +
+		"`send` gives a finished task a follow-up on the same context, and `stop` cancels one."
 }
 
 func (taskTool) Schema() map[string]any {
@@ -80,7 +82,7 @@ func (taskTool) Execute(_ context.Context, in Input) Result {
 		}
 		switch t.Status {
 		case "running":
-			return Text(fmt.Sprintf("Task %s is still running. Keep working and check again shortly.", id))
+			return Text(fmt.Sprintf("Task %s is still running. Do NOT poll or sleep to wait — end your turn; you will be resumed automatically when it finishes.", id))
 		case "stopped":
 			return Text(fmt.Sprintf("Task %s was stopped before it finished.", id))
 		case "error":

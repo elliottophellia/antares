@@ -148,6 +148,10 @@ type RoleInfo struct {
 	Summary  string
 	Category string
 	Danger   bool
+	// Subrole is true for a specialist reached only through its master role.
+	Subrole bool
+	// Parent names the master role a subrole belongs to.
+	Parent string
 }
 
 // FindingStore is the subset of the findings store the tools need.

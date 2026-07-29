@@ -46,6 +46,7 @@ const (
 	EventUsage        EventType = "usage"
 	EventNotice       EventType = "notice"
 	EventApproval     EventType = "approval"
+	EventAsk          EventType = "ask"   // ask_user is waiting for the person's answer; the turn is paused
 	EventReset        EventType = "reset" // discard the partial assistant turn (before a retry)
 	EventError        EventType = "error"
 	EventDone         EventType = "done"
@@ -117,6 +118,12 @@ type Request struct {
 	// Workspace overrides the working directory for this run, used by an
 	// isolated sub-agent running in its own worktree.
 	Workspace string
+	// ContextInject is background context the agent should act on this turn —
+	// currently a finished sub-agent's result. It is fed to the model as new
+	// input (so the agent resumes and processes it), but it is NOT shown as a
+	// user message in the transcript: it is persisted hidden, so it reads as the
+	// agent simply continuing on its own rather than the user asking again.
+	ContextInject string
 }
 
 // Result summarises a completed run.
@@ -144,6 +151,10 @@ type Agent struct {
 	board    *board.Board
 
 	bg *bgManager
+	// onBgDone is fired when a background sub-agent finishes, so the server can
+	// resume the delegating session with the result rather than the agent
+	// polling for it. Nil until the server registers it.
+	onBgDone func(BackgroundDone)
 
 	mu     sync.Mutex
 	active map[string]context.CancelFunc
@@ -263,23 +274,43 @@ func (a *Agent) Run(ctx context.Context, req Request, emit Emit) (*Result, error
 	}
 
 	// Persist the user turn before calling the model so a crash mid-run does not
-	// lose it.
-	userMsg := llm.Message{Role: llm.RoleUser, Content: req.Message, Parts: req.Images}
-	if !req.Quiet {
-		attachments := ""
-		if len(req.Images) > 0 {
-			if b, err := json.Marshal(req.Images); err == nil {
-				attachments = string(b)
+	// lose it. A pure context-inject turn (no user message) skips this — the note
+	// is added just below as hidden context, so there is no empty user bubble.
+	hasUserMsg := strings.TrimSpace(req.Message) != "" || len(req.Images) > 0
+	if hasUserMsg {
+		userMsg := llm.Message{Role: llm.RoleUser, Content: req.Message, Parts: req.Images}
+		if !req.Quiet {
+			attachments := ""
+			if len(req.Images) > 0 {
+				if b, err := json.Marshal(req.Images); err == nil {
+					attachments = string(b)
+				}
+			}
+			if err := a.db.AppendMessage(ctx, &store.Message{
+				ID: newID("msg"), SessionID: sess.ID, Role: store.RoleUser,
+				Content: req.Message, Attachments: attachments,
+			}); err != nil {
+				slog.Warn("persist user message failed", "error", err)
 			}
 		}
-		if err := a.db.AppendMessage(ctx, &store.Message{
-			ID: newID("msg"), SessionID: sess.ID, Role: store.RoleUser,
-			Content: req.Message, Attachments: attachments,
-		}); err != nil {
-			slog.Warn("persist user message failed", "error", err)
+		history = append(history, userMsg)
+	}
+
+	// Background context (a finished sub-agent's result) is fed to the model as
+	// input so the agent resumes and acts on it, but persisted hidden so it is
+	// not rendered as a user message — the transcript shows only the agent's
+	// continuation, not an injected prompt.
+	if strings.TrimSpace(req.ContextInject) != "" {
+		history = append(history, llm.Message{Role: llm.RoleUser, Content: req.ContextInject})
+		if !req.Quiet {
+			if err := a.db.AppendMessage(ctx, &store.Message{
+				ID: newID("msg"), SessionID: sess.ID, Role: store.RoleUser,
+				Content: req.ContextInject, Hidden: true,
+			}); err != nil {
+				slog.Warn("persist context inject failed", "error", err)
+			}
 		}
 	}
-	history = append(history, userMsg)
 
 	activeTools := a.resolveTools(req)
 	toolSpecs := make([]llm.Tool, 0, len(activeTools))
@@ -306,8 +337,9 @@ func (a *Agent) Run(ctx context.Context, req Request, emit Emit) (*Result, error
 		toolCalls  int
 		verified   int
 		judged     int
-		usedTodo   bool // the model kept a task list this run
-		todoNudges int  // times we pushed it to finish open tasks
+		usedTodo   bool          // the model kept a task list this run
+		todoNudges int           // times we pushed it to finish open tasks
+		grContinue int           // times the tool-call guardrail was extended for open tasks
 		failures   []toolFailure // errored tool calls, for post-turn learning
 	)
 	repeats := newRepeatTracker(cfg.Agent.RepeatLimit)
@@ -425,6 +457,28 @@ func (a *Agent) Run(ctx context.Context, req Request, emit Emit) (*Result, error
 		}
 		toolCalls += len(resp.ToolCalls)
 		if a.guardrailTripped(toolCalls, emit) {
+			// The tool-call budget is a loop backstop, not a task deadline. When
+			// there is still work on the todo list, extend it instead of stopping
+			// mid-task: reset the per-segment counter and let it keep going. A
+			// hard cap on how many times we do this keeps a genuine runaway loop
+			// bounded, and agent.max_turns is the final ceiling regardless. With
+			// no open tasks (or the cap reached) we stop as before.
+			open := 0
+			if !req.Quiet && req.Depth == 0 && grContinue < maxGuardrailContinues {
+				open = a.incompleteTodos(runCtx, sess.ID)
+			}
+			if open > 0 {
+				grContinue++
+				toolCalls = 0
+				_ = emit(Event{Type: EventNotice, Message: fmt.Sprintf(
+					"tool-call limit reached with %d task(s) still open — continuing (%d/%d)",
+					open, grContinue, maxGuardrailContinues)})
+				history = append(history, llm.Message{
+					Role:    llm.RoleUser,
+					Content: guardrailContinueMessage(open),
+				})
+				continue
+			}
 			history = append(history, llm.Message{
 				Role:    llm.RoleUser,
 				Content: "Tool-call budget reached. Summarise what you have found and stop calling tools.",
@@ -635,6 +689,7 @@ func (a *Agent) executeTools(
 					Chunk: p.Chunk, Message: p.Message,
 				})
 			},
+			AskUser: a.askBridge(sess.ID, safeEmit),
 			Deps: &tools.Deps{
 				Config: a.cfg, Store: a.db, RAG: a.rag, Shell: a.shell,
 				Sub: a.subAgentFor(req), Tasks: a.backgroundFor(req), Skills: a.skillLibrary(),
@@ -649,8 +704,12 @@ func (a *Agent) executeTools(
 			},
 		}
 
-		timeout := a.toolTimeout(call.Name)
-		toolCtx, cancel := context.WithTimeout(ctx, timeout)
+		// ask_user blocks on a person and has no deadline; every other tool runs
+		// under its timeout. The parent ctx still cancels ask_user on stop/close.
+		toolCtx, cancel := ctx, func() {}
+		if call.Name != "ask_user" {
+			toolCtx, cancel = context.WithTimeout(ctx, a.toolTimeout(call.Name))
+		}
 		defer cancel()
 
 		start := time.Now()
@@ -741,7 +800,7 @@ func (a *Agent) subAgentFor(parent Request) tools.SubAgent {
 		// take the parent down. Nested delegation stays in-process to avoid a
 		// fork storm; file-backed findings/intel/sessions flow either way.
 		if a.cfg.Delegation.Subprocess && depth == 1 {
-			untrack := trackSubAgent(sub.Role, sub.Prompt, parent.SessionID)
+			_, untrack := trackSubAgent(sub.Role, sub.Prompt, parent.SessionID)
 			defer untrack()
 			return a.runSubprocess(ctx, sub)
 		}
@@ -761,7 +820,7 @@ func (a *Agent) subAgentFor(parent Request) tools.SubAgent {
 			}
 		}
 
-		untrack := trackSubAgent(sub.Role, sub.Prompt, parent.SessionID)
+		subID, untrack := trackSubAgent(sub.Role, sub.Prompt, parent.SessionID)
 		defer untrack()
 
 		res, err := a.Run(ctx, Request{
@@ -776,7 +835,7 @@ func (a *Agent) subAgentFor(parent Request) tools.SubAgent {
 			UserID:      parent.UserID,
 			Quiet:       true,
 			Depth:       depth,
-		}, func(e Event) error {
+		}, subEmit(subID, func(e Event) error {
 			if sub.OnProgress != nil {
 				switch e.Type {
 				case EventToolCall:
@@ -786,7 +845,7 @@ func (a *Agent) subAgentFor(parent Request) tools.SubAgent {
 				}
 			}
 			return nil
-		})
+		}))
 		note := ""
 		kept := false
 		if wt != nil {

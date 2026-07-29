@@ -71,6 +71,13 @@ func (s *sqlStore) ListSessions(ctx context.Context, f SessionFilter) ([]Session
 		where = append(where, "platform=?")
 		args = append(args, f.Platform)
 	}
+	for _, p := range f.ExcludePlatforms {
+		if p == "" {
+			continue
+		}
+		where = append(where, "platform<>?")
+		args = append(args, p)
+	}
 	if f.UserID != "" {
 		where = append(where, "user_id=?")
 		args = append(args, f.UserID)

@@ -159,7 +159,7 @@ func (delegateTool) Execute(ctx context.Context, in Input) Result {
 			ParentID:    in.SessionID,
 		})
 		return Result{
-			Content: fmt.Sprintf("Started background task %s. Keep working, then poll it with the task tool (action=status id=%s) or collect the answer with action=output.", id, id),
+			Content: fmt.Sprintf("Started background task %s. Do NOT poll it — do not loop on task action=status and do not sleep to wait. End your turn now; you will be resumed automatically with the result when it finishes (a message beginning \"[Background sub-agent finished]\"). The user can keep chatting meanwhile. (task action=status/output remain only for a rare one-off manual check.)", id),
 			Meta:    map[string]any{"task_id": id},
 		}
 	}

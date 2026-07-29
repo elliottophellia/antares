@@ -31,12 +31,22 @@ function authHeaders(): Record<string, string> {
 export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
   const res = await fetch(`/api${path}`, {
     ...init,
+    // Include the dashboard login cookie on every request.
+    credentials: 'include',
     headers: {
       ...(init.body ? { 'Content-Type': 'application/json' } : {}),
       ...authHeaders(),
       ...(init.headers as Record<string, string>),
     },
   })
+
+  // A dashboard-login 401 means the session expired or was never established;
+  // bounce to the login screen unless we are already on it or authenticating.
+  if (res.status === 401 && !path.startsWith('/auth/')) {
+    if (typeof window !== 'undefined' && window.location.pathname !== '/login') {
+      window.location.assign('/login')
+    }
+  }
 
   const text = await res.text()
   let body: unknown = text

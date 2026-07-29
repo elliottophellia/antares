@@ -439,6 +439,22 @@ func todoContinueMessage(open int) string {
 		"Keep going until every item is completed.", open)
 }
 
+// maxGuardrailContinues bounds how many times a single run may extend past the
+// tool-call guardrail because tasks are still open. It is a higher ceiling than
+// a single segment's budget — enough for a long multi-step task — while still
+// preventing a genuine runaway tool loop from running unbounded. agent.max_turns
+// remains the absolute backstop.
+const maxGuardrailContinues = 9
+
+// guardrailContinueMessage is injected when the per-segment tool-call budget is
+// reached but the todo list still has open items: keep working rather than stop.
+func guardrailContinueMessage(open int) string {
+	return fmt.Sprintf("You have made many tool calls, but %d task(s) on your todo list are still open. "+
+		"This is a normal checkpoint, not a limit to stop at — keep going and finish them. "+
+		"Work efficiently: prefer fewer, higher-value tool calls, and avoid repeating steps that did not help. "+
+		"Continue until every task is completed.", open)
+}
+
 func (a *Agent) followUp(
 	ctx context.Context,
 	req Request,
@@ -718,6 +734,7 @@ func (a *Agent) roleInfos() []tools.RoleInfo {
 	for _, r := range list {
 		out = append(out, tools.RoleInfo{
 			Name: r.Name, Summary: r.Summary, Category: r.Category, Danger: r.Danger,
+			Subrole: r.Subrole, Parent: r.Parent,
 		})
 	}
 	return out
@@ -749,10 +766,12 @@ var swarm = struct {
 	seq    int
 }{agents: map[string]ActiveAgent{}}
 
-// trackSubAgent registers a running sub-agent and returns a function to
-// deregister it. The registry is what a swarm panel reads to show who is
-// working — the multi-agent state a person otherwise cannot see.
-func trackSubAgent(role, task, parent string) func() {
+// trackSubAgent registers a running sub-agent, opens its live event stream, and
+// returns the assigned id plus a function to deregister it. The registry is what
+// a swarm panel reads to show who is working; the stream is what the panel taps
+// to watch a sub-agent's output live. The id ties the two together, so listing
+// the active agents gives a client exactly the ids it can attach to.
+func trackSubAgent(role, task, parent string) (string, func()) {
 	swarm.mu.Lock()
 	swarm.seq++
 	id := "sub-" + strconv.Itoa(swarm.seq)
@@ -761,10 +780,14 @@ func trackSubAgent(role, task, parent string) func() {
 		Task: truncate(task, 120), Parent: parent, StartedAt: nowFunc(),
 	}
 	swarm.mu.Unlock()
-	return func() {
+	openSubStream(id)
+	notifySwarm()
+	return id, func() {
 		swarm.mu.Lock()
 		delete(swarm.agents, id)
 		swarm.mu.Unlock()
+		closeSubStream(id)
+		notifySwarm()
 	}
 }
 

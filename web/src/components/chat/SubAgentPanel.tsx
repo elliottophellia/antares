@@ -1,0 +1,144 @@
+import { useEffect, useRef, useState } from 'react'
+import { ArrowLeft, CircleNotch, UsersThree } from '@phosphor-icons/react'
+import { streamGet, type StreamEvent } from '@/lib/api'
+import { useI18n } from '@/lib/i18n'
+import {
+  MessageBubble,
+  appendSeg,
+  pushToolSeg,
+  updateToolSeg,
+  type ChatMessage,
+} from '@/pages/ChatPage'
+
+export interface ActiveAgent {
+  id: string
+  role: string
+  task: string
+  parent: string
+  started_at: string
+}
+
+/**
+ * A full-height overlay that shows one sub-agent's live transcript, built from
+ * its own SSE stream (the same event shape as the main chat). The back control
+ * returns to the main agent. Rendering reuses MessageBubble so a sub-agent's
+ * text, reasoning, and tool calls look exactly like the main agent's.
+ */
+export function SubAgentPanel({ agent, onBack }: { agent: ActiveAgent; onBack: () => void }) {
+  const { t } = useI18n()
+  const [messages, setMessages] = useState<ChatMessage[]>([])
+  const [done, setDone] = useState(false)
+  const bottomRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    // Reset when switching between sub-agents.
+    setMessages([])
+    setDone(false)
+    const id = `sub_${agent.id}`
+    // Seed a single assistant message the stream fills in, mirroring how the
+    // main transcript renders one streaming turn.
+    setMessages([{ id, role: 'assistant', content: '' }])
+
+    const patch = (fn: (m: ChatMessage) => ChatMessage) =>
+      setMessages((prev) => prev.map((m) => (m.id === id ? fn(m) : m)))
+
+    const close = streamGet(
+      `/subagent/${encodeURIComponent(agent.id)}/attach`,
+      (event: StreamEvent) => {
+        switch (event.type) {
+          case 'text':
+            patch((m) => appendSeg(m, 'text', String(event.delta ?? '')))
+            break
+          case 'reasoning':
+            patch((m) => appendSeg(m, 'reasoning', String(event.delta ?? '')))
+            break
+          case 'tool_call':
+            patch((m) =>
+              pushToolSeg(m, {
+                id: String(event.id ?? ''),
+                name: String(event.name ?? ''),
+                args: String(event.arguments ?? ''),
+                running: true,
+              }),
+            )
+            break
+          case 'tool_progress':
+            patch((m) =>
+              updateToolSeg(m, String(event.id ?? ''), (c) => ({
+                ...c,
+                progress: (c.progress ?? '') + String(event.chunk ?? event.message ?? ''),
+              })),
+            )
+            break
+          case 'tool_result':
+            patch((m) =>
+              updateToolSeg(m, String(event.id ?? ''), (c) => ({
+                ...c,
+                result: String(event.content ?? ''),
+                isError: !!event.is_error,
+                running: false,
+              })),
+            )
+            break
+          case 'error':
+            patch((m) => ({ ...m, error: String(event.error ?? '') }))
+            break
+          case 'done':
+            setDone(true)
+            break
+        }
+      },
+      () => setDone(true),
+    )
+    return close
+  }, [agent.id])
+
+  // Keep the newest output in view as it streams.
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({ block: 'end' })
+  }, [messages])
+
+  return (
+    <div className="flex h-full min-h-0 flex-col">
+      {/* Header: back to main + which sub-agent this is. */}
+      <div className="sticky top-0 z-10 flex items-center gap-2 border-b border-border bg-background/95 px-4 py-2.5 backdrop-blur sm:px-6">
+        <button
+          type="button"
+          onClick={onBack}
+          className="inline-flex items-center gap-1.5 rounded-[var(--radius-sm)] border border-border px-2 py-1 text-xs text-muted-foreground transition hover:bg-muted hover:text-foreground"
+        >
+          <ArrowLeft className="size-3.5" />
+          {t('subagents.backToMain')}
+        </button>
+        <div className="flex min-w-0 flex-1 items-center gap-1.5">
+          <UsersThree className="size-4 shrink-0 text-muted-foreground" />
+          <span className="truncate text-sm font-medium">{agent.role || 'assistant'}</span>
+          {!done ? (
+            <CircleNotch className="size-3.5 shrink-0 animate-spin text-primary" />
+          ) : (
+            <span className="text-[11px] text-muted-foreground">{t('subagents.finished')}</span>
+          )}
+        </div>
+      </div>
+
+      <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4 sm:px-6">
+        <div className="mx-auto w-full max-w-3xl space-y-5">
+          {agent.task ? (
+            <div className="rounded-[var(--radius-md)] border-l-2 border-primary bg-muted/40 px-3.5 py-2.5">
+              <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                {t('subagents.task')}
+              </p>
+              <p className="mt-0.5 whitespace-pre-wrap break-words text-[13px] text-foreground">
+                {agent.task}
+              </p>
+            </div>
+          ) : null}
+          {messages.map((m) => (
+            <MessageBubble key={m.id} message={m} />
+          ))}
+          <div ref={bottomRef} />
+        </div>
+      </div>
+    </div>
+  )
+}

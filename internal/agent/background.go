@@ -17,11 +17,24 @@ import (
 // results when they are ready. That is what these tasks are for.
 
 type bgTask struct {
-	info      tools.TaskInfo
-	cancel    context.CancelFunc
-	sessionID string // the sub-agent's session, so it can be continued
-	depth     int
-	userID    string
+	info          tools.TaskInfo
+	cancel        context.CancelFunc
+	sessionID     string // the sub-agent's session, so it can be continued
+	parentSession string // the session that delegated it, to signal on finish
+	depth         int
+	userID        string
+}
+
+// BackgroundDone is the signal a finished background sub-agent sends back to the
+// session that delegated it, so the main agent can be resumed with the result
+// instead of polling for it.
+type BackgroundDone struct {
+	ParentSession string
+	TaskID        string
+	Role          string
+	Task          string
+	Output        string
+	Err           string
 }
 
 // bgManager holds every background task for the process, keyed by id.
@@ -65,15 +78,16 @@ func (a *Agent) startBackground(parent Request, req tools.SubAgentRequest) strin
 			ID: id, Role: req.Role, Task: truncTask(req.Prompt),
 			Status: "running", StartedAt: time.Now(),
 		},
-		cancel: cancel,
-		depth:  depth,
-		userID: parent.UserID,
+		cancel:        cancel,
+		parentSession: parent.SessionID,
+		depth:         depth,
+		userID:        parent.UserID,
 	}
 	a.bg.mu.Lock()
 	a.bg.tasks[id] = task
 	a.bg.mu.Unlock()
 
-	untrack := trackSubAgent(req.Role, req.Prompt, parent.SessionID)
+	subID, untrack := trackSubAgent(req.Role, req.Prompt, parent.SessionID)
 
 	go func() {
 		defer cancel()
@@ -86,7 +100,8 @@ func (a *Agent) startBackground(parent Request, req tools.SubAgentRequest) strin
 		workspace := firstNonEmpty(req.Workspace, a.cfg.Agent.Workspace)
 
 		// Not Quiet: the sub-agent keeps a real session, so the task can be
-		// continued later with the task tool's send action.
+		// continued later with the task tool's send action. Every event is
+		// mirrored onto the sub-agent's stream so the dashboard can watch it live.
 		res, err := a.Run(ctx, Request{
 			Message:     req.Prompt,
 			SystemExtra: req.SystemExtra,
@@ -98,13 +113,45 @@ func (a *Agent) startBackground(parent Request, req tools.SubAgentRequest) strin
 			Platform:    "background",
 			UserID:      parent.UserID,
 			Depth:       depth,
-		}, nil)
+		}, subEmit(subID, nil))
 
 		a.bg.finish(id, res, err, ctx.Err())
+		// Signal the delegating session that this worker is done, so the main
+		// agent is resumed with the result instead of polling for it. Skipped for
+		// a task the user explicitly stopped (that is not a result to act on).
+		a.signalBackgroundDone(id)
 	}()
 
 	return id
 }
+
+// signalBackgroundDone fires the OnBackgroundDone callback for a finished task,
+// carrying its outcome back to the parent session. It reads the recorded task
+// state so the message reflects success, error, or a stop.
+func (a *Agent) signalBackgroundDone(id string) {
+	a.bg.mu.Lock()
+	t, ok := a.bg.tasks[id]
+	cb := a.onBgDone
+	a.bg.mu.Unlock()
+	if !ok || cb == nil || t.parentSession == "" {
+		return
+	}
+	if t.info.Status == "stopped" {
+		return
+	}
+	cb(BackgroundDone{
+		ParentSession: t.parentSession,
+		TaskID:        id,
+		Role:          t.info.Role,
+		Task:          t.info.Task,
+		Output:        t.info.Output,
+		Err:           t.info.Error,
+	})
+}
+
+// OnBackgroundDone registers the callback invoked when a background sub-agent
+// finishes. The server uses it to resume (or wake) the delegating session.
+func (a *Agent) OnBackgroundDone(cb func(BackgroundDone)) { a.onBgDone = cb }
 
 // continueTask sends a follow-up to a finished task, running another turn on the
 // same sub-session so the coordinator can iterate with a worker. It runs
