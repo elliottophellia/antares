@@ -19,6 +19,7 @@ type Config struct {
 	Plugins       Plugins             `yaml:"plugins" json:"plugins"`
 	Roles         Roles               `yaml:"roles" json:"roles"`
 	Security      Security            `yaml:"security" json:"security"`
+	OSINT         OSINT               `yaml:"osint" json:"osint"`
 	ImageGen      ImageGen            `yaml:"image_gen" json:"image_gen"`
 	Cron          Cron                `yaml:"cron" json:"cron"`
 	Autopilot     Autopilot           `yaml:"autopilot" json:"autopilot"`
@@ -319,6 +320,16 @@ type Security struct {
 	Scope []string `yaml:"scope" json:"scope"`
 	// RequireScope is ignored. Kept for backward compatibility.
 	RequireScope bool `yaml:"require_scope" json:"require_scope"`
+}
+
+// OSINT holds optional credentials that unlock deeper open-source lookups. All
+// OSINT tools work keyless by default; these only enable extras.
+type OSINT struct {
+	// GoogleCookie is a full Cookie header from a logged-in Google session,
+	// used by osint_google to resolve an email/gaia id to its public Google
+	// profile (GHunt-style). Optional and ToS-sensitive: supplying your own
+	// session cookie is your decision. Empty disables the tool with a hint.
+	GoogleCookie string `yaml:"google_cookie" json:"google_cookie"`
 }
 
 // Roles configures the specialist agent roles.

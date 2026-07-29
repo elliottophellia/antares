@@ -130,11 +130,12 @@ var help = map[string]string{
 	"terminal.backend":          "local runs on this machine; docker and ssh sandbox it elsewhere.",
 	"memory.memory_enabled":     "Lets the agent store durable facts between sessions.",
 	"skills.auto_create":        "Allows the agent to write new skills on its own.",
+	"osint.google_cookie":       "Optional. A logged-in Google Cookie header enables osint_google to resolve an email to its public profile. ToS-sensitive; uses your own session. Leave empty to disable.",
 }
 
 func secretKey(path string) bool {
 	l := strings.ToLower(path)
-	for _, s := range []string{"api_key", "token", "secret", "password", "dsn"} {
+	for _, s := range []string{"api_key", "token", "secret", "password", "dsn", "cookie"} {
 		if strings.Contains(l, s) {
 			return l != "database.dsn" || strings.Contains(l, "password")
 		}

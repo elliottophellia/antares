@@ -471,3 +471,99 @@ func intsJoin(nums []int) string {
 	}
 	return strings.Join(parts, ", ")
 }
+
+// ---- osint_google (optional, cookie-gated) ----------------------------------
+
+// osintGoogleTool resolves an email to its public Google account profile — the
+// name, profile photo, and (when present) Google-surfaced activity — the way
+// GHunt does. It needs a logged-in Google session Cookie header in config
+// (osint.google_cookie); without one it explains how to enable it rather than
+// failing silently. Uses only the account owner's own session and reads public
+// profile data; ToS-sensitive, so the operator opts in by supplying the cookie.
+type osintGoogleTool struct{}
+
+func (osintGoogleTool) Name() string { return "osint_google" }
+func (osintGoogleTool) Description() string {
+	return "Resolve an email to its public Google account profile (display name, profile photo, " +
+		"last-updated hints), GHunt-style. Requires a Google session cookie configured under " +
+		"osint.google_cookie; without it, the tool explains how to enable it. For authorized investigations."
+}
+func (osintGoogleTool) Schema() map[string]any {
+	return schema(map[string]any{
+		"email": prop("string", "The Gmail/Google address to resolve to a public profile."),
+	}, "email")
+}
+func (osintGoogleTool) RequiresApproval() bool { return false }
+
+func (osintGoogleTool) Execute(ctx context.Context, in Input) Result {
+	var args struct {
+		Email string `json:"email"`
+	}
+	if err := in.Bind(&args); err != nil {
+		return Errorf("%v", err)
+	}
+	email := strings.TrimSpace(strings.ToLower(args.Email))
+	if !strings.Contains(email, "@") {
+		return Errorf("%q is not a valid email", email)
+	}
+
+	cookie := ""
+	if in.Deps != nil && in.Deps.Config != nil {
+		cookie = strings.TrimSpace(in.Deps.Config.OSINT.GoogleCookie)
+	}
+	if cookie == "" {
+		return Text("Google profile lookup is not enabled.\n\n" +
+			"It needs a logged-in Google session cookie. To enable it:\n" +
+			"  1. Sign in to any Google account in a browser.\n" +
+			"  2. Copy the full Cookie header for google.com (DevTools → Network → any request → Cookie).\n" +
+			"  3. Set it under Settings → osint.google_cookie (stored redacted).\n\n" +
+			"This is optional and ToS-sensitive — it uses your own session. " +
+			"Meanwhile, osint_email already gives you username candidates and a GitHub-commit pivot for " + email + ".")
+	}
+
+	// Google's People API People:lookup by email. The People API endpoint with a
+	// browser session cookie returns the public profile for a resolvable
+	// address. Endpoints and gating change often; treat failure as "unknown".
+	endpoint := "https://people-pa.clients6.google.com/v2/people/lookup?id=" + url.QueryEscape(email) +
+		"&type=EMAIL&matchType=EXACT&extensionSet.extensionNames=HANGOUTS_ADDITIONAL_DATA"
+	req, err := http.NewRequestWithContext(ctx, "GET", endpoint, nil)
+	if err != nil {
+		return Errorf("%v", err)
+	}
+	req.Header.Set("Cookie", cookie)
+	req.Header.Set("User-Agent", "Mozilla/5.0")
+	req.Header.Set("Accept", "application/json")
+	resp, err := webClient.Do(req)
+	if err != nil {
+		return Errorf("Google lookup failed to connect: %v", err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+
+	if resp.StatusCode == 401 || resp.StatusCode == 403 {
+		return Text("Google rejected the session cookie (HTTP " + fmt.Sprint(resp.StatusCode) +
+			"). It may be expired — refresh osint.google_cookie from a current session.")
+	}
+	if resp.StatusCode != 200 {
+		return Errorf("Google returned HTTP %d", resp.StatusCode)
+	}
+
+	// The response shape is deeply nested and version-specific; rather than pin
+	// a brittle struct, surface the raw JSON for the model to read and pull the
+	// display name / photo / profile links from. Trimmed to keep it manageable.
+	var b strings.Builder
+	fmt.Fprintf(&b, "Google profile lookup for %s (HTTP 200)\n\n", email)
+	trimmed := string(body)
+	if len(trimmed) > 6000 {
+		trimmed = trimmed[:6000] + "\n…(truncated)"
+	}
+	if strings.TrimSpace(trimmed) == "" || strings.Contains(trimmed, `"people":{}`) || strings.Contains(trimmed, `"matches":[]`) {
+		b.WriteString("No public Google profile resolved for this address (it may not be a Google account, " +
+			"or the profile is private).\n")
+	} else {
+		b.WriteString("Raw People API response (extract the display name, photo URL, and any profile/plus links):\n\n")
+		b.WriteString(trimmed)
+		b.WriteString("\n")
+	}
+	return Text(b.String())
+}
