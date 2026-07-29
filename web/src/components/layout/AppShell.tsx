@@ -158,9 +158,11 @@ function PageFrame() {
     )
   }
 
-  // A fill-viewport page owns its own scrolling on desktop: the frame stops
-  // growing, and the page splits the remaining height between its panes.
-  const fill = !!route?.fillViewport
+  // Content pages own their scrolling on desktop: the frame stops growing and
+  // the page scrolls inside it (via PageLayout), so the header and any footer
+  // stay put. This is the default now; a route sets staticHeight to opt out
+  // (a genuinely short page that should just size to its content).
+  const fill = !route?.staticHeight
 
   return (
     <div
@@ -240,7 +242,7 @@ export function AppShell() {
                 onClick={() => setDrawerOpen(false)}
               />
               <div className="absolute inset-y-0 left-0 flex w-[17rem] max-w-[85vw] flex-col bg-sidebar shadow-2xl fade-up">
-                <div className="safe-top flex items-center justify-between px-4 py-4">
+                <div className="flex items-center justify-between px-4 pb-4 pt-[calc(env(safe-area-inset-top)+1.5rem)]">
                   <div className="flex items-center gap-2.5">
                     <AntaresMark />
                     <p className="text-sm font-semibold tracking-tight">Antares</p>

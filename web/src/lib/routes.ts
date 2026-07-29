@@ -3,7 +3,6 @@ import {
   ChartLineUp,
   ChatCircleDots,
   ClockCounterClockwise,
-  Cpu,
   Database,
   FileText,
   Gear,
@@ -39,11 +38,11 @@ export interface RouteDef {
   /** Renders without the standard page container and header. */
   fullBleed?: boolean
   /**
-   * Pins the page to the viewport on desktop so it can scroll its own panes
-   * instead of the document. Used where a long side rail would otherwise
-   * scroll away from the content it navigates.
+   * Opt out of the default fixed-height frame: let this page size to its
+   * content and scroll with the document instead of scrolling inside a fixed
+   * container. For genuinely short, static pages.
    */
-  fillViewport?: boolean
+  staticHeight?: boolean
 }
 
 /**
@@ -70,11 +69,12 @@ export const ROUTES: RouteDef[] = [
     primary: true,
   },
   {
-    path: '/models',
-    titleKey: 'models.title',
-    descKey: 'models.desc',
-    icon: Cpu,
-    component: lazy(() => import('@/pages/ModelsPage')),
+    path: '/providers',
+    aliases: ['/models'],
+    titleKey: 'providers.title',
+    descKey: 'providers.desc',
+    icon: Plugs,
+    component: lazy(() => import('@/pages/ProvidersPage')),
     primary: true,
   },
   {
@@ -189,7 +189,6 @@ export const ROUTES: RouteDef[] = [
     icon: Gear,
     component: lazy(() => import('@/pages/ConfigPage')),
     primary: true,
-    fillViewport: true,
   },
   {
     path: '/system',
@@ -204,7 +203,7 @@ export const ROUTES: RouteDef[] = [
 export const NAV_LABELS: Record<string, MessageKey> = {
   '/': 'nav.chat',
   '/sessions': 'nav.sessions',
-  '/models': 'nav.models',
+  '/providers': 'nav.providers',
   '/tools': 'nav.tools',
   '/memory': 'nav.memory',
   '/skills': 'nav.skills',

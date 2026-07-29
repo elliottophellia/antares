@@ -1,9 +1,10 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { ArrowUUpLeft, File as FileIcon, Folder, House } from '@phosphor-icons/react'
 import { get } from '@/lib/api'
 import { useApi } from '@/lib/hooks'
 import { formatBytes } from '@/lib/utils'
-import { PageBody } from '@/components/layout/AppShell'
+import { PageLayout } from '@/components/layout/PageLayout'
+import { Pagination } from '@/components/ui/Pagination'
 import { Button } from '@/components/ui/button'
 import { Card, EmptyState } from '@/components/ui/primitives'
 import { Skeleton, SkeletonList } from '@/components/ui/skeleton'
@@ -24,10 +25,14 @@ export default function FilesPage() {
   const [path, setPath] = useState('.')
   const [preview, setPreview] = useState<{ path: string; content: string } | null>(null)
   const [loadingPreview, setLoadingPreview] = useState(false)
+  const [offset, setOffset] = useState(0)
+  const PAGE = 20
   const { data, loading } = useApi<{ path: string; parent: string; entries: Entry[] }>(
     `/files?path=${encodeURIComponent(path)}`,
     [path],
   )
+
+  useEffect(() => setOffset(0), [path])
 
   const open = async (entry: Entry) => {
     if (entry.is_dir) {
@@ -61,8 +66,13 @@ export default function FilesPage() {
     [data?.parent, t],
   )
 
+  const entries = data?.entries ?? []
+  const paged = entries.slice(offset, offset + PAGE)
+
   return (
-    <PageBody>
+    <PageLayout
+      footer={<Pagination offset={offset} limit={PAGE} total={entries.length} onChange={setOffset} />}
+    >
       <p className="truncate font-mono text-xs text-muted-foreground">{data?.path ?? path}</p>
 
       {loading && !data ? (
@@ -71,7 +81,7 @@ export default function FilesPage() {
         <EmptyState icon={<Folder className="size-8" />} title={t('files.emptyFolder')} />
       ) : (
         <Card className="divide-y divide-border">
-          {data!.entries.map((e) => (
+          {paged.map((e) => (
             <button
               key={e.path}
               onClick={() => open(e)}
@@ -109,6 +119,6 @@ export default function FilesPage() {
           </pre>
         </Card>
       ) : null}
-    </PageBody>
+    </PageLayout>
   )
 }

@@ -3,7 +3,7 @@ import { DownloadSimple, ShieldCheck, Warning } from '@phosphor-icons/react'
 import { downloadFile, get } from '@/lib/api'
 import { useApi } from '@/lib/hooks'
 import { useI18n } from '@/lib/i18n'
-import { PageBody } from '@/components/layout/AppShell'
+import { PageLayout } from '@/components/layout/PageLayout'
 import { Badge, Card, CardHeader, CardTitle, EmptyState } from '@/components/ui/primitives'
 import { SkeletonList } from '@/components/ui/skeleton'
 
@@ -89,12 +89,12 @@ export default function EngagementPage() {
     }
   }, [active])
 
-  if (loading) return <PageBody><SkeletonList count={3} /></PageBody>
+  if (loading) return <PageLayout><SkeletonList count={3} /></PageLayout>
   if (sessions.length === 0) {
     return (
-      <PageBody>
+      <PageLayout>
         <EmptyState icon={<ShieldCheck className="size-8" />} title={t('engagement.empty')} description={t('engagement.emptyDesc')} />
-      </PageBody>
+      </PageLayout>
     )
   }
 
@@ -103,7 +103,7 @@ export default function EngagementPage() {
   const pct = eng?.coverage_percent ?? 0
 
   return (
-    <PageBody>
+    <PageLayout>
       <div className="space-y-4">
         <div className="flex items-center gap-2">
           <label className="text-xs text-muted-foreground">{t('engagement.pickSession')}</label>
@@ -241,6 +241,6 @@ export default function EngagementPage() {
           </Card>
         ) : null}
       </div>
-    </PageBody>
+    </PageLayout>
   )
 }

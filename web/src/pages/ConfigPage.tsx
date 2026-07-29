@@ -185,7 +185,12 @@ export default function ConfigPage() {
       {saved ? <CheckCircle className="size-4" weight="fill" /> : <FloppyDisk className="size-4" />}
       {saved ? t('common.saved') : dirty ? t('config.saveN', { n: dirty }) : t('common.save')}
     </Button>,
-    [dirty, saving, saved, t],
+    // `edits` (not just its count `dirty`) must be a dependency: `save` closes
+    // over the edits map, so without this the header button keeps a stale
+    // closure while you edit ONE field — dirty stays 1, the button is never
+    // re-registered, and Save keeps posting only the first keystroke. That was
+    // the "only one character saves per save" bug.
+    [edits, dirty, saving, saved, t],
   )
 
   const renderRows = (list: Field[], withGroup = false) => (
@@ -449,18 +454,7 @@ function FieldRow({
             ))}
           </select>
         ) : field.type === 'string[]' ? (
-          <Input
-            value={Array.isArray(value) ? (value as string[]).join(', ') : ''}
-            placeholder={t('config.commaSeparated')}
-            onChange={(e) =>
-              onChange(
-                e.target.value
-                  .split(',')
-                  .map((s) => s.trim())
-                  .filter(Boolean),
-              )
-            }
-          />
+          <ListInput value={value} onChange={onChange} placeholder={t('config.commaSeparated')} />
         ) : field.secret ? (
           <div className="flex gap-2">
             <Input
@@ -486,6 +480,49 @@ function FieldRow({
         )}
       </div>
     </div>
+  )
+}
+
+/**
+ * A comma-separated list editor. Keeps the RAW text you type as its own state
+ * so typing is never interrupted — the previous version reparsed to an array on
+ * every keystroke and re-joined it, which silently dropped commas, trailing
+ * spaces, and in-progress entries (the "only the first letter saves" bug).
+ * Parsing to string[] happens on change (for the draft) but the field shows
+ * exactly what you typed; a blur normalises the display.
+ */
+function ListInput({
+  value,
+  onChange,
+  placeholder,
+}: {
+  value: unknown
+  onChange: (v: string[]) => void
+  placeholder?: string
+}) {
+  const joined = Array.isArray(value) ? (value as string[]).join(', ') : ''
+  const [text, setText] = useState(joined)
+
+  // Resync from outside only when the committed value truly differs from what
+  // the raw text parses to (e.g. after Save/reload), not on every keystroke.
+  useEffect(() => {
+    const parsed = text.split(',').map((s) => s.trim()).filter(Boolean)
+    if (parsed.join(' ') !== (Array.isArray(value) ? (value as string[]).join(' ') : '')) {
+      setText(joined)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [joined])
+
+  return (
+    <Input
+      value={text}
+      placeholder={placeholder}
+      onChange={(e) => {
+        setText(e.target.value)
+        onChange(e.target.value.split(',').map((s) => s.trim()).filter(Boolean))
+      }}
+      onBlur={() => setText((t) => t.split(',').map((s) => s.trim()).filter(Boolean).join(', '))}
+    />
   )
 }
 

@@ -4,7 +4,8 @@ import { ChatCircleDots, Broom, MagnifyingGlass, Trash } from '@phosphor-icons/r
 import { del, get, post } from '@/lib/api'
 import { useApi } from '@/lib/hooks'
 import { formatCount } from '@/lib/utils'
-import { PageBody } from '@/components/layout/AppShell'
+import { PageLayout } from '@/components/layout/PageLayout'
+import { Pagination } from '@/components/ui/Pagination'
 import { Button } from '@/components/ui/button'
 import { Badge, Card, EmptyState, Input } from '@/components/ui/primitives'
 import { SkeletonList } from '@/components/ui/skeleton'
@@ -43,6 +44,8 @@ export default function SessionsPage() {
   const [debounced, setDebounced] = useState('')
   const [busy, setBusy] = useState(false)
   const [hits, setHits] = useState<SearchHit[] | null>(null)
+  const [offset, setOffset] = useState(0)
+  const PAGE = 20
 
   const { data, loading, reload } = useApi<SessionList>('/sessions?limit=100')
   const { data: emptyCount, reload: reloadEmpty } = useApi<{ count: number }>('/sessions/empty/count')
@@ -72,6 +75,10 @@ export default function SessionsPage() {
     const q = debounced.toLowerCase()
     return all.filter((s) => s.title.toLowerCase().includes(q))
   }, [data, debounced])
+
+  // Reset to the first page whenever the filter changes the result set.
+  useEffect(() => setOffset(0), [debounced])
+  const paged = sessions.slice(offset, offset + PAGE)
 
   const removeSession = async (id: string) => {
     setBusy(true)
@@ -113,17 +120,24 @@ export default function SessionsPage() {
   )
 
   return (
-    <PageBody>
-      <div className="relative">
-        <MagnifyingGlass className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
-        <Input
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          placeholder={t('sessions.searchPlaceholder')}
-          className="pl-9"
-        />
-      </div>
-
+    <PageLayout
+      header={
+        <div className="relative">
+          <MagnifyingGlass className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+          <Input
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder={t('sessions.searchPlaceholder')}
+            className="pl-9"
+          />
+        </div>
+      }
+      footer={
+        !debounced ? (
+          <Pagination offset={offset} limit={PAGE} total={sessions.length} onChange={setOffset} />
+        ) : undefined
+      }
+    >
       {hits && hits.length > 0 ? (
         <section className="space-y-2">
           <p className="text-xs font-medium text-muted-foreground">
@@ -161,7 +175,7 @@ export default function SessionsPage() {
         />
       ) : (
         <div className="space-y-2">
-          {sessions.map((s) => (
+          {paged.map((s) => (
             <Card key={s.id} className="group flex items-center gap-3 p-3.5 transition-colors hover:border-primary/40">
               <Link to={`/c/${s.id}`} className="min-w-0 flex-1">
                 <p className="truncate text-sm font-medium">{s.title || t('sessions.untitled')}</p>
@@ -188,6 +202,6 @@ export default function SessionsPage() {
           ))}
         </div>
       )}
-    </PageBody>
+    </PageLayout>
   )
 }

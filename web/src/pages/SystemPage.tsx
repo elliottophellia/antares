@@ -1,7 +1,7 @@
 import { Cpu, Database, HardDrives, Lightning, Robot, Timer } from '@phosphor-icons/react'
 import { usePoll } from '@/lib/hooks'
 import { formatBytes, formatCount } from '@/lib/utils'
-import { PageBody } from '@/components/layout/AppShell'
+import { PageLayout } from '@/components/layout/PageLayout'
 import {
   Badge,
   Card,
@@ -79,7 +79,7 @@ export default function SystemPage() {
   const { data, loading, error } = usePoll<SystemStats>('/system/stats', 5000)
 
   return (
-    <PageBody>
+    <PageLayout>
       {loading && !data ? (
         <>
           <SkeletonStats count={4} />
@@ -169,7 +169,7 @@ export default function SystemPage() {
           </Card>
         </>
       )}
-    </PageBody>
+    </PageLayout>
   )
 }
 

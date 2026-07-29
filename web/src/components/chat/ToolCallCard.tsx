@@ -8,6 +8,7 @@ import {
   FilePlus,
   FileText,
   Globe,
+  Image,
   ListChecks,
   MagnifyingGlass,
   PencilSimple,
@@ -39,6 +40,7 @@ const TOOL_META: Record<string, Meta> = {
   rag_index: { label: 'index', Icon: Database },
   session_search: { label: 'search', Icon: MagnifyingGlass },
   todo: { label: 'tasks', Icon: ListChecks },
+  view_image: { label: 'view image', Icon: Image },
 }
 
 type DiffRow = { type: 'ctx' | 'add' | 'del'; text: string }
@@ -107,6 +109,10 @@ function summarize(name: string, args: Record<string, unknown>): string {
       return s('query')
     case 'web_fetch':
       return s('url')
+    case 'view_image': {
+      const p = s('path')
+      return p ? p.split('/').pop() || p : ''
+    }
     case 'memory':
       return s('action') + (s('key') ? `: ${s('key')}` : '')
     case 'todo':
@@ -138,8 +144,11 @@ export function ToolCallCard({ call }: { call: ToolCallView }) {
   const isRead = call.name === 'read_file'
   const output = call.result ?? call.progress ?? ''
 
-  // File tools carry a path: render it as filename over its parent directory.
-  const path = typeof args.path === 'string' ? (args.path as string) : ''
+  // Only the file tools render as filename-over-directory. Other tools may also
+  // carry a `path` arg (e.g. view_image with a URL), but for them that is just
+  // an argument — they get the name-header + summary layout like everything else.
+  const FILE_TOOLS = new Set(['read_file', 'write_file', 'edit_file', 'list_files'])
+  const path = FILE_TOOLS.has(call.name) && typeof args.path === 'string' ? (args.path as string) : ''
   const fileName = path ? path.split('/').pop() || path : ''
   const parentPath = path.includes('/') ? path.slice(0, path.lastIndexOf('/')) : ''
   const summary = path ? '' : summarize(call.name, args)
@@ -223,16 +232,19 @@ export function ToolCallCard({ call }: { call: ToolCallView }) {
             ) : null}
           </span>
         ) : (
-          <>
-            <span className="shrink-0 font-mono text-[11px] font-medium">{meta.label}</span>
+          // Name as a header, with the argument summary on its own line beneath
+          // — so a long summary (e.g. a fetched URL or a notice) never crowds
+          // the name or gets squeezed on one line.
+          <span className="flex min-w-0 flex-1 flex-col gap-0.5 leading-tight">
+            <span className="truncate font-mono text-[11px] font-medium text-foreground">
+              {meta.label}
+            </span>
             {summary ? (
-              <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-muted-foreground">
+              <span className="truncate font-mono text-[10px] text-muted-foreground">
                 {summary}
               </span>
-            ) : (
-              <span className="flex-1" />
-            )}
-          </>
+            ) : null}
+          </span>
         )}
 
         <span className="mt-0.5 shrink-0">{right}</span>

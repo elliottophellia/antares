@@ -3,7 +3,7 @@ import { CaretDown, CheckCircle, PlugsConnected, Storefront, XCircle } from '@ph
 import { useApi } from '@/lib/hooks'
 import { useI18n } from '@/lib/i18n'
 import { cn } from '@/lib/utils'
-import { PageBody } from '@/components/layout/AppShell'
+import { PageLayout } from '@/components/layout/PageLayout'
 import {
   Badge,
   Card,
@@ -49,7 +49,7 @@ export default function McpPage() {
   const servers = data?.servers ?? []
 
   return (
-    <PageBody>
+    <PageLayout>
       <HubDialog kind="mcp" open={browsing} onOpenChange={setBrowsing} onInstalled={reload} />
 
       {!data?.enabled ? (
@@ -154,6 +154,6 @@ export default function McpPage() {
           </pre>
         </CardContent>
       </Card>
-    </PageBody>
+    </PageLayout>
   )
 }

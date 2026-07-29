@@ -3,7 +3,8 @@ import { Brain, Database, MagnifyingGlass, Plus, Trash } from '@phosphor-icons/r
 import { del, get, post } from '@/lib/api'
 import { useApi } from '@/lib/hooks'
 import { useI18n, useTimeAgo } from '@/lib/i18n'
-import { PageBody } from '@/components/layout/AppShell'
+import { PageLayout } from '@/components/layout/PageLayout'
+import { Pagination } from '@/components/ui/Pagination'
 import { Button } from '@/components/ui/button'
 import {
   Badge,
@@ -51,29 +52,52 @@ interface RagStatus {
 
 export default function MemoryPage() {
   const { t } = useI18n()
+  const [tab, setTab] = useState('memory')
+  const [offset, setOffset] = useState(0)
+  const [footer, setFooter] = useState<{ total: number; searching: boolean }>({ total: 0, searching: false })
+  const PAGE = 20
   return (
-    <PageBody>
-      <Tabs defaultValue="memory">
-        <TabsList>
-          <TabsTrigger value="memory" className="gap-1.5">
-            <Brain className="size-3.5" /> {t('memory.tabMemory')}
-          </TabsTrigger>
-          <TabsTrigger value="rag" className="gap-1.5">
-            <Database className="size-3.5" /> {t('memory.tabRag')}
-          </TabsTrigger>
-        </TabsList>
+    <PageLayout
+      footer={
+        tab === 'memory' && !footer.searching ? (
+          <Pagination offset={offset} limit={PAGE} total={footer.total} onChange={setOffset} />
+        ) : undefined
+      }
+    >
+      <Tabs value={tab} onValueChange={setTab}>
+        {/* The tab bar stays pinned while the tab's content scrolls beneath it. */}
+        <div className="sticky top-0 z-10 -mx-1 bg-background px-1 pb-3">
+          <TabsList>
+            <TabsTrigger value="memory" className="gap-1.5">
+              <Brain className="size-3.5" /> {t('memory.tabMemory')}
+            </TabsTrigger>
+            <TabsTrigger value="rag" className="gap-1.5">
+              <Database className="size-3.5" /> {t('memory.tabRag')}
+            </TabsTrigger>
+          </TabsList>
+        </div>
         <TabsContent value="memory">
-          <MemoryTab />
+          <MemoryTab offset={offset} limit={PAGE} setOffset={setOffset} onListChange={setFooter} />
         </TabsContent>
         <TabsContent value="rag">
           <RagTab />
         </TabsContent>
       </Tabs>
-    </PageBody>
+    </PageLayout>
   )
 }
 
-function MemoryTab() {
+function MemoryTab({
+  offset,
+  limit,
+  setOffset,
+  onListChange,
+}: {
+  offset: number
+  limit: number
+  setOffset: (v: number) => void
+  onListChange: (v: { total: number; searching: boolean }) => void
+}) {
   const { t } = useI18n()
   const timeAgo = useTimeAgo()
   const [query, setQuery] = useState('')
@@ -108,7 +132,12 @@ function MemoryTab() {
     }
   }
 
+  const searching = results !== null
   const items = results ?? data?.memories ?? []
+  const paged = searching ? items : items.slice(offset, offset + limit)
+
+  useEffect(() => setOffset(0), [searching, setOffset])
+  useEffect(() => onListChange({ total: items.length, searching }), [items.length, searching, onListChange])
 
   return (
     <div className="space-y-4">
@@ -151,7 +180,7 @@ function MemoryTab() {
         />
       ) : (
         <div className="space-y-2">
-          {items.map((m) => (
+          {paged.map((m) => (
             <Card key={m.id} className="flex items-start gap-3 p-3.5">
               <div className="min-w-0 flex-1">
                 <div className="flex flex-wrap items-center gap-2">

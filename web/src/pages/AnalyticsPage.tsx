@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react'
 import { ChartLineUp } from '@phosphor-icons/react'
 import { useApi } from '@/lib/hooks'
 import { formatCount } from '@/lib/utils'
-import { PageBody } from '@/components/layout/AppShell'
+import { PageLayout } from '@/components/layout/PageLayout'
 import {
   Card,
   CardContent,
@@ -57,7 +57,7 @@ export default function AnalyticsPage() {
   )
 
   return (
-    <PageBody>
+    <PageLayout>
       <Tabs value={range} onValueChange={(v) => setRange(v as typeof range)}>
         <TabsList>
           {RANGES.map((r) => (
@@ -149,7 +149,7 @@ export default function AnalyticsPage() {
           </Card>
         </>
       )}
-    </PageBody>
+    </PageLayout>
   )
 }
 
