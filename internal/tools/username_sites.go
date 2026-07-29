@@ -27,9 +27,9 @@ var moreUsernameSites = []usernameSite{
 	// Social / microblog
 	{Name: "Mastodon (mastodon.social)", Profile: "https://mastodon.social/@%s"},
 	{Name: "Bluesky", Profile: "https://bsky.app/profile/%s.bsky.social"},
-	{Name: "Threads", Profile: "https://www.threads.net/@%s"},
-	{Name: "Tumblr", Profile: "https://%s.tumblr.com"},
-	{Name: "VK", Profile: "https://vk.com/%s"},
+	{Name: "Threads", Profile: "https://www.threads.net/@%s", Absent: "isn't available"},
+	{Name: "Tumblr", Profile: "https://%s.tumblr.com", Absent: "There's nothing here"},
+	{Name: "VK", Profile: "https://vk.com/%s", Absent: "page not found"},
 	{Name: "Flickr", Profile: "https://www.flickr.com/people/%s"},
 	{Name: "Snapchat", Profile: "https://www.snapchat.com/add/%s"},
 	{Name: "About.me", Profile: "https://about.me/%s"},

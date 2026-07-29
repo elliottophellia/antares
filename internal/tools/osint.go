@@ -365,21 +365,26 @@ type usernameSite struct {
 	Name    string
 	Profile string
 	Absent  string // if set, a 200 that contains this string means "not found"
+	// LoginWall marks a site that serves a generic login/consent page to
+	// anonymous requests (Instagram, Facebook mobile, etc.), so a 200 cannot be
+	// trusted as a real profile. Such a hit is always reported as "likely",
+	// never "confirmed".
+	LoginWall bool
 }
 
 var usernameSites = []usernameSite{
 	{Name: "GitHub", Profile: "https://github.com/%s"},
 	{Name: "GitLab", Profile: "https://gitlab.com/%s"},
 	{Name: "Twitter/X", Profile: "https://twitter.com/%s"},
-	{Name: "Instagram", Profile: "https://www.instagram.com/%s/"},
-	{Name: "Reddit", Profile: "https://www.reddit.com/user/%s"},
-	{Name: "TikTok", Profile: "https://www.tiktok.com/@%s"},
-	{Name: "Telegram", Profile: "https://t.me/%s"},
-	{Name: "Medium", Profile: "https://medium.com/@%s"},
-	{Name: "Pinterest", Profile: "https://www.pinterest.com/%s/"},
+	{Name: "Instagram", Profile: "https://www.instagram.com/%s/", Absent: "Sorry, this page isn't available.", LoginWall: true},
+	{Name: "Reddit", Profile: "https://www.reddit.com/user/%s", Absent: "nobody on Reddit goes by that name"},
+	{Name: "TikTok", Profile: "https://www.tiktok.com/@%s", Absent: "Couldn't find this account"},
+	{Name: "Telegram", Profile: "https://t.me/%s", Absent: "tgme_page_additional"},
+	{Name: "Medium", Profile: "https://medium.com/@%s", Absent: "PAGE NOT FOUND"},
+	{Name: "Pinterest", Profile: "https://www.pinterest.com/%s/", Absent: "Sorry! We couldn"},
 	{Name: "Twitch", Profile: "https://www.twitch.tv/%s"},
-	{Name: "YouTube", Profile: "https://www.youtube.com/@%s"},
-	{Name: "Facebook", Profile: "https://www.facebook.com/%s"},
+	{Name: "YouTube", Profile: "https://www.youtube.com/@%s", Absent: "This page isn"},
+	{Name: "Facebook", Profile: "https://www.facebook.com/%s", Absent: "content isn't available"},
 	{Name: "Steam", Profile: "https://steamcommunity.com/id/%s"},
 	{Name: "Keybase", Profile: "https://keybase.io/%s"},
 	{Name: "HackerNews", Profile: "https://news.ycombinator.com/user?id=%s", Absent: "No such user."},
@@ -406,9 +411,10 @@ func (osintUsernameTool) Execute(ctx context.Context, in Input) Result {
 	sites := append(append([]usernameSite{}, usernameSites...), moreUsernameSites...)
 
 	type hit struct {
-		site  string
-		url   string
-		found bool
+		site    string
+		url     string
+		found   bool
+		certain bool
 	}
 	results := make([]hit, len(sites))
 	var wg sync.WaitGroup
@@ -419,55 +425,133 @@ func (osintUsernameTool) Execute(ctx context.Context, in Input) Result {
 			defer wg.Done()
 			sem <- struct{}{}
 			defer func() { <-sem }()
-			url := fmt.Sprintf(s.Profile, url.PathEscape(user))
-			results[i] = hit{site: s.Name, url: url, found: probeUsername(ctx, url, s.Absent)}
+			u := fmt.Sprintf(s.Profile, url.PathEscape(user))
+			pr := probeUsername(ctx, u, s.Absent, s.LoginWall)
+			results[i] = hit{site: s.Name, url: u, found: pr.found, certain: pr.certain}
 		}(i, s)
 	}
 	wg.Wait()
 
-	found := []hit{}
+	var confirmed, likely []hit
 	for _, r := range results {
-		if r.found {
-			found = append(found, r)
+		if !r.found {
+			continue
+		}
+		if r.certain {
+			confirmed = append(confirmed, r)
+		} else {
+			likely = append(likely, r)
 		}
 	}
-	sort.Slice(found, func(i, j int) bool { return found[i].site < found[j].site })
+	sort.Slice(confirmed, func(i, j int) bool { return confirmed[i].site < confirmed[j].site })
+	sort.Slice(likely, func(i, j int) bool { return likely[i].site < likely[j].site })
 
 	var b strings.Builder
-	fmt.Fprintf(&b, "Username search for %q — %d/%d platforms matched:\n\n", user, len(found), len(sites))
-	if len(found) == 0 {
-		b.WriteString("No public profiles found on the checked platforms.\n")
+	fmt.Fprintf(&b, "Username search for %q across %d platforms.\n\n", user, len(sites))
+	if len(confirmed) == 0 && len(likely) == 0 {
+		b.WriteString("No public profiles found.\n")
 	}
-	for _, r := range found {
-		fmt.Fprintf(&b, "- %s: %s\n", r.site, r.url)
-	}
-	return Result{Content: b.String(), Meta: map[string]any{"username": user, "matches": len(found)}}
-}
-
-func probeUsername(ctx context.Context, url, absent string) bool {
-	tctx, cancel := context.WithTimeout(ctx, 12*time.Second)
-	defer cancel()
-	req, err := http.NewRequestWithContext(tctx, "GET", url, nil)
-	if err != nil {
-		return false
-	}
-	req.Header.Set("User-Agent", "Mozilla/5.0 (compatible; antares-osint/1.0)")
-	resp, err := webClient.Do(req)
-	if err != nil {
-		return false
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode == 404 || resp.StatusCode == 410 {
-		return false
-	}
-	if resp.StatusCode >= 400 {
-		return false
-	}
-	if absent != "" {
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 256<<10))
-		if strings.Contains(string(body), absent) {
-			return false
+	if len(confirmed) > 0 {
+		fmt.Fprintf(&b, "Confirmed (%d):\n", len(confirmed))
+		for _, r := range confirmed {
+			fmt.Fprintf(&b, "- %s: %s\n", r.site, r.url)
 		}
 	}
-	return true
+	if len(likely) > 0 {
+		fmt.Fprintf(&b, "\nLikely — a page exists but couldn't be verified as a real profile; open to confirm (%d):\n", len(likely))
+		for _, r := range likely {
+			fmt.Fprintf(&b, "- %s: %s\n", r.site, r.url)
+		}
+	}
+	return Result{Content: b.String(), Meta: map[string]any{
+		"username": user, "confirmed": len(confirmed), "likely": len(likely),
+	}}
+}
+
+// probeClient is a dedicated client for username probes that does NOT follow
+// redirects: many platforms 30x a missing profile to a login/home page, which
+// the default (redirect-following) client would report as a 200 "found". By
+// stopping at the first response we can tell a real profile from a soft bounce.
+var probeClient = &http.Client{
+	Timeout: 15 * time.Second,
+	CheckRedirect: func(*http.Request, []*http.Request) error {
+		return http.ErrUseLastResponse
+	},
+}
+
+// probeResult is a username probe's verdict, with a confidence so soft-404
+// sites (a 200 we can't fully trust) are reported as "likely" rather than a
+// false "found".
+type probeResult struct {
+	found   bool
+	certain bool // false = a 200 with no negative signal, but unverifiable
+}
+
+// probeUsername decides whether a public profile exists at url. It treats
+// redirects and soft-404 markers as "not found", and flags an unverifiable 200
+// (no Absent marker for the site) as uncertain.
+func probeUsername(ctx context.Context, rawURL, absent string, loginWall bool) probeResult {
+	tctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(tctx, "GET", rawURL, nil)
+	if err != nil {
+		return probeResult{}
+	}
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0 Safari/537.36")
+	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+	resp, err := probeClient.Do(req)
+	if err != nil {
+		return probeResult{}
+	}
+	defer resp.Body.Close()
+
+	// A redirect on a profile URL almost always means "no such profile" — the
+	// platform is bouncing to login, home, or a search page.
+	if resp.StatusCode >= 300 && resp.StatusCode < 400 {
+		return probeResult{}
+	}
+	if resp.StatusCode >= 400 {
+		return probeResult{}
+	}
+
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 512<<10))
+	text := string(body)
+
+	// A site-specific "not found" marker is the strongest signal.
+	if absent != "" && strings.Contains(text, absent) {
+		return probeResult{}
+	}
+	// Generic soft-404 phrases that many platforms show for a missing profile.
+	lower := strings.ToLower(text)
+	for _, s := range genericAbsent {
+		if strings.Contains(lower, s) {
+			return probeResult{}
+		}
+	}
+	// A suspiciously tiny body is usually an interstitial, not a profile.
+	if len(strings.TrimSpace(text)) < 256 {
+		return probeResult{}
+	}
+
+	// A 200 that survived all the negative checks. A login-walled site can never
+	// be certain (its 200 is a generic wall, not a profile). Otherwise, certain
+	// only when the site declared an Absent marker so its 200s are meaningful.
+	return probeResult{found: true, certain: absent != "" && !loginWall}
+}
+
+// genericAbsent are lowercased phrases that commonly appear on a platform's
+// "this profile does not exist / is unavailable" page across many sites.
+var genericAbsent = []string{
+	"content isn't available",
+	"content is no longer available",
+	"isn't available right now",
+	"sorry, this page isn't available",
+	"page not found",
+	"user not found",
+	"account doesn't exist",
+	"this account doesn't exist",
+	"profile not found",
+	"couldn't find this account",
+	"nothing to see here",
+	"page isn’t available", // curly apostrophe variant
 }
