@@ -180,10 +180,12 @@ function UsageChart({ series, t }: { series: UsagePoint[]; t: TFunc }) {
             )}
             cursor={{ stroke: 'var(--border)', strokeWidth: 1 }}
           />
+          {/* Not stacked: each area is drawn from the zero baseline so the
+              real gap between output and input is visible. Output is drawn
+              first (usually larger); input's stroke sits on top. */}
           <Area
             type="monotone"
             dataKey="tokens_out"
-            stackId="1"
             stroke="var(--primary)"
             strokeWidth={2}
             fill="url(#gradOut)"
@@ -192,10 +194,10 @@ function UsageChart({ series, t }: { series: UsagePoint[]; t: TFunc }) {
           <Area
             type="monotone"
             dataKey="tokens_in"
-            stackId="1"
             stroke="var(--success)"
             strokeWidth={2}
             fill="url(#gradIn)"
+            fillOpacity={0.6}
             name={t('analytics.tokensIn')}
           />
         </AreaChart>
