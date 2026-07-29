@@ -1,12 +1,30 @@
 import { useEffect, useState } from 'react'
-import { Check, Copy, DownloadSimple, Play, Plus, Stop, TrashSimple } from '@phosphor-icons/react'
-import { del, get, post } from '@/lib/api'
+import {
+  Check,
+  Copy,
+  DownloadSimple,
+  Pause,
+  Play,
+  Plus,
+  Stop,
+  TrashSimple,
+} from '@phosphor-icons/react'
+import { del, get, post, streamGet } from '@/lib/api'
 import { copyText } from '@/lib/clipboard'
 import { useApi } from '@/lib/hooks'
 import { useI18n } from '@/lib/i18n'
 import { PageLayout } from '@/components/layout/PageLayout'
 import { Button } from '@/components/ui/button'
-import { Badge, Card, EmptyState, Input, Label } from '@/components/ui/primitives'
+import {
+  Badge,
+  Card,
+  EmptyState,
+  Input,
+  Label,
+  Tabs,
+  TabsList,
+  TabsTrigger,
+} from '@/components/ui/primitives'
 import {
   Dialog,
   DialogBody,
@@ -16,6 +34,26 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
+
+interface InterceptorRow {
+  id: string
+  label: string
+  category: string
+  available: boolean
+  reason?: string
+}
+interface SessionRow {
+  id: string
+  interceptor: string
+  info: Record<string, unknown>
+}
+interface Paused {
+  id: number
+  method: string
+  url: string
+  headers: Record<string, string>
+  body: string
+}
 
 interface Exchange {
   id: number
@@ -58,6 +96,7 @@ export default function InterceptPage() {
   const [selected, setSelected] = useState<Exchange | null>(null)
   const [port, setPort] = useState('8899')
   const [rule, setRule] = useState({ match: '', mock_status: '', mock_body: '', block: false })
+  const [tab, setTab] = useState<'traffic' | 'interceptors' | 'breakpoints'>('traffic')
 
   const running = status?.running
 
@@ -107,6 +146,7 @@ export default function InterceptPage() {
   }
 
   const header = (
+    <div className="space-y-3">
     <div className="flex flex-wrap items-center gap-2">
       {running ? (
         <>
@@ -146,12 +186,25 @@ export default function InterceptPage() {
         <TrashSimple className="size-3.5" /> {t('common.clear')}
       </Button>
     </div>
+    <Tabs value={tab} onValueChange={(v) => setTab(v as typeof tab)}>
+      <TabsList>
+        <TabsTrigger value="traffic">{t('intercept.tabTraffic')}</TabsTrigger>
+        <TabsTrigger value="interceptors">{t('intercept.tabInterceptors')}</TabsTrigger>
+        <TabsTrigger value="breakpoints">{t('intercept.tabBreakpoints')}</TabsTrigger>
+      </TabsList>
+    </Tabs>
+    </div>
   )
 
   return (
     <PageLayout header={header}>
       {selected ? <DetailDialog ex={selected} onClose={() => setSelected(null)} /> : null}
 
+      {tab === 'interceptors' ? (
+        <InterceptorsPanel running={!!running} />
+      ) : tab === 'breakpoints' ? (
+        <BreakpointsPanel running={!!running} />
+      ) : (
       <div className="grid gap-4 lg:grid-cols-[1fr_340px]">
         {/* Capture log */}
         <Card className="overflow-hidden p-0">
@@ -251,8 +304,207 @@ export default function InterceptPage() {
           )}
         </Card>
       </div>
+      )}
     </PageLayout>
   )
+}
+
+// ---- interceptors panel -----------------------------------------------------
+
+function InterceptorsPanel({ running }: { running: boolean }) {
+  const { t } = useI18n()
+  const { data, loading, reload } = useApi<{ interceptors: InterceptorRow[]; sessions: SessionRow[] }>(
+    '/intercept/interceptors',
+  )
+  const [busy, setBusy] = useState('')
+  const [env, setEnv] = useState<{ id: string; text: string } | null>(null)
+
+  const activate = async (id: string) => {
+    setBusy(id)
+    try {
+      const s = await post<SessionRow>('/intercept/activate', { interceptor: id })
+      // Terminal returns env exports in info; surface them for copy.
+      const envText = (s.info?.env as string) || ''
+      if (envText) setEnv({ id: s.id, text: envText })
+      reload()
+    } catch (e) {
+      alert((e as Error).message)
+    } finally {
+      setBusy('')
+    }
+  }
+  const deactivate = async (id: string) => {
+    await del(`/intercept/sessions/${encodeURIComponent(id)}`).catch(() => {})
+    reload()
+  }
+
+  if (loading && !data) return <SkeletonInline />
+
+  const groups: Record<string, InterceptorRow[]> = {}
+  for (const i of data?.interceptors ?? []) (groups[i.category] ??= []).push(i)
+
+  return (
+    <div className="space-y-4">
+      {env ? (
+        <EnvDialog text={env.text} onClose={() => setEnv(null)} />
+      ) : null}
+
+      {(data?.sessions ?? []).length > 0 ? (
+        <Card className="p-3.5">
+          <p className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+            {t('intercept.activeSessions')}
+          </p>
+          <div className="space-y-1.5">
+            {data!.sessions.map((s) => (
+              <div key={s.id} className="flex items-center gap-2 text-xs">
+                <Badge variant="secondary">{s.interceptor}</Badge>
+                <span className="min-w-0 flex-1 truncate font-mono text-muted-foreground">{s.id}</span>
+                <Button variant="ghost" size="icon-sm" onClick={() => deactivate(s.id)} aria-label={t('common.delete')} className="text-muted-foreground hover:text-destructive">
+                  <TrashSimple className="size-3.5" />
+                </Button>
+              </div>
+            ))}
+          </div>
+        </Card>
+      ) : null}
+
+      {Object.entries(groups).map(([cat, items]) => (
+        <div key={cat} className="space-y-2">
+          <h2 className="text-sm font-semibold capitalize">{cat}</h2>
+          <div className="grid gap-2.5 sm:grid-cols-2 xl:grid-cols-3">
+            {items.map((i) => (
+              <div
+                key={i.id}
+                className={`rounded-[var(--radius-lg)] border border-border bg-card p-3.5 ${i.available ? '' : 'opacity-70'}`}
+              >
+                <div className="flex items-center gap-2">
+                  <span className="min-w-0 flex-1 truncate text-sm font-medium">{i.label}</span>
+                  <Badge variant={i.available ? 'success' : 'outline'}>
+                    {i.available ? t('intercept.ready') : t('intercept.needsSetup')}
+                  </Badge>
+                </div>
+                <code className="mt-0.5 inline-block rounded bg-muted px-1.5 py-0.5 font-mono text-[11px] text-muted-foreground">
+                  {i.id}
+                </code>
+                {!i.available && i.reason ? (
+                  <p className="mt-1.5 text-[11px] text-muted-foreground">{i.reason}</p>
+                ) : null}
+                <Button
+                  size="sm"
+                  variant={i.available ? 'default' : 'outline'}
+                  disabled={!i.available || busy === i.id}
+                  loading={busy === i.id}
+                  onClick={() => activate(i.id)}
+                  className="mt-2.5 w-full gap-1.5"
+                >
+                  <Play className="size-3.5" /> {t('intercept.activate')}
+                </Button>
+              </div>
+            ))}
+          </div>
+        </div>
+      ))}
+      {!running ? (
+        <p className="text-[11px] text-muted-foreground">{t('intercept.autoStartHint')}</p>
+      ) : null}
+    </div>
+  )
+}
+
+function EnvDialog({ text, onClose }: { text: string; onClose: () => void }) {
+  const { t } = useI18n()
+  const [copied, setCopied] = useState(false)
+  const copy = async () => {
+    if (await copyText(text)) {
+      setCopied(true)
+      setTimeout(() => setCopied(false), 1500)
+    }
+  }
+  return (
+    <Dialog open onOpenChange={(o) => (!o ? onClose() : null)}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>{t('intercept.terminalEnv')}</DialogTitle>
+        </DialogHeader>
+        <DialogBody>
+          <p className="mb-2 text-xs text-muted-foreground">{t('intercept.terminalEnvDesc')}</p>
+          <pre className="max-h-72 overflow-auto whitespace-pre-wrap break-words rounded-[var(--radius-sm)] border border-border bg-muted/40 p-2.5 font-mono text-[11px] leading-relaxed">
+            {text}
+          </pre>
+        </DialogBody>
+        <DialogFooter>
+          <DialogClose asChild>
+            <Button variant="outline" size="sm">{t('common.close')}</Button>
+          </DialogClose>
+          <Button size="sm" onClick={copy} className="gap-1.5">
+            {copied ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
+            {copied ? t('common.copied') : t('common.copy')}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+// ---- breakpoints panel ------------------------------------------------------
+
+function BreakpointsPanel({ running }: { running: boolean }) {
+  const { t } = useI18n()
+  const [paused, setPaused] = useState<Paused[]>([])
+
+  useEffect(() => {
+    if (!running) {
+      setPaused([])
+      return
+    }
+    const close = streamGet('/intercept/breakpoints/stream', (e) => {
+      const list = (e as unknown as { paused?: Paused[] }).paused
+      if (list) setPaused(list)
+    })
+    return close
+  }, [running])
+
+  const resume = (id: number, abort: boolean) =>
+    post(`/intercept/breakpoints/${id}${abort ? '?abort=1' : ''}`, {}).catch(() => {})
+
+  if (!running) {
+    return <EmptyState icon={<Pause className="size-8" />} title={t('intercept.bpProxyOff')} description={t('intercept.bpProxyOffDesc')} />
+  }
+  if (paused.length === 0) {
+    return <EmptyState icon={<Pause className="size-8" />} title={t('intercept.bpNone')} description={t('intercept.bpNoneDesc')} />
+  }
+  return (
+    <div className="space-y-2.5">
+      {paused.map((p) => (
+        <Card key={p.id} className="p-3.5">
+          <div className="flex flex-wrap items-center gap-2">
+            <Badge variant="warning">
+              <Pause className="size-3" weight="fill" /> {t('intercept.bpPaused')}
+            </Badge>
+            <span className="font-mono text-xs font-medium">{p.method}</span>
+            <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-muted-foreground">{p.url}</span>
+          </div>
+          {p.body ? (
+            <pre className="mt-2 max-h-32 overflow-auto whitespace-pre-wrap break-words rounded-[var(--radius-sm)] bg-muted/40 p-2 font-mono text-[10px]">
+              {p.body}
+            </pre>
+          ) : null}
+          <div className="mt-2.5 flex gap-2">
+            <Button size="sm" onClick={() => resume(p.id, false)} className="gap-1.5">
+              <Play className="size-3.5" /> {t('intercept.bpResume')}
+            </Button>
+            <Button size="sm" variant="outline" onClick={() => resume(p.id, true)} className="gap-1.5 text-destructive">
+              <Stop className="size-3.5" /> {t('intercept.bpAbort')}
+            </Button>
+          </div>
+        </Card>
+      ))}
+    </div>
+  )
+}
+
+function SkeletonInline() {
+  return <div className="h-40 animate-pulse rounded-[var(--radius-lg)] bg-muted/40" />
 }
 
 // Pretty-print a body if it is JSON; otherwise return it as-is.
