@@ -55,7 +55,74 @@ func (b *Board) Add(key, title, note, column string) (Card, error) {
 	// Give it a stable, unique id even after removals.
 	c.ID = fmt.Sprintf("c%d", now.UnixNano()%1000000)
 	cards = append(cards, c)
-	return c, b.save(key, cards)
+	err := b.save(key, cards)
+	Notify(key)
+	return c, err
+}
+
+// todoIDPrefix marks a card that mirrors a todo-list item, so SyncTodos can
+// replace those without touching cards a person or the agent added by hand.
+const todoIDPrefix = "todo-"
+
+// SyncTodos mirrors a session's todo list onto the board, so the task list and
+// the Kanban board are one thing seen two ways. Todo-derived cards (id
+// "todo-<n>") are rebuilt from items; any other cards are left untouched. The
+// status→column map is pending→todo, in_progress→doing, completed→done. Each
+// item keeps a stable id by its position, so a status change reads as the same
+// card moving columns rather than a delete-and-readd.
+func (b *Board) SyncTodos(key string, items []TodoMirror) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	existing := b.load(key)
+
+	// Index current todo-cards by id so we can preserve created_at (and thus
+	// column ordering) across syncs.
+	prev := map[string]Card{}
+	var manual []Card
+	for _, c := range existing {
+		if strings.HasPrefix(c.ID, todoIDPrefix) {
+			prev[c.ID] = c
+		} else {
+			manual = append(manual, c)
+		}
+	}
+
+	now := time.Now()
+	mirrored := make([]Card, 0, len(items))
+	for i, it := range items {
+		id := fmt.Sprintf("%s%d", todoIDPrefix, i)
+		col := columnForStatus(it.Status)
+		c := Card{ID: id, Title: it.Content, Column: col, CreatedAt: now, UpdatedAt: now}
+		if old, ok := prev[id]; ok {
+			c.CreatedAt = old.CreatedAt
+			if old.Column == col && old.Title == it.Content {
+				c.UpdatedAt = old.UpdatedAt
+			}
+		}
+		mirrored = append(mirrored, c)
+	}
+
+	err := b.save(key, append(manual, mirrored...))
+	Notify(key)
+	return err
+}
+
+// TodoMirror is one todo item as SyncTodos needs it — decoupled from the tools
+// package to avoid an import cycle.
+type TodoMirror struct {
+	Content string
+	Status  string
+}
+
+func columnForStatus(status string) string {
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "in_progress", "in-progress", "doing":
+		return "doing"
+	case "completed", "complete", "done":
+		return "done"
+	default:
+		return "todo"
+	}
 }
 
 // Move sends a card to another column.
@@ -68,7 +135,9 @@ func (b *Board) Move(key, id, column string) (Card, bool, error) {
 		if cards[i].ID == id {
 			cards[i].Column = column
 			cards[i].UpdatedAt = time.Now()
-			return cards[i], true, b.save(key, cards)
+			err := b.save(key, cards)
+			Notify(key)
+			return cards[i], true, err
 		}
 	}
 	return Card{}, false, nil
@@ -91,7 +160,9 @@ func (b *Board) Remove(key, id string) (bool, error) {
 	if !found {
 		return false, nil
 	}
-	return true, b.save(key, out)
+	err := b.save(key, out)
+	Notify(key)
+	return true, err
 }
 
 // Clear removes an entire board (all cards for a key) by deleting its file.
@@ -101,6 +172,7 @@ func (b *Board) Clear(key string) error {
 	if err := os.Remove(b.path(key)); err != nil && !os.IsNotExist(err) {
 		return err
 	}
+	Notify(key)
 	return nil
 }
 

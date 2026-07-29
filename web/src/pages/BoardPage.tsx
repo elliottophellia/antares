@@ -1,9 +1,9 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Kanban, TrashSimple, X } from '@phosphor-icons/react'
-import { del } from '@/lib/api'
-import { useApi, usePoll } from '@/lib/hooks'
+import { del, streamGet } from '@/lib/api'
+import { useApi } from '@/lib/hooks'
 import { useI18n } from '@/lib/i18n'
-import { PageBody } from '@/components/layout/AppShell'
+import { PageLayout } from '@/components/layout/PageLayout'
 import { Card, EmptyState } from '@/components/ui/primitives'
 import { SkeletonList } from '@/components/ui/skeleton'
 
@@ -37,40 +37,47 @@ export default function BoardPage() {
   const [sessionID, setSessionID] = useState('')
   const active = sessionID || sessions[0]?.id || ''
 
-  // Poll the board so cards move between To do / Doing / Done in near-realtime
-  // as the agent works, instead of only on a manual reload.
-  const { data: board, reload } = usePoll<{ columns: Column[] }>(
-    active ? `/board?session=${encodeURIComponent(active)}` : null,
-    3000,
-  )
-  const columns = board?.columns ?? []
+  // Subscribe to the board's SSE stream: the server pushes the whole board once
+  // immediately and again on every change — a todo write, a card move, a remove
+  // — so the columns track the agent's task list live, with no polling.
+  const [columns, setColumns] = useState<Column[]>([])
+  useEffect(() => {
+    if (!active) {
+      setColumns([])
+      return
+    }
+    const close = streamGet(`/board/stream?session=${encodeURIComponent(active)}`, (e) => {
+      const cols = (e as unknown as { columns?: Column[] }).columns
+      if (cols) setColumns(cols)
+    })
+    return close
+  }, [active])
 
+  // Removing a card (or clearing) triggers a Notify on the server, so the stream
+  // pushes the new state — no manual reload needed here.
   const removeCard = (id: string) =>
-    del(`/board/card?session=${encodeURIComponent(active)}&id=${encodeURIComponent(id)}`)
-      .then(() => reload())
-      .catch(() => {})
+    del(`/board/card?session=${encodeURIComponent(active)}&id=${encodeURIComponent(id)}`).catch(
+      () => {},
+    )
 
   const clearBoard = () => {
     if (!active) return
     del(`/board?session=${encodeURIComponent(active)}`)
-      .then(() => {
-        reload()
-        reloadSessions()
-      })
+      .then(() => reloadSessions())
       .catch(() => {})
   }
 
-  if (loading) return <PageBody><SkeletonList count={2} /></PageBody>
+  if (loading) return <PageLayout><SkeletonList count={2} /></PageLayout>
   if (sessions.length === 0) {
     return (
-      <PageBody>
+      <PageLayout>
         <EmptyState icon={<Kanban className="size-8" />} title={t('board.empty')} description={t('board.emptyDesc')} />
-      </PageBody>
+      </PageLayout>
     )
   }
 
   return (
-    <PageBody>
+    <PageLayout>
       <div className="space-y-4">
         <div className="flex items-center gap-2">
           <label className="text-xs text-muted-foreground">{t('engagement.pickSession')}</label>
@@ -129,6 +136,6 @@ export default function BoardPage() {
           ))}
         </div>
       </div>
-    </PageBody>
+    </PageLayout>
   )
 }
