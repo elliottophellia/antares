@@ -29,3 +29,6 @@ web/src/sample/
 .mcp.json
 opencode.json
 AGENTS.md
+
+# Release artifacts
+dist/
