@@ -5,6 +5,20 @@ platform from the project's **GitHub Releases** — no build tools required.
 
 Works on **Linux**, **macOS**, and **Windows** (amd64 and arm64).
 
+## What gets installed
+
+One executable, `antares` — that is the whole CLI, with the dashboard embedded
+inside it. After install, every command works from anywhere on your PATH:
+`antares` (terminal UI), `antares serve` (API + dashboard), `antares setup`,
+`antares doctor`, and the rest.
+
+| OS | Installed to | PATH |
+|---|---|---|
+| Linux / macOS | `~/.local/bin/antares` (override with `PREFIX`) | added to your shell rc automatically, unless already present |
+| Windows | `%LOCALAPPDATA%\Antares\bin\antares.exe` | added to your user PATH automatically |
+
+Open a new terminal after installing so the PATH change is picked up.
+
 > **Early release, private repo.** While the repository is private, release
 > assets are not publicly downloadable. Install the
 > [GitHub CLI](https://cli.github.com) and run `gh auth login` once — the
@@ -19,11 +33,16 @@ Works on **Linux**, **macOS**, and **Windows** (amd64 and arm64).
 curl -fsSL https://raw.githubusercontent.com/enowdev/antares/main/scripts/install.sh | bash
 ```
 
-Installs to `~/.local/bin/antares`. Knobs:
+Installs to `~/.local/bin/antares` and adds that directory to your PATH (in
+`.bashrc`/`.zshrc`/`.profile`/fish, idempotently) if it is not already there —
+open a **new** terminal afterwards. Knobs:
 
 ```bash
 # specific version, and a system-wide location
 curl -fsSL .../install.sh | ANTARES_VERSION=v0.1.0 PREFIX=/usr/local bash
+
+# don't touch my shell rc — just tell me the line to add
+curl -fsSL .../install.sh | ANTARES_NO_MODIFY_PATH=1 bash
 ```
 
 ### Windows (PowerShell)

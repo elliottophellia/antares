@@ -93,12 +93,55 @@ fi
 info "installed $BINDIR/antares"
 "$BINDIR/antares" --version 2>/dev/null || true
 
-# ---- PATH hint --------------------------------------------------------------
+# ---- PATH --------------------------------------------------------------------
+# Add $BINDIR to PATH automatically (matching the Windows installer). We append
+# an export to the shell rc files that exist, guarded by a marker so re-running
+# never duplicates it. Set ANTARES_NO_MODIFY_PATH=1 to skip and just be told.
+add_path_line() {
+  local rc="$1" marker="# added by antares installer"
+  [ -e "$rc" ] || return 0
+  grep -qF "$marker" "$rc" 2>/dev/null && return 0
+  {
+    printf '\n%s\n' "$marker"
+    printf 'export PATH="%s:$PATH"\n' "$BINDIR"
+  } >> "$rc"
+  info "added $BINDIR to PATH in $rc"
+}
+
 case ":$PATH:" in
-  *":$BINDIR:"*) info "run 'antares' from anywhere (open a new shell if not found yet)";;
+  *":$BINDIR:"*)
+    info "run 'antares' from anywhere (open a new shell if not found yet)"
+    ;;
   *)
-    warn "$BINDIR is not on your PATH."
-    echo "    echo 'export PATH=\"$BINDIR:\$PATH\"' >> ~/.bashrc   # or ~/.zshrc"
+    if [ "${ANTARES_NO_MODIFY_PATH:-0}" = "1" ]; then
+      warn "$BINDIR is not on your PATH. Add it:"
+      echo "    echo 'export PATH=\"$BINDIR:\$PATH\"' >> ~/.bashrc   # or ~/.zshrc"
+    else
+      touched=0
+      # bash and zsh: both .profile-style and shell-specific rc files.
+      for rc in "$HOME/.bashrc" "$HOME/.zshrc" "$HOME/.profile"; do
+        [ -e "$rc" ] && { add_path_line "$rc"; touched=1; }
+      done
+      # zsh with no .zshrc yet (common on macOS): create one so it takes effect.
+      if [ -n "${ZSH_VERSION:-}" ] || [ "${SHELL##*/}" = "zsh" ]; then
+        [ -e "$HOME/.zshrc" ] || { add_path_line "$HOME/.zshrc"; touched=1; }
+      fi
+      # fish keeps PATH differently.
+      if [ -d "$HOME/.config/fish" ]; then
+        fish_cfg="$HOME/.config/fish/config.fish"
+        if ! grep -qF "# added by antares installer" "$fish_cfg" 2>/dev/null; then
+          { printf '\n# added by antares installer\n'; printf 'set -gx PATH %s $PATH\n' "$BINDIR"; } >> "$fish_cfg"
+          info "added $BINDIR to PATH in $fish_cfg"
+          touched=1
+        fi
+      fi
+      if [ "$touched" = "1" ]; then
+        warn "PATH updated — open a NEW terminal (or 'source' your shell rc) for 'antares' to be found."
+      else
+        warn "$BINDIR is not on your PATH and no shell rc file was found. Add it:"
+        echo "    echo 'export PATH=\"$BINDIR:\$PATH\"' >> ~/.bashrc   # or ~/.zshrc"
+      fi
+    fi
     ;;
 esac
 
