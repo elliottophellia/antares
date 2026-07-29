@@ -35,6 +35,13 @@ func (s *Server) routes() {
 	m.HandleFunc("GET /api/intercept/rules", s.handleInterceptRules)
 	m.HandleFunc("POST /api/intercept/rules", s.handleInterceptRules)
 	m.HandleFunc("DELETE /api/intercept/rules/{id}", s.handleInterceptRuleDelete)
+	m.HandleFunc("GET /api/intercept/interceptors", s.handleInterceptInterceptors)
+	m.HandleFunc("POST /api/intercept/activate", s.handleInterceptActivate)
+	m.HandleFunc("DELETE /api/intercept/sessions/{id}", s.handleInterceptDeactivate)
+	m.HandleFunc("GET /api/intercept/cert", s.handleInterceptCertInfo)
+	m.HandleFunc("GET /api/intercept/breakpoints", s.handleInterceptBreakpoints)
+	m.HandleFunc("GET /api/intercept/breakpoints/stream", s.handleInterceptBreakpointStream)
+	m.HandleFunc("POST /api/intercept/breakpoints/{id}", s.handleInterceptBreakpointResume)
 
 	// Sessions
 	m.HandleFunc("GET /api/sessions", s.handleListSessions)

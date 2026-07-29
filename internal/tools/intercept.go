@@ -11,10 +11,11 @@ import (
 )
 
 // interceptState holds the process-wide MITM proxy so the tool and the dashboard
-// share one instance.
+// share one instance, plus the interceptor registry (browsers, terminal, …).
 var interceptState struct {
-	mu sync.Mutex
-	p  *intercept.Proxy
+	mu  sync.Mutex
+	p   *intercept.Proxy
+	reg *intercept.Registry
 }
 
 // InterceptProxy returns the shared proxy, creating it (with a persisted CA)
@@ -33,6 +34,61 @@ func InterceptProxy() (*intercept.Proxy, error) {
 	return interceptState.p, nil
 }
 
+// InterceptRegistry returns the shared interceptor registry, seeded once with
+// every available interceptor (browsers, terminal, and the dependency-gated
+// ones). Exported so the HTTP server surfaces the same set.
+func InterceptRegistry() *intercept.Registry {
+	interceptState.mu.Lock()
+	defer interceptState.mu.Unlock()
+	if interceptState.reg != nil {
+		return interceptState.reg
+	}
+	r := intercept.NewRegistry()
+	for _, i := range intercept.Browsers() {
+		r.Register(i)
+	}
+	for _, i := range intercept.OtherInterceptors() {
+		r.Register(i)
+	}
+	interceptState.reg = r
+	return r
+}
+
+// InterceptActivate resolves the shared proxy+CA and activates an interceptor
+// by id, auto-starting the proxy if it is down. It is the one path the tool and
+// the HTTP handlers share for "hook a client to the proxy".
+func InterceptActivate(ctx context.Context, id string, extra map[string]any) (intercept.Session, error) {
+	p, err := InterceptProxy()
+	if err != nil {
+		return nil, err
+	}
+	if running, _ := p.Status(); !running {
+		if err := p.Start("127.0.0.1:8899"); err != nil {
+			return nil, err
+		}
+	}
+	reg := InterceptRegistry()
+	ic, ok := reg.Get(id)
+	if !ok {
+		return nil, fmt.Errorf("no interceptor %q", id)
+	}
+	if ok, reason := ic.Available(ctx); !ok {
+		return nil, fmt.Errorf("%s", reason)
+	}
+	_, addr := p.Status()
+	sess, err := ic.Activate(ctx, intercept.ActivateOpts{
+		ProxyAddr:       addr,
+		CACertPath:      config.Path("intercept", "ca-cert.pem"),
+		SPKIFingerprint: p.SPKIFingerprint(),
+		Extra:           extra,
+	})
+	if err != nil {
+		return nil, err
+	}
+	reg.PutSession(sess)
+	return sess, nil
+}
+
 type interceptTool struct{}
 
 func (interceptTool) Name() string { return "intercept" }
@@ -43,28 +99,40 @@ func (interceptTool) Description() string {
 }
 func (interceptTool) Schema() map[string]any {
 	return schema(map[string]any{
-		"action":      propEnum("What to do.", "start", "stop", "status", "list", "get", "ca", "rule_add", "rule_list", "rule_delete", "clear"),
+		"action": propEnum("What to do.",
+			"start", "stop", "status", "list", "get", "ca", "cert_install",
+			"rule_add", "rule_list", "rule_delete", "clear",
+			"interceptors", "activate", "deactivate",
+			"bp_list", "bp_resume", "bp_abort"),
 		"port":        propDefault("integer", "Port to listen on for start.", 8899),
-		"id":          prop("integer", "Exchange id (get) or rule id (rule_delete)."),
+		"id":          prop("integer", "Exchange id (get), rule id (rule_delete), or paused id (bp_resume/bp_abort)."),
 		"match":       prop("string", "URL substring a rule matches (rule_add)."),
 		"block":       propDefault("boolean", "rule_add: block matching requests.", false),
+		"breakpoint":  propDefault("boolean", "rule_add: pause matching requests for editing before forwarding.", false),
 		"mock_status": prop("integer", "rule_add: mock response status."),
 		"mock_body":   prop("string", "rule_add: mock response body."),
 		"limit":       propDefault("integer", "How many recent exchanges to list.", 30),
+		"interceptor": prop("string", "activate: interceptor id (e.g. fresh-chrome, terminal). See action=interceptors."),
+		"url":         prop("string", "activate (browser): URL to open."),
+		"session":     prop("string", "deactivate: session id from activate."),
 	}, "action")
 }
 func (interceptTool) RequiresApproval() bool { return true }
 
-func (interceptTool) Execute(_ context.Context, in Input) Result {
+func (interceptTool) Execute(ctx context.Context, in Input) Result {
 	var args struct {
-		Action     string `json:"action"`
-		Port       int    `json:"port"`
-		ID         int64  `json:"id"`
-		Match      string `json:"match"`
-		Block      bool   `json:"block"`
-		MockStatus int    `json:"mock_status"`
-		MockBody   string `json:"mock_body"`
-		Limit      int    `json:"limit"`
+		Action      string `json:"action"`
+		Port        int    `json:"port"`
+		ID          int64  `json:"id"`
+		Match       string `json:"match"`
+		Block       bool   `json:"block"`
+		Breakpoint  bool   `json:"breakpoint"`
+		MockStatus  int    `json:"mock_status"`
+		MockBody    string `json:"mock_body"`
+		Limit       int    `json:"limit"`
+		Interceptor string `json:"interceptor"`
+		URL         string `json:"url"`
+		Session     string `json:"session"`
 	}
 	if err := in.Bind(&args); err != nil {
 		return Errorf("%v", err)
@@ -144,8 +212,8 @@ func (interceptTool) Execute(_ context.Context, in Input) Result {
 		if strings.TrimSpace(args.Match) == "" {
 			return Errorf("match is required for rule_add")
 		}
-		r := p.AddRule(intercept.Rule{Match: args.Match, Block: args.Block, MockStatus: args.MockStatus, MockBody: args.MockBody})
-		return Text(fmt.Sprintf("Added rule #%d matching %q (block=%v, mock_status=%d).", r.ID, r.Match, r.Block, r.MockStatus))
+		r := p.AddRule(intercept.Rule{Match: args.Match, Block: args.Block, Breakpoint: args.Breakpoint, MockStatus: args.MockStatus, MockBody: args.MockBody})
+		return Text(fmt.Sprintf("Added rule #%d matching %q (block=%v, breakpoint=%v, mock_status=%d).", r.ID, r.Match, r.Block, r.Breakpoint, r.MockStatus))
 	case "rule_list":
 		rules := p.Rules()
 		var b strings.Builder
@@ -160,6 +228,91 @@ func (interceptTool) Execute(_ context.Context, in Input) Result {
 	case "clear":
 		p.Clear()
 		return Text("Cleared the capture log.")
+
+	case "cert_install":
+		hash := intercept.SubjectHashOld(p.CA().Cert())
+		fp := intercept.Fingerprint(p.CA().Cert())
+		targets := intercept.InstallLocations(config.Path("intercept", "ca-cert.pem"), hash)
+		var b strings.Builder
+		fmt.Fprintf(&b, "CA SHA-1 fingerprint: %s\n\nTrust the CA with one of:\n\n", fp)
+		for _, ti := range targets {
+			mark := "○"
+			if ti.Available {
+				mark = "●"
+			}
+			fmt.Fprintf(&b, "%s %s\n  %s\n", mark, ti.Label, ti.Command)
+			if ti.Note != "" {
+				fmt.Fprintf(&b, "  (%s)\n", ti.Note)
+			}
+			if !ti.Available {
+				fmt.Fprintf(&b, "  [needs %q on PATH]\n", ti.Tool)
+			}
+			b.WriteString("\n")
+		}
+		return Text(b.String())
+
+	case "interceptors":
+		reg := InterceptRegistry()
+		var b strings.Builder
+		b.WriteString("Interceptors (● available, ○ needs setup):\n\n")
+		for _, ic := range reg.List() {
+			ok, reason := ic.Available(ctx)
+			mark := "○"
+			if ok {
+				mark = "●"
+			}
+			fmt.Fprintf(&b, "%s %s — %s [%s]\n", mark, ic.ID(), ic.Label(), ic.Category())
+			if !ok && reason != "" {
+				fmt.Fprintf(&b, "    %s\n", reason)
+			}
+		}
+		b.WriteString("\nActivate one with action=activate interceptor=<id>.")
+		return Text(b.String())
+
+	case "activate":
+		if strings.TrimSpace(args.Interceptor) == "" {
+			return Errorf("interceptor is required for activate (see action=interceptors)")
+		}
+		extra := map[string]any{}
+		if args.URL != "" {
+			extra["url"] = args.URL
+		}
+		sess, err := InterceptActivate(ctx, args.Interceptor, extra)
+		if err != nil {
+			return Errorf("%v", err)
+		}
+		var b strings.Builder
+		fmt.Fprintf(&b, "Activated %q — session %s\n", args.Interceptor, sess.ID())
+		for k, v := range sess.Info() {
+			fmt.Fprintf(&b, "  %s: %v\n", k, v)
+		}
+		return Text(b.String())
+
+	case "deactivate":
+		if strings.TrimSpace(args.Session) == "" {
+			return Errorf("session is required for deactivate")
+		}
+		if err := InterceptRegistry().StopSession(args.Session); err != nil {
+			return Errorf("%v", err)
+		}
+		return Text("Deactivated session " + args.Session + ".")
+
+	case "bp_list":
+		paused := p.ListPaused()
+		var b strings.Builder
+		fmt.Fprintf(&b, "%d request(s) paused at a breakpoint:\n", len(paused))
+		for _, pe := range paused {
+			fmt.Fprintf(&b, "#%d %s %s\n", pe.ID, pe.Method, pe.URL)
+		}
+		b.WriteString("\nResume with action=bp_resume id=<id> (or bp_abort id=<id>).")
+		return Text(b.String())
+	case "bp_resume":
+		p.Resume(args.ID, intercept.BreakpointResume{})
+		return Text(fmt.Sprintf("Resumed paused request #%d.", args.ID))
+	case "bp_abort":
+		p.Abort(args.ID)
+		return Text(fmt.Sprintf("Aborted paused request #%d.", args.ID))
+
 	default:
 		return Errorf("unknown action %q", args.Action)
 	}

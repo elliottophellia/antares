@@ -201,6 +201,13 @@ func (p *Proxy) DeleteRule(id int64) {
 // CACertPEM exposes the CA cert for the user to trust.
 func (p *Proxy) CACertPEM() []byte { return p.ca.CertPEM() }
 
+// CA returns the proxy's certificate authority.
+func (p *Proxy) CA() *CA { return p.ca }
+
+// SPKIFingerprint is the CA's SubjectPublicKeyInfo fingerprint, for launching
+// Chromium-family browsers that trust the proxy without a cert install.
+func (p *Proxy) SPKIFingerprint() string { return p.ca.SPKIFingerprint() }
+
 func (p *Proxy) record(e *Exchange) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
