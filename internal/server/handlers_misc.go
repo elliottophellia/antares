@@ -498,6 +498,7 @@ func (s *Server) handleListChannels(w http.ResponseWriter, r *http.Request) {
 		Connected  bool           `json:"connected"`
 		Configured bool           `json:"configured"`
 		HasToken   bool           `json:"has_token"` // kept for backward compatibility
+		BotName    string         `json:"bot_name,omitempty"`
 		Detail     string         `json:"detail"`
 		Docs       string         `json:"docs,omitempty"`
 		Fields     []channelField `json:"fields"`
@@ -510,10 +511,14 @@ func (s *Server) handleListChannels(w http.ResponseWriter, r *http.Request) {
 			fields[i] = f
 		}
 		configured := channelConfigured(cfg, spec)
+		botName := ""
+		if s.db != nil {
+			botName, _ = s.db.GetKV(r.Context(), "channel_botname:"+spec.ID)
+		}
 		out = append(out, channel{
 			ID: spec.ID, Label: spec.Label, Detail: spec.Detail, Docs: spec.Docs,
 			Enabled: channelEnabled(cfg, spec.ID), Connected: live[spec.ID],
-			Configured: configured, HasToken: configured, Fields: fields,
+			Configured: configured, HasToken: configured, BotName: botName, Fields: fields,
 		})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"channels": out, "pairings": pairings})
@@ -541,6 +546,13 @@ func (s *Server) handleSetChannelToken(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": err.Error()})
 		return
+	}
+	if identity != nil && s.db != nil {
+		label := identity.Name
+		if identity.Handle != "" {
+			label = strings.TrimSpace(identity.Name + " " + identity.Handle)
+		}
+		_ = s.db.SetKV(r.Context(), "channel_botname:"+id, label)
 	}
 
 	cfg, err := config.Reload()

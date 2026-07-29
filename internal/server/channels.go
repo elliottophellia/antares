@@ -3,6 +3,7 @@ package server
 import (
 	"errors"
 	"net/http"
+	"strings"
 
 	"github.com/enowdev/antares/internal/config"
 	"github.com/enowdev/antares/internal/gateway"
@@ -300,6 +301,14 @@ func (s *Server) handleSetChannelConfig(w http.ResponseWriter, r *http.Request) 
 			return
 		}
 		identity = who
+		// Remember the bot's name so the Channels page can show it once connected.
+		if who != nil && s.db != nil {
+			label := who.Name
+			if who.Handle != "" {
+				label = strings.TrimSpace(who.Name + " " + who.Handle)
+			}
+			_ = s.db.SetKV(r.Context(), "channel_botname:"+id, label)
+		}
 	}
 
 	// Only overwrite a field the form actually sent — an empty secret input
