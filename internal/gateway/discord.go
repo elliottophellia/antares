@@ -504,9 +504,14 @@ func (d *Discord) handleMessage(ctx context.Context, m dcMessage) {
 		UserName: m.Author.Username, Text: text, IsDirect: isDirect, MessageID: m.ID,
 	}
 
-	allowed, denial := d.mgr.authorize(ctx, msg, d.cfg.AllowedUsers, nil, d.cfg.RequirePairing)
+	// Pairing (and its code) is a DM-only handshake. In a server, access is
+	// governed by the guild allow-list and per-channel bindings, never by
+	// pairing — so an un-listed user gets silence, not a pairing code leaked
+	// into the channel. requirePairing is therefore only passed for DMs.
+	allowed, denial := d.mgr.authorize(ctx, msg, d.cfg.AllowedUsers, nil, isDirect && d.cfg.RequirePairing)
 	if !allowed {
-		if denial != "" {
+		// Only reply in a DM; in a server, refusal is silent.
+		if denial != "" && isDirect {
 			_, _ = d.Send(ctx, Reply{ChannelID: m.ChannelID, Text: denial, ReplyTo: m.ID})
 		}
 		return

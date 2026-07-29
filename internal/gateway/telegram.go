@@ -209,9 +209,12 @@ func (t *Telegram) handleMessage(ctx context.Context, m tgMessage) {
 		MessageID: strconv.FormatInt(m.MessageID, 10),
 	}
 
-	allowed, denial := t.mgr.authorize(ctx, msg, t.cfg.AllowedUsers, t.cfg.AllowedChats, t.cfg.RequirePairing)
+	// Pairing is a DM-only handshake: a group chat must never receive a pairing
+	// code. In a group, access is governed by the allow-lists and bindings; an
+	// un-listed user gets silence, not a code.
+	allowed, denial := t.mgr.authorize(ctx, msg, t.cfg.AllowedUsers, t.cfg.AllowedChats, isDirect && t.cfg.RequirePairing)
 	if !allowed {
-		if denial != "" {
+		if denial != "" && isDirect {
 			_, _ = t.Send(ctx, Reply{ChannelID: chatID, Text: denial, ReplyTo: msg.MessageID})
 		}
 		return
