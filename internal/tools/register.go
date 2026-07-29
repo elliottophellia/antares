@@ -10,6 +10,7 @@ import (
 func init() {
 	for _, t := range []Tool{
 		readFileTool{}, writeFileTool{}, editFileTool{}, listFilesTool{},
+		readDocumentTool{},
 		globTool{}, grepTool{},
 		terminalTool{},
 		webFetchTool{}, webSearchTool{}, httpRequestTool{},
@@ -206,14 +207,31 @@ func (listRolesTool) Execute(_ context.Context, in Input) Result {
 	if len(list) == 0 {
 		return Text("No roles are defined.")
 	}
-	var b strings.Builder
-	fmt.Fprintf(&b, "%d role(s) available for delegation:\n\n", len(list))
+	// Group subroles under their master, so a master role sees its specialist
+	// menu while the generalist sees only the top-level roles.
+	subs := map[string][]RoleInfo{}
+	var top []RoleInfo
 	for _, r := range list {
+		if r.Subrole {
+			subs[r.Parent] = append(subs[r.Parent], r)
+			continue
+		}
+		top = append(top, r)
+	}
+
+	var b strings.Builder
+	fmt.Fprintf(&b, "%d role(s) available for delegation:\n\n", len(top))
+	for _, r := range top {
 		mark := ""
 		if r.Danger {
 			mark = " (authorized security testing only)"
 		}
 		fmt.Fprintf(&b, "- %s%s — %s\n", r.Name, mark, r.Summary)
+		// A master role lists its specialists inline, so whoever runs as it knows
+		// exactly which subrole to hand each task to.
+		for _, s := range subs[r.Name] {
+			fmt.Fprintf(&b, "    - %s — %s\n", s.Name, s.Summary)
+		}
 	}
 	b.WriteString("\nDelegate to one with delegate_task, passing its name as the role parameter.")
 	return Text(b.String())

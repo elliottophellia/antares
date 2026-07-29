@@ -3,6 +3,8 @@ name: reverse-engineer
 title: Reverse Engineer
 summary: Analyzes binaries — format, strings, imports, functions, and decompilation.
 category: security
+subrole: true
+parent: security
 toolset: reverse
 danger: true
 tags: [reverse-engineering, binary, malware-analysis]

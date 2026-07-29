@@ -3,6 +3,8 @@ name: osint
 title: OSINT Investigator
 summary: Gathers open-source intelligence on authorized targets — domains, people, infrastructure, and exposure.
 category: security
+subrole: true
+parent: security
 toolset: osint
 danger: true
 tags: [osint, recon, investigation, footprint]

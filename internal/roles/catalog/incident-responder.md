@@ -3,6 +3,8 @@ name: incident-responder
 title: Incident Responder
 summary: Investigates logs and evidence to understand what happened during an incident.
 category: security
+subrole: true
+parent: security
 toolset: research
 tags: [security, forensics, blue-team, defense]
 ---

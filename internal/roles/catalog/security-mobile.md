@@ -3,6 +3,8 @@ name: security-mobile
 title: Mobile Application Security
 summary: Assesses authorized Android and iOS apps, their backends, and APIs.
 category: security
+subrole: true
+parent: security
 toolset: security
 danger: true
 tags: [security, mobile, android, ios, appsec, pentest]

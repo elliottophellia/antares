@@ -3,6 +3,8 @@ name: security-cloud
 title: Cloud Security
 summary: Assesses authorized AWS, Azure, and GCP environments — IAM, exposure, and configuration.
 category: security
+subrole: true
+parent: security
 toolset: security
 danger: true
 tags: [security, cloud, aws, azure, gcp, iam, pentest]

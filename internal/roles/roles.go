@@ -43,6 +43,13 @@ type Role struct {
 	// security testing against a target you do not own. The UI warns; the
 	// prompt insists on scope.
 	Danger bool `json:"danger,omitempty"`
+	// Subrole hides a role from the top-level picker and the generalist's
+	// list_roles: it is reached only by a master role that delegates to it. The
+	// security specialists are subroles of the "security" master.
+	Subrole bool `json:"subrole,omitempty"`
+	// Parent names the master role a subrole belongs to. Empty for top-level
+	// roles. Used to group subroles under their master.
+	Parent string `json:"parent,omitempty"`
 	// Effort overrides the reasoning effort for this role (low|medium|high|…).
 	// Empty inherits. A reviewer can think hard; a formatter need not.
 	Effort string `json:"effort,omitempty"`
@@ -67,6 +74,8 @@ type frontMatter struct {
 	MaxTurns int      `yaml:"max_turns"`
 	Tags     []string `yaml:"tags"`
 	Danger   bool     `yaml:"danger"`
+	Subrole  bool     `yaml:"subrole"`
+	Parent   string   `yaml:"parent"`
 }
 
 // Registry holds the roles available to a process.
@@ -129,6 +138,31 @@ func (r *Registry) List() []Role {
 	return out
 }
 
+// Visible returns the top-level roles — every role that is not a subrole. This
+// is what the picker and the generalist's list_roles show: a master role stands
+// in for its specialists, which stay hidden until the master delegates to them.
+func (r *Registry) Visible() []Role {
+	out := make([]Role, 0)
+	for _, role := range r.List() {
+		if !role.Subrole {
+			out = append(out, role)
+		}
+	}
+	return out
+}
+
+// Subroles returns the specialists that belong to a master role, sorted.
+func (r *Registry) Subroles(parent string) []Role {
+	parent = strings.ToLower(strings.TrimSpace(parent))
+	out := make([]Role, 0)
+	for _, role := range r.List() {
+		if role.Subrole && role.Parent == parent {
+			out = append(out, role)
+		}
+	}
+	return out
+}
+
 // Count is how many roles are loaded.
 func (r *Registry) Count() int {
 	r.mu.RLock()
@@ -175,6 +209,8 @@ func parse(text, source string) (Role, bool) {
 		MaxTurns: fm.MaxTurns,
 		Tags:     fm.Tags,
 		Danger:   fm.Danger,
+		Subrole:  fm.Subrole,
+		Parent:   strings.ToLower(strings.TrimSpace(fm.Parent)),
 		Prompt:   body,
 		Source:   source,
 	}, true
@@ -225,3 +261,4 @@ func (r *Registry) Reload() error {
 	r.mu.Unlock()
 	return nil
 }
+
