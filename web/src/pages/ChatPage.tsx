@@ -1241,9 +1241,9 @@ function ReasoningBlock({ text }: { text: string }) {
         <CaretDown className={cn('size-3 transition-transform', open && 'rotate-180')} />
       </button>
       {open ? (
-        <p className="mt-1.5 whitespace-pre-wrap break-words border-l-2 border-border pl-3 text-xs">
-          {text}
-        </p>
+        <div className="mt-1.5 border-l-2 border-border pl-3 text-xs">
+          <Markdown content={text} />
+        </div>
       ) : null}
     </div>
   )
