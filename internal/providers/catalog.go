@@ -35,6 +35,8 @@ var catalog = []Info{
 		[]string{"grok-4", "grok-3-mini"}},
 	{"deepseek", "DeepSeek", "openai-compatible", "DEEPSEEK_API_KEY", "https://api.deepseek.com", true,
 		[]string{"deepseek-chat", "deepseek-reasoner"}},
+	{"zai", "Z.ai GLM (Coding Plan)", "anthropic", "ZAI_API_KEY", "https://api.z.ai/api/anthropic/v1", true,
+		[]string{"glm-5.2", "glm-4.7", "glm-4.6"}},
 	{"ollama", "Ollama (local)", "openai-compatible", "", "http://localhost:11434/v1", false,
 		[]string{"llama3.1", "qwen2.5"}},
 }
