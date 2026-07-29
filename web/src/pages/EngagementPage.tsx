@@ -1,11 +1,24 @@
 import { useEffect, useState } from 'react'
-import { DownloadSimple, ShieldCheck, Warning } from '@phosphor-icons/react'
+import { Check, Copy, DownloadSimple, ShieldCheck, Warning } from '@phosphor-icons/react'
 import { downloadFile, get } from '@/lib/api'
+import { copyText } from '@/lib/clipboard'
 import { useApi } from '@/lib/hooks'
 import { useI18n } from '@/lib/i18n'
+import { cn } from '@/lib/utils'
 import { PageLayout } from '@/components/layout/PageLayout'
-import { Badge, Card, CardHeader, CardTitle, EmptyState } from '@/components/ui/primitives'
-import { SkeletonList } from '@/components/ui/skeleton'
+import { Button } from '@/components/ui/button'
+import {
+  Badge,
+  Card,
+  CardHeader,
+  CardTitle,
+  EmptyState,
+  Tabs,
+  TabsList,
+  TabsTrigger,
+} from '@/components/ui/primitives'
+import { Skeleton, SkeletonList } from '@/components/ui/skeleton'
+import { Markdown } from '@/components/chat/Markdown'
 
 interface Phase {
   name: string
@@ -59,6 +72,12 @@ const PHASE_MARK: Record<Phase['status'], string> = {
   blocked: '▲',
   not_started: '○',
 }
+const PHASE_COLOR: Record<Phase['status'], string> = {
+  complete: 'text-[var(--success)]',
+  in_progress: 'text-primary',
+  blocked: 'text-[var(--warning)]',
+  not_started: 'text-muted-foreground/50',
+}
 const SEV_VARIANT: Record<string, 'destructive' | 'warning' | 'secondary' | 'outline'> = {
   critical: 'destructive',
   high: 'destructive',
@@ -66,6 +85,7 @@ const SEV_VARIANT: Record<string, 'destructive' | 'warning' | 'secondary' | 'out
   low: 'secondary',
   info: 'outline',
 }
+const SEV_ORDER: Record<string, number> = { critical: 0, high: 1, medium: 2, low: 3, info: 4 }
 
 export default function EngagementPage() {
   const { t } = useI18n()
@@ -73,6 +93,7 @@ export default function EngagementPage() {
   const sessions = sessData?.sessions ?? []
   const [sessionID, setSessionID] = useState('')
   const active = sessionID || sessions[0]?.id || ''
+  const [tab, setTab] = useState<'overview' | 'raw'>('overview')
 
   const [eng, setEng] = useState<Engagement | null>(null)
   useEffect(() => {
@@ -89,158 +110,274 @@ export default function EngagementPage() {
     }
   }, [active])
 
-  if (loading) return <PageLayout><SkeletonList count={3} /></PageLayout>
+  if (loading) {
+    return (
+      <PageLayout>
+        <SkeletonList count={3} />
+      </PageLayout>
+    )
+  }
   if (sessions.length === 0) {
     return (
       <PageLayout>
-        <EmptyState icon={<ShieldCheck className="size-8" />} title={t('engagement.empty')} description={t('engagement.emptyDesc')} />
+        <EmptyState
+          icon={<ShieldCheck className="size-8" />}
+          title={t('engagement.empty')}
+          description={t('engagement.emptyDesc')}
+        />
       </PageLayout>
     )
   }
 
-  const findings = eng?.findings ?? []
+  const activeTitle = sessions.find((s) => s.id === active)?.title || 'Security Assessment'
+  const download = () =>
+    downloadFile(
+      `/engagement/report?session=${encodeURIComponent(active)}&title=${encodeURIComponent(activeTitle)}`,
+      `report-${active}.md`,
+    ).catch(() => {})
+
+  const header = (
+    <div className="space-y-3">
+      <div className="flex flex-wrap items-center gap-2">
+        <label className="text-xs text-muted-foreground">{t('engagement.pickSession')}</label>
+        <select
+          value={active}
+          onChange={(e) => setSessionID(e.target.value)}
+          className="h-8 min-w-0 flex-1 rounded-[var(--radius-sm)] border border-border bg-card px-2 text-sm sm:flex-none"
+        >
+          {sessions.map((s) => (
+            <option key={s.id} value={s.id}>
+              {s.title || s.id} ({s.findings}✚ / {s.intel}◆)
+            </option>
+          ))}
+        </select>
+        <Button
+          variant="outline"
+          size="sm"
+          disabled={!active}
+          onClick={download}
+          className="gap-1.5"
+        >
+          <DownloadSimple className="size-3.5" />
+          <span className="hidden sm:inline">{t('engagement.downloadReport')}</span>
+        </Button>
+      </div>
+      <Tabs value={tab} onValueChange={(v) => setTab(v as 'overview' | 'raw')}>
+        <TabsList>
+          <TabsTrigger value="overview">{t('engagement.tabOverview')}</TabsTrigger>
+          <TabsTrigger value="raw">{t('engagement.tabRaw')}</TabsTrigger>
+        </TabsList>
+      </Tabs>
+    </div>
+  )
+
+  return (
+    <PageLayout header={header}>
+      {tab === 'raw' ? (
+        <RawReport session={active} title={activeTitle} />
+      ) : (
+        <Overview eng={eng} />
+      )}
+    </PageLayout>
+  )
+}
+
+function Overview({ eng }: { eng: Engagement | null }) {
+  const { t } = useI18n()
+  const findings = [...(eng?.findings ?? [])].sort(
+    (a, b) => (SEV_ORDER[a.severity] ?? 9) - (SEV_ORDER[b.severity] ?? 9),
+  )
   const intel = eng?.intel ?? []
+  const chains = eng?.chains ?? []
   const pct = eng?.coverage_percent ?? 0
 
   return (
-    <PageLayout>
-      <div className="space-y-4">
-        <div className="flex items-center gap-2">
-          <label className="text-xs text-muted-foreground">{t('engagement.pickSession')}</label>
-          <select
-            value={active}
-            onChange={(e) => setSessionID(e.target.value)}
-            className="h-8 rounded-[var(--radius-sm)] border border-border bg-card px-2 text-sm"
-          >
-            {sessions.map((s) => (
-              <option key={s.id} value={s.id}>
-                {s.title || s.id} ({s.findings}✚ / {s.intel}◆)
-              </option>
-            ))}
-          </select>
-          <button
-            type="button"
-            disabled={!active}
-            onClick={() => {
-              const title = sessions.find((s) => s.id === active)?.title || 'Security Assessment'
-              downloadFile(
-                `/engagement/report?session=${encodeURIComponent(active)}&title=${encodeURIComponent(title)}`,
-                `report-${active}.md`,
-              ).catch(() => {})
-            }}
-            className="ml-auto inline-flex h-8 items-center gap-1 rounded-[var(--radius-sm)] border border-border px-2 text-xs text-muted-foreground transition hover:bg-muted hover:text-foreground disabled:opacity-40"
-          >
-            <DownloadSimple className="size-3.5" />
-            {t('engagement.downloadReport')}
-          </button>
-        </div>
-
-        {/* Methodology */}
-        <Card className="p-4">
-          <CardHeader className="p-0 pb-2">
-            <CardTitle className="text-sm">{t('engagement.methodology')}</CardTitle>
-          </CardHeader>
-          <div className="space-y-1.5">
-            {(eng?.phases ?? []).map((p) => (
-              <div key={p.name} className="flex items-center gap-2 text-sm">
-                <span className="w-4 text-center text-muted-foreground">{PHASE_MARK[p.status]}</span>
-                <span className="font-medium">{p.title}</span>
-                {p.evidence > 0 ? <span className="text-[11px] text-muted-foreground">{p.evidence} recorded</span> : null}
+    <div className="space-y-4">
+      {/* Methodology */}
+      <Card className="p-4">
+        <CardHeader className="p-0 pb-3">
+          <CardTitle className="text-sm">{t('engagement.methodology')}</CardTitle>
+        </CardHeader>
+        <div className="space-y-2">
+          {(eng?.phases ?? []).map((p) => (
+            <div key={p.name} className="flex items-start gap-2 text-sm">
+              <span className={cn('w-4 shrink-0 text-center', PHASE_COLOR[p.status])}>
+                {PHASE_MARK[p.status]}
+              </span>
+              <div className="min-w-0 flex-1">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="font-medium">{p.title}</span>
+                  {p.evidence > 0 ? (
+                    <Badge variant="secondary">{t('engagement.recorded', { n: p.evidence })}</Badge>
+                  ) : null}
+                </div>
+                {p.summary ? (
+                  <p className="text-[11px] text-muted-foreground">{p.summary}</p>
+                ) : null}
               </div>
-            ))}
-          </div>
-          {eng?.next ? <p className="mt-2 text-[11px] text-muted-foreground">→ {eng.next}</p> : null}
-        </Card>
+            </div>
+          ))}
+        </div>
+        {eng?.next ? (
+          <p className="mt-3 rounded-[var(--radius-sm)] border border-border bg-muted/30 px-2.5 py-1.5 text-[11px] text-muted-foreground">
+            → {eng.next}
+          </p>
+        ) : null}
+      </Card>
 
-        {/* Coverage */}
-        <Card className="p-4">
+      {/* Coverage */}
+      <Card className="p-4">
+        <CardHeader className="p-0 pb-2">
+          <CardTitle className="flex items-center justify-between text-sm">
+            {t('engagement.coverage')}
+            <span className="text-xs font-normal tabular-nums text-muted-foreground">{pct}%</span>
+          </CardTitle>
+        </CardHeader>
+        <div className="mb-3 h-2 overflow-hidden rounded-full bg-muted">
+          <div
+            className="h-full rounded-full bg-primary transition-all"
+            style={{ width: `${pct}%` }}
+          />
+        </div>
+        <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-3 lg:grid-cols-4">
+          {(eng?.coverage ?? []).map((a) => (
+            <div key={a.name} className="flex items-center gap-1.5 text-[11px]">
+              {a.covered ? (
+                <Check className="size-3.5 shrink-0 text-[var(--success)]" weight="bold" />
+              ) : (
+                <span className="size-3.5 shrink-0 rounded-[3px] border border-muted-foreground/40" />
+              )}
+              <span className={a.covered ? '' : 'text-muted-foreground'}>{a.title}</span>
+            </div>
+          ))}
+        </div>
+      </Card>
+
+      {/* Chains */}
+      {chains.length > 0 ? (
+        <Card className="border-destructive/40 p-4">
           <CardHeader className="p-0 pb-2">
-            <CardTitle className="flex items-center justify-between text-sm">
-              {t('engagement.coverage')}
-              <span className="text-xs font-normal text-muted-foreground">{pct}%</span>
+            <CardTitle className="flex items-center gap-2 text-sm text-destructive">
+              <Warning className="size-4" weight="fill" />
+              {t('engagement.chains')}
             </CardTitle>
           </CardHeader>
-          <div className="mb-3 h-2 overflow-hidden rounded-full bg-muted">
-            <div className="h-full rounded-full bg-primary transition-all" style={{ width: `${pct}%` }} />
-          </div>
-          <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-4">
-            {(eng?.coverage ?? []).map((a) => (
-              <div key={a.name} className="flex items-center gap-1.5 text-[11px]">
-                <span className={a.covered ? 'text-[var(--success)]' : 'text-muted-foreground'}>
-                  {a.covered ? '☑' : '☐'}
-                </span>
-                <span className={a.covered ? '' : 'text-muted-foreground'}>{a.title}</span>
+          <div className="space-y-1.5">
+            {chains.map((c) => (
+              <div key={c.name} className="text-xs">
+                <span className="font-medium">{c.name}</span>
+                <span className="text-muted-foreground"> — {c.impact}</span>
               </div>
             ))}
           </div>
         </Card>
+      ) : null}
 
-        {/* Chains */}
-        {(eng?.chains ?? []).length > 0 ? (
-          <Card className="border-destructive/40 p-4">
-            <CardHeader className="p-0 pb-2">
-              <CardTitle className="flex items-center gap-2 text-sm text-destructive">
-                <Warning className="size-4" weight="fill" />
-                {t('engagement.chains')}
-              </CardTitle>
-            </CardHeader>
-            <div className="space-y-2">
-              {eng!.chains!.map((c) => (
-                <div key={c.name} className="text-xs">
-                  <span className="font-medium">{c.name}</span>
-                  <span className="text-muted-foreground"> — {c.impact}</span>
-                </div>
-              ))}
-            </div>
-          </Card>
-        ) : null}
+      {/* Findings */}
+      <Card className="p-4">
+        <CardHeader className="p-0 pb-2">
+          <CardTitle className="text-sm">
+            {t('engagement.findings')} ({findings.length})
+          </CardTitle>
+        </CardHeader>
+        {findings.length === 0 ? (
+          <p className="text-xs text-muted-foreground">{t('engagement.noFindings')}</p>
+        ) : (
+          <div className="space-y-1.5">
+            {findings.map((f) => (
+              <div
+                key={f.id}
+                className="flex flex-wrap items-center gap-2 rounded-[var(--radius-sm)] border border-border px-2.5 py-2 text-sm"
+              >
+                <Badge variant={SEV_VARIANT[f.severity] ?? 'outline'}>{f.severity}</Badge>
+                <span className="min-w-0 flex-1 font-medium">{f.title}</span>
+                {f.cwe ? (
+                  <span className="shrink-0 text-[10px] text-muted-foreground">{f.cwe}</span>
+                ) : null}
+                {f.target ? (
+                  <span className="shrink-0 font-mono text-[10px] text-muted-foreground">
+                    {f.target}
+                  </span>
+                ) : null}
+                {f.status && f.status !== 'new' && f.status !== 'confirmed' ? (
+                  <Badge variant="outline">{f.status}</Badge>
+                ) : null}
+              </div>
+            ))}
+          </div>
+        )}
+      </Card>
 
-        {/* Findings */}
+      {/* Intel */}
+      {intel.length > 0 ? (
         <Card className="p-4">
           <CardHeader className="p-0 pb-2">
             <CardTitle className="text-sm">
-              {t('engagement.findings')} ({findings.length})
+              {t('engagement.intel')} ({intel.length})
             </CardTitle>
           </CardHeader>
-          {findings.length === 0 ? (
-            <p className="text-xs text-muted-foreground">{t('engagement.noFindings')}</p>
-          ) : (
-            <div className="space-y-1.5">
-              {findings.map((f) => (
-                <div key={f.id} className="flex flex-wrap items-center gap-2 text-sm">
-                  <Badge variant={SEV_VARIANT[f.severity] ?? 'outline'}>{f.severity}</Badge>
-                  <span className="font-medium">{f.title}</span>
-                  {f.cwe ? <span className="text-[10px] text-muted-foreground">{f.cwe}</span> : null}
-                  {f.target ? <span className="font-mono text-[10px] text-muted-foreground">{f.target}</span> : null}
-                  {f.status && f.status !== 'new' && f.status !== 'confirmed' ? (
-                    <Badge variant="outline">{f.status}</Badge>
-                  ) : null}
-                </div>
-              ))}
-            </div>
-          )}
+          <div className="space-y-1">
+            {intel.map((it) => (
+              <div key={it.id} className="flex items-center gap-2 text-xs">
+                <Badge variant="outline">{it.type}</Badge>
+                <span className="min-w-0 truncate font-mono">{it.value}</span>
+                {it.detail ? (
+                  <span className="min-w-0 flex-1 truncate text-muted-foreground">— {it.detail}</span>
+                ) : null}
+              </div>
+            ))}
+          </div>
         </Card>
+      ) : null}
+    </div>
+  )
+}
 
-        {/* Intel */}
-        {intel.length > 0 ? (
-          <Card className="p-4">
-            <CardHeader className="p-0 pb-2">
-              <CardTitle className="text-sm">
-                {t('engagement.intel')} ({intel.length})
-              </CardTitle>
-            </CardHeader>
-            <div className="space-y-1">
-              {intel.map((it) => (
-                <div key={it.id} className="flex items-center gap-2 text-xs">
-                  <Badge variant="outline">{it.type}</Badge>
-                  <span className="font-mono">{it.value}</span>
-                  {it.detail ? <span className="truncate text-muted-foreground">— {it.detail}</span> : null}
-                </div>
-              ))}
-            </div>
-          </Card>
-        ) : null}
+// The full Markdown assessment report, rendered inline — the readable "raw"
+// view of everything the report download would contain.
+function RawReport({ session, title }: { session: string; title: string }) {
+  const { t } = useI18n()
+  const [md, setMd] = useState<string | null>(null)
+  const [err, setErr] = useState<string>()
+  const [copied, setCopied] = useState(false)
+
+  useEffect(() => {
+    if (!session) return
+    let cancelled = false
+    setMd(null)
+    setErr(undefined)
+    get<string>(
+      `/engagement/report?session=${encodeURIComponent(session)}&title=${encodeURIComponent(title)}`,
+    )
+      .then((text) => !cancelled && setMd(typeof text === 'string' ? text : String(text)))
+      .catch((e) => !cancelled && setErr((e as Error).message))
+    return () => {
+      cancelled = true
+    }
+  }, [session, title])
+
+  const copy = async () => {
+    if (md && (await copyText(md))) {
+      setCopied(true)
+      setTimeout(() => setCopied(false), 1500)
+    }
+  }
+
+  if (err) return <p className="text-xs text-destructive">{err}</p>
+  if (md === null) return <Skeleton className="h-64 w-full" />
+
+  return (
+    <Card className="p-4">
+      <div className="mb-3 flex items-center justify-between">
+        <CardTitle className="text-sm">{t('engagement.rawReport')}</CardTitle>
+        <Button variant="outline" size="sm" onClick={copy} className="gap-1.5">
+          {copied ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
+          {copied ? t('common.copied') : t('common.copy')}
+        </Button>
       </div>
-    </PageLayout>
+      <div className="prose-sm max-w-none text-[13px] leading-relaxed">
+        <Markdown content={md} />
+      </div>
+    </Card>
   )
 }
