@@ -44,6 +44,7 @@ func init() {
 		// OSINT (extended).
 		osintDomainTool{}, osintPhoneTool{}, osintScrapeTool{}, osintPasteTool{},
 		osintFootprintTool{}, osintDorksLiveTool{}, osintPivotTool{}, osintGoogleTool{},
+		osintEmailFullTool{},
 		// Anti-detect CAPTCHA solver (reuses the stealth browser).
 		solveCaptchaTool{},
 		// Native MITM intercept proxy.
