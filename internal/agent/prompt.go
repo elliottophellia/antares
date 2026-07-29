@@ -52,6 +52,12 @@ func (a *Agent) buildSystemPrompt(ctx context.Context, req Request, sess *store.
 	}
 	fmt.Fprintf(&b, "- Channel: %s\n", firstNonEmpty(req.Platform, "web"))
 	fmt.Fprintf(&b, "- Terminal backend: %s\n", cfg.Terminal.Backend)
+	if req.Platform == "discord" {
+		b.WriteString("- You are answering in Discord. Discord Markdown works: **bold**, *italics*, " +
+			"__underline__, ~~strikethrough~~, `inline code`, ```fenced code blocks```, > quotes, " +
+			"- bullet lists, and spoilers with ||spoiler text||. Use them when they help. " +
+			"Keep replies reasonably short for a chat; do not emit raw HTML.\n")
+	}
 
 	if len(active) > 0 {
 		b.WriteString("\n## Tool notes\n\n")

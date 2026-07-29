@@ -418,23 +418,30 @@ func (d *Discord) handleInteraction(ctx context.Context, it dcInteraction) {
 	}
 
 	reply, err := d.mgr.handle(ctx, msg, nil)
+	kind := embedNormal
 	if err != nil {
-		reply = "⚠️ " + err.Error()
+		reply = err.Error()
+		kind = embedError
 	}
 	if strings.TrimSpace(reply) == "" {
 		reply = "(no reply)"
 	}
 
-	// Edit the deferred reply with the first chunk; follow up with the rest.
-	chunks := splitForDiscord(reply)
-	if len(chunks) == 0 {
-		chunks = []string{"(no reply)"}
+	// Answer the deferred interaction with coloured embeds, matching the look of
+	// an ordinary message reply. Edit the original with the first part, follow
+	// up with the rest.
+	parts := splitForEmbed(reply)
+	if len(parts) == 0 {
+		parts = []string{"(no reply)"}
+	}
+	embed := func(part string) []map[string]any {
+		return []map[string]any{{"description": part, "color": embedColor(kind)}}
 	}
 	_ = d.rest(ctx, "PATCH", "/webhooks/"+d.appID()+"/"+it.Token+"/messages/@original",
-		map[string]any{"content": chunks[0]}, nil)
-	for _, chunk := range chunks[1:] {
+		map[string]any{"embeds": embed(parts[0])}, nil)
+	for _, part := range parts[1:] {
 		_ = d.rest(ctx, "POST", "/webhooks/"+d.appID()+"/"+it.Token,
-			map[string]any{"content": chunk}, nil)
+			map[string]any{"embeds": embed(part)}, nil)
 	}
 }
 
@@ -519,26 +526,18 @@ func (d *Discord) handleMessage(ctx context.Context, m dcMessage) {
 
 	reply, err := d.mgr.handle(ctx, msg, nil)
 	stopTyping()
+	kind := embedNormal
 	if err != nil {
-		reply = "⚠️ " + err.Error()
+		reply = err.Error()
+		kind = embedError
 	}
 	if strings.TrimSpace(reply) == "" {
 		reply = "(no reply)"
 	}
-
-	// Post as a normal message (no reply-reference). Discord renders the first
-	// line of any message inline beside the author's name; a leading zero-width
-	// space + newline pushes the real content onto the next line, under the
-	// name, which reads better for a long answer. Only the first chunk needs it.
-	chunks := splitForDiscord(reply)
-	for i, chunk := range chunks {
-		if i == 0 {
-			chunk = "​\n" + chunk
-		}
-		if _, err := d.Send(ctx, Reply{ChannelID: m.ChannelID, Text: chunk}); err != nil {
-			slog.Warn("discord: send failed", "error", err)
-			return
-		}
+	// Every answer is a coloured embed: the content sits in its own card under
+	// the bot name, and the colour signals normal vs error at a glance.
+	if e := d.sendEmbeds(ctx, m.ChannelID, reply, kind); e != nil {
+		slog.Warn("discord: send failed", "error", e)
 	}
 }
 
@@ -564,6 +563,79 @@ func (d *Discord) Send(ctx context.Context, r Reply) (string, error) {
 	}
 	err := d.rest(ctx, "POST", "/channels/"+r.ChannelID+"/messages", payload, &result)
 	return result.ID, err
+}
+
+// Embed kinds and their left-bar colours (semantic, decimal RGB for Discord).
+type embedKind int
+
+const (
+	embedNormal  embedKind = iota // neutral blue-grey
+	embedError                    // red
+	embedSuccess                  // green
+	embedTool                     // amber
+)
+
+func embedColor(k embedKind) int {
+	switch k {
+	case embedError:
+		return 0xE5484D // red
+	case embedSuccess:
+		return 0x30A46C // green
+	case embedTool:
+		return 0xF5A623 // amber
+	default:
+		return 0x5B6BF5 // indigo/neutral
+	}
+}
+
+// embedLimit is Discord's per-embed description cap. Content messages cap at
+// 2000; an embed description allows up to 4096.
+const embedLimit = 4000
+
+// sendEmbeds posts a reply as one or more coloured embeds. Long text is split
+// on the embed limit (without cutting fenced code blocks apart); each part is
+// its own embed so the whole answer keeps the same colour.
+func (d *Discord) sendEmbeds(ctx context.Context, channelID, text string, kind embedKind) error {
+	for _, part := range splitForEmbed(text) {
+		payload := map[string]any{
+			"embeds": []map[string]any{{
+				"description": part,
+				"color":       embedColor(kind),
+			}},
+			"allowed_mentions": map[string]any{"parse": []string{"users"}},
+		}
+		if err := d.rest(ctx, "POST", "/channels/"+channelID+"/messages", payload, nil); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// splitForEmbed breaks text on the embed limit, keeping fenced code blocks
+// whole (mirrors splitForDiscord but at the larger embed size).
+func splitForEmbed(s string) []string {
+	if len(s) <= embedLimit {
+		return []string{s}
+	}
+	var out []string
+	for len(s) > embedLimit {
+		cut := strings.LastIndex(s[:embedLimit], "\n")
+		if cut < embedLimit/2 {
+			cut = embedLimit
+		}
+		chunk := s[:cut]
+		if strings.Count(chunk, "```")%2 == 1 {
+			chunk += "\n```"
+			s = "```\n" + strings.TrimSpace(s[cut:])
+		} else {
+			s = strings.TrimSpace(s[cut:])
+		}
+		out = append(out, chunk)
+	}
+	if s != "" {
+		out = append(out, s)
+	}
+	return out
 }
 
 // Discord caps a message at 2000 characters.
