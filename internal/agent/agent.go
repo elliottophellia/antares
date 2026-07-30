@@ -437,7 +437,13 @@ func (a *Agent) Run(ctx context.Context, req Request, emit Emit) (*Result, error
 			// Only nudge while it is still closing items out: if a nudge did not
 			// reduce the open count, it will not, so stop rather than spam. A
 			// hard cap bounds the total either way.
-			if !req.Quiet && req.Depth == 0 && usedTodo && todoNudges < maxTodoNudges {
+			//
+			// EXCEPT when a delegated background task is still running: the open
+			// todos are the worker's, and the turn is meant to end here and be
+			// resumed by OnBackgroundDone when the worker finishes. Nudging now
+			// would make the coordinator spin on work it is waiting for.
+			if !req.Quiet && req.Depth == 0 && usedTodo && todoNudges < maxTodoNudges &&
+				!a.bg.hasRunning(sess.ID) {
 				open := a.incompleteTodos(runCtx, sess.ID)
 				if open > 0 && (todoOpenPrev < 0 || open < todoOpenPrev) {
 					todoNudges++

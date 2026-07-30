@@ -247,6 +247,24 @@ func (m *bgManager) list(parent string) []tools.TaskInfo {
 	return out
 }
 
+// hasRunning reports whether any background task delegated by parentSession is
+// still running. The delegating turn uses this to know it is waiting on a
+// worker — it should end and be resumed by OnBackgroundDone, not be nudged to
+// keep iterating on still-open todos that the worker owns.
+func (m *bgManager) hasRunning(parentSession string) bool {
+	if parentSession == "" {
+		return false
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, t := range m.tasks {
+		if t.parentSession == parentSession && t.info.Status == "running" {
+			return true
+		}
+	}
+	return false
+}
+
 func (m *bgManager) stop(id string) bool {
 	m.mu.Lock()
 	t, ok := m.tasks[id]
