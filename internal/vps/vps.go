@@ -124,6 +124,39 @@ func runOn(ctx context.Context, client *ssh.Client, command string) (string, err
 	}
 }
 
+// Process is one row from the remote process table.
+type Process struct {
+	PID     int     `json:"pid"`
+	User    string  `json:"user"`
+	CPU     float64 `json:"cpu"`
+	Mem     float64 `json:"mem"`
+	Command string  `json:"command"`
+}
+
+// Processes lists the running processes on a host, busiest CPU first. Runs a
+// single ps over one connection.
+func Processes(ctx context.Context, t Target) ([]Process, error) {
+	out, err := Run(ctx, t, `ps -eo pid,user,pcpu,pmem,comm --sort=-pcpu --no-headers 2>/dev/null | head -n 300`)
+	if err != nil && strings.TrimSpace(out) == "" {
+		return nil, err
+	}
+	var procs []Process
+	for _, line := range strings.Split(out, "\n") {
+		f := strings.Fields(strings.TrimSpace(line))
+		if len(f) < 5 {
+			continue
+		}
+		pid, _ := strconv.Atoi(f[0])
+		cpu, _ := strconv.ParseFloat(f[2], 64)
+		mem, _ := strconv.ParseFloat(f[3], 64)
+		procs = append(procs, Process{
+			PID: pid, User: f[1], CPU: cpu, Mem: mem,
+			Command: strings.Join(f[4:], " "),
+		})
+	}
+	return procs, nil
+}
+
 // Ping confirms a host is reachable and authenticates, returning the remote
 // user@hostname it landed on (proof it really connected).
 func Ping(ctx context.Context, t Target) (string, error) {

@@ -196,6 +196,25 @@ func (s *Server) handleVPSMetrics(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, m)
 }
 
+// handleVPSProcesses lists the full running process table of one host, for the
+// "show processes" modal.
+func (s *Server) handleVPSProcesses(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	v, err := s.db.GetVPSHost(r.Context(), id)
+	if err != nil {
+		writeError(w, http.StatusNotFound, errNotFound)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 25*time.Second)
+	defer cancel()
+	procs, err := vps.Processes(ctx, targetFor(v))
+	if err != nil {
+		writeJSON(w, http.StatusOK, map[string]any{"error": err.Error(), "processes": []any{}})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"processes": procs})
+}
+
 func randHex(n int) string {
 	b := make([]byte, n)
 	_, _ = rand.Read(b)

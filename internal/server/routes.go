@@ -144,6 +144,7 @@ func (s *Server) routes() {
 	m.HandleFunc("POST /api/vps", s.handleSaveVPS)
 	m.HandleFunc("POST /api/vps/test", s.handleTestVPS)
 	m.HandleFunc("GET /api/vps/{id}/metrics", s.handleVPSMetrics)
+	m.HandleFunc("GET /api/vps/{id}/processes", s.handleVPSProcesses)
 	m.HandleFunc("DELETE /api/vps/{id}", s.handleDeleteVPS)
 
 	// MCP

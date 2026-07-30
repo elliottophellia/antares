@@ -29,6 +29,7 @@ import { SkeletonList } from '@/components/ui/skeleton'
 import { Button } from '@/components/ui/button'
 import { usePageActions } from '@/components/layout/PageChrome'
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog'
+import { Spoiler } from '@/components/ui/Spoiler'
 
 interface VPSHost {
   id: string
@@ -144,6 +145,7 @@ function VPSCard({ host, onEdit, onRemove }: { host: VPSHost; onEdit: () => void
   const { t } = useI18n()
   const [m, setM] = useState<Metrics | null>(null)
   const [loading, setLoading] = useState(true)
+  const [showProc, setShowProc] = useState(false)
 
   const refresh = () => {
     setLoading(true)
@@ -176,7 +178,7 @@ function VPSCard({ host, onEdit, onRemove }: { host: VPSHost; onEdit: () => void
             ) : null}
           </div>
           <p className="truncate font-mono text-[11px] text-muted-foreground">
-            {host.username}@{host.host}:{host.port}
+            {host.username}@<Spoiler>{host.host}</Spoiler>:{host.port}
           </p>
         </div>
         <div className="flex shrink-0 gap-1">
@@ -229,23 +231,109 @@ function VPSCard({ host, onEdit, onRemove }: { host: VPSHost; onEdit: () => void
             <Gauge label={t('vps.swap')} percent={m.swap_percent ?? 0} detail={`${fmtMB(m.swap_used_mb)} / ${fmtMB(m.swap_total_mb)}`} />
           ) : null}
 
-          {m.top_proc && m.top_proc.length > 0 ? (
-            <div>
-              <p className="mb-1 text-[11px] font-medium text-muted-foreground">
-                {t('vps.topProc')} · {m.processes} {t('vps.procs')}
-              </p>
-              <div className="space-y-0.5 font-mono text-[10px] text-muted-foreground">
-                {m.top_proc.slice(0, 5).map((row, i) => (
-                  <div key={i} className="truncate">
-                    {row}
-                  </div>
-                ))}
-              </div>
-            </div>
-          ) : null}
+          <div className="flex items-center justify-between pt-1">
+            <span className="text-[11px] text-muted-foreground">
+              {m.processes} {t('vps.procs')}
+            </span>
+            <Button variant="outline" size="sm" className="h-7 px-2 text-xs" onClick={() => setShowProc(true)}>
+              {t('vps.showProc')}
+            </Button>
+          </div>
         </div>
       ) : null}
+
+      <ProcessModal host={host} open={showProc} onOpenChange={setShowProc} />
     </Card>
+  )
+}
+
+interface Process {
+  pid: number
+  user: string
+  cpu: number
+  mem: number
+  command: string
+}
+
+function ProcessModal({
+  host,
+  open,
+  onOpenChange,
+}: {
+  host: VPSHost
+  open: boolean
+  onOpenChange: (o: boolean) => void
+}) {
+  const { t } = useI18n()
+  const [procs, setProcs] = useState<Process[] | null>(null)
+  const [err, setErr] = useState<string>()
+  const [q, setQ] = useState('')
+
+  useEffect(() => {
+    if (!open) return
+    setProcs(null)
+    setErr(undefined)
+    setQ('')
+    get<{ processes: Process[]; error?: string }>(`/vps/${encodeURIComponent(host.id)}/processes`)
+      .then((d) => {
+        if (d.error) setErr(d.error)
+        setProcs(d.processes ?? [])
+      })
+      .catch((e) => setErr((e as Error).message))
+  }, [open, host.id])
+
+  const shown = (procs ?? []).filter((p) => {
+    const s = q.trim().toLowerCase()
+    return !s || p.command.toLowerCase().includes(s) || p.user.toLowerCase().includes(s) || String(p.pid).includes(s)
+  })
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-2xl">
+        <DialogHeader>
+          <DialogTitle>
+            {t('vps.procTitle')} — {host.label}
+          </DialogTitle>
+        </DialogHeader>
+        <DialogBody className="space-y-2">
+          <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder={t('vps.procSearch')} />
+          {err ? (
+            <p className="text-xs text-destructive">{err}</p>
+          ) : procs === null ? (
+            <div className="h-64 animate-pulse rounded-[var(--radius-sm)] bg-muted/40" />
+          ) : shown.length === 0 ? (
+            <p className="py-8 text-center text-xs text-muted-foreground">{t('vps.procNone')}</p>
+          ) : (
+            <div className="max-h-[55vh] overflow-y-auto rounded-[var(--radius-sm)] border border-border">
+              <table className="w-full text-left text-xs">
+                <thead className="sticky top-0 bg-card">
+                  <tr className="border-b border-border text-[11px] text-muted-foreground">
+                    <th className="px-2 py-1.5 font-medium">{t('vps.procPid')}</th>
+                    <th className="px-2 py-1.5 font-medium">{t('vps.procUser')}</th>
+                    <th className="px-2 py-1.5 text-right font-medium">{t('vps.cpu')}</th>
+                    <th className="px-2 py-1.5 text-right font-medium">{t('vps.memory')}</th>
+                    <th className="px-2 py-1.5 font-medium">{t('vps.procCmd')}</th>
+                  </tr>
+                </thead>
+                <tbody className="font-mono">
+                  {shown.map((p) => (
+                    <tr key={p.pid} className="border-b border-border/50 last:border-0">
+                      <td className="px-2 py-1 tabular-nums text-muted-foreground">{p.pid}</td>
+                      <td className="px-2 py-1 text-muted-foreground">{p.user}</td>
+                      <td className={cn('px-2 py-1 text-right tabular-nums', p.cpu >= 50 && 'text-[var(--warning)]')}>
+                        {p.cpu.toFixed(1)}
+                      </td>
+                      <td className="px-2 py-1 text-right tabular-nums text-muted-foreground">{p.mem.toFixed(1)}</td>
+                      <td className="max-w-0 truncate px-2 py-1">{p.command}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </DialogBody>
+      </DialogContent>
+    </Dialog>
   )
 }
 
