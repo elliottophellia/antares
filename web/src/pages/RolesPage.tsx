@@ -245,10 +245,6 @@ export default function RolesPage() {
               </div>
             </div>
           ))}
-
-          <Card>
-            <CardContent className="pt-4 text-xs text-muted-foreground">{t('roles.howto')}</CardContent>
-          </Card>
         </>
       )}
 

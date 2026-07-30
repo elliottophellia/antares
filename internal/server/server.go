@@ -4,6 +4,7 @@ package server
 import (
 	"context"
 	"crypto/rand"
+	"crypto/subtle"
 	"embed"
 	"encoding/hex"
 	"encoding/json"
@@ -265,7 +266,9 @@ func (s *Server) withAuth(next http.Handler) http.Handler {
 			// EventSource cannot set headers, so SSE endpoints accept a query param.
 			presented = r.URL.Query().Get("token")
 		}
-		if presented != token {
+		// Constant-time compare so the token isn't a timing oracle — this gate now
+		// also fronts SSH command execution via /api/vps.
+		if subtle.ConstantTimeCompare([]byte(presented), []byte(token)) != 1 {
 			writeError(w, http.StatusUnauthorized, errors.New("invalid token"))
 			return
 		}

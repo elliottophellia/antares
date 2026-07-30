@@ -102,10 +102,28 @@ func (s *sqlStore) migrate(ctx context.Context) error {
 	}
 	for _, q := range stmts {
 		if _, err := s.db.ExecContext(ctx, q); err != nil {
+			// Additive `ALTER TABLE ... ADD COLUMN` migrations are idempotent by
+			// intent: on a DB that already has the column (fresh CREATE, or a
+			// prior run) the engine reports "duplicate column", which is success
+			// for our purposes. Everything else is fatal.
+			if isAddColumn(q) && isDuplicateColumn(err) {
+				continue
+			}
 			return fmt.Errorf("migrate: %w\n%s", err, firstLine(q))
 		}
 	}
 	return nil
+}
+
+func isAddColumn(q string) bool {
+	u := strings.ToUpper(q)
+	return strings.Contains(u, "ALTER TABLE") && strings.Contains(u, "ADD COLUMN")
+}
+
+func isDuplicateColumn(err error) bool {
+	m := strings.ToLower(err.Error())
+	// sqlite: "duplicate column name"; postgres: "column ... already exists".
+	return strings.Contains(m, "duplicate column") || strings.Contains(m, "already exists")
 }
 
 func firstLine(s string) string {

@@ -6,6 +6,7 @@ package vps
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"strconv"
@@ -24,6 +25,12 @@ type Target struct {
 	Password   string
 	PrivateKey string
 	Passphrase string
+	// KnownHostKey is the server's pinned SSH public key (authorized_keys format,
+	// e.g. "ssh-ed25519 AAAA..."). Empty means first use: any key is accepted and
+	// returned via the connection's SeenHostKey for the caller to pin. Non-empty
+	// means the presented key MUST match, or the dial fails — this is what stops
+	// a MITM from harvesting the credentials.
+	KnownHostKey string
 }
 
 func (t Target) addr() string {
@@ -34,10 +41,20 @@ func (t Target) addr() string {
 	return net.JoinHostPort(t.Host, strconv.Itoa(p))
 }
 
-// dial opens an SSH client. The host key is accepted without checking — these
-// are the user's own servers, added deliberately; a TOFU store would be a
-// future hardening, not a correctness issue here.
-func dial(ctx context.Context, t Target) (*ssh.Client, error) {
+// ErrHostKeyChanged is returned when a host presents a key different from the
+// pinned one — a possible man-in-the-middle, or a legitimately rebuilt server.
+var ErrHostKeyChanged = errors.New("host key changed since it was first trusted — possible MITM, or the server was rebuilt; remove and re-add it if you trust the change")
+
+// conn wraps an ssh.Client with the host key the server actually presented, so
+// the caller can pin it after a first-use connect.
+type conn struct {
+	*ssh.Client
+	seenHostKey string
+}
+
+// dial opens an SSH client with trust-on-first-use host-key verification. On
+// first use (t.KnownHostKey empty) it records the key; thereafter it must match.
+func dial(ctx context.Context, t Target) (*conn, error) {
 	auth, err := authMethods(t)
 	if err != nil {
 		return nil, err
@@ -46,23 +63,48 @@ func dial(ctx context.Context, t Target) (*ssh.Client, error) {
 	if user == "" {
 		user = "root"
 	}
+
+	var seen string
+	hostKeyCb := func(_ string, _ net.Addr, key ssh.PublicKey) error {
+		seen = strings.TrimSpace(string(ssh.MarshalAuthorizedKey(key)))
+		if known := strings.TrimSpace(t.KnownHostKey); known != "" && !hostKeysEqual(known, seen) {
+			return ErrHostKeyChanged
+		}
+		return nil
+	}
+
 	cfg := &ssh.ClientConfig{
 		User:            user,
 		Auth:            auth,
-		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
+		HostKeyCallback: hostKeyCb,
 		Timeout:         12 * time.Second,
 	}
 	d := net.Dialer{Timeout: 12 * time.Second}
-	conn, err := d.DialContext(ctx, "tcp", t.addr())
+	netConn, err := d.DialContext(ctx, "tcp", t.addr())
 	if err != nil {
 		return nil, fmt.Errorf("connect %s: %w", t.addr(), err)
 	}
-	c, chans, reqs, err := ssh.NewClientConn(conn, t.addr(), cfg)
+	c, chans, reqs, err := ssh.NewClientConn(netConn, t.addr(), cfg)
 	if err != nil {
-		conn.Close()
+		netConn.Close()
+		// A host-key mismatch surfaces here wrapped by the ssh handshake; keep the
+		// sentinel recognisable to the caller.
+		if errors.Is(err, ErrHostKeyChanged) {
+			return nil, ErrHostKeyChanged
+		}
 		return nil, fmt.Errorf("ssh handshake: %w", err)
 	}
-	return ssh.NewClient(c, chans, reqs), nil
+	return &conn{Client: ssh.NewClient(c, chans, reqs), seenHostKey: seen}, nil
+}
+
+// hostKeysEqual compares two authorized_keys lines by their type+base64 body,
+// ignoring any trailing comment.
+func hostKeysEqual(a, b string) bool {
+	fa, fb := strings.Fields(a), strings.Fields(b)
+	if len(fa) < 2 || len(fb) < 2 {
+		return strings.TrimSpace(a) == strings.TrimSpace(b)
+	}
+	return fa[0] == fb[0] && fa[1] == fb[1]
 }
 
 func authMethods(t Target) ([]ssh.AuthMethod, error) {
@@ -89,16 +131,17 @@ func authMethods(t Target) ([]ssh.AuthMethod, error) {
 	return []ssh.AuthMethod{ssh.Password(t.Password)}, nil
 }
 
-// Run opens a connection, runs one command, and returns its combined output.
-// Used by the vps_run tool. A non-zero exit is returned with the output so the
-// caller sees stderr rather than a bare error.
-func Run(ctx context.Context, t Target, command string) (string, error) {
+// Run opens a connection, runs one command, and returns its combined output
+// plus the host key the server presented (for TOFU pinning). A non-zero exit is
+// returned with the output so the caller sees stderr rather than a bare error.
+func Run(ctx context.Context, t Target, command string) (string, string, error) {
 	client, err := dial(ctx, t)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	defer client.Close()
-	return runOn(ctx, client, command)
+	out, err := runOn(ctx, client.Client, command)
+	return out, client.seenHostKey, err
 }
 
 func runOn(ctx context.Context, client *ssh.Client, command string) (string, error) {
@@ -133,12 +176,12 @@ type Process struct {
 	Command string  `json:"command"`
 }
 
-// Processes lists the running processes on a host, busiest CPU first. Runs a
-// single ps over one connection.
-func Processes(ctx context.Context, t Target) ([]Process, error) {
-	out, err := Run(ctx, t, `ps -eo pid,user,pcpu,pmem,comm --sort=-pcpu --no-headers 2>/dev/null | head -n 300`)
+// Processes lists the running processes on a host, busiest CPU first, plus the
+// host key seen. Runs a single ps over one connection.
+func Processes(ctx context.Context, t Target) ([]Process, string, error) {
+	out, seen, err := Run(ctx, t, `ps -eo pid,user,pcpu,pmem,comm --sort=-pcpu --no-headers 2>/dev/null | head -n 300`)
 	if err != nil && strings.TrimSpace(out) == "" {
-		return nil, err
+		return nil, seen, err
 	}
 	var procs []Process
 	for _, line := range strings.Split(out, "\n") {
@@ -154,24 +197,24 @@ func Processes(ctx context.Context, t Target) ([]Process, error) {
 			Command: strings.Join(f[4:], " "),
 		})
 	}
-	return procs, nil
+	return procs, seen, nil
 }
 
 // Ping confirms a host is reachable and authenticates, returning the remote
-// user@hostname it landed on (proof it really connected).
-func Ping(ctx context.Context, t Target) (string, error) {
+// user@hostname it landed on (proof it really connected) plus the host key seen.
+func Ping(ctx context.Context, t Target) (who string, seenHostKey string, err error) {
 	client, err := dial(ctx, t)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	defer client.Close()
-	out, err := runOn(ctx, client, "whoami; hostname")
+	out, err := runOn(ctx, client.Client, "whoami; hostname")
 	if err != nil {
-		return "", err
+		return "", client.seenHostKey, err
 	}
 	fields := strings.Fields(strings.TrimSpace(out))
 	if len(fields) >= 2 {
-		return fields[0] + "@" + fields[1], nil
+		return fields[0] + "@" + fields[1], client.seenHostKey, nil
 	}
-	return strings.TrimSpace(out), nil
+	return strings.TrimSpace(out), client.seenHostKey, nil
 }

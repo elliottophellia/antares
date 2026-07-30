@@ -589,6 +589,18 @@ func cmdServe() error {
 	}()
 
 	printBanner(rt.cfg)
+
+	// A VPS with saved SSH credentials + an unauthenticated dashboard means
+	// anyone who reaches the port can run commands on the user's servers. Warn
+	// loudly rather than fail (an open dashboard behind Tailscale is a valid
+	// setup), so the risk is a conscious choice.
+	if strings.TrimSpace(rt.cfg.Server.AuthToken) == "" && strings.TrimSpace(rt.cfg.Server.DashboardPasswordHash) == "" {
+		if hosts, err := rt.db.ListVPSHosts(ctx); err == nil && len(hosts) > 0 {
+			slog.Warn("VPS servers are saved but the dashboard is unauthenticated — anyone who can reach this port can run commands on them. Set server.auth_token or a dashboard password, or bind to loopback/Tailscale only.",
+				"vps_hosts", len(hosts), "host", rt.cfg.Server.Host, "port", rt.cfg.Server.Port)
+		}
+	}
+
 	if err := srv.Serve(ctx); err != nil {
 		return err
 	}

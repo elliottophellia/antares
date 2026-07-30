@@ -84,9 +84,14 @@ var migrations = []string{
 		password     TEXT NOT NULL DEFAULT '',
 		private_key  TEXT NOT NULL DEFAULT '',
 		passphrase   TEXT NOT NULL DEFAULT '',
+		host_key     TEXT NOT NULL DEFAULT '',
 		created_at   BIGINT NOT NULL,
 		updated_at   BIGINT NOT NULL
 	)`,
+	// host_key added after the table shipped; ignore "duplicate column" on
+	// re-run. (SQLite has no IF NOT EXISTS for ADD COLUMN; the migration runner
+	// tolerates the error via a follow-up guard below.)
+	`ALTER TABLE vps_hosts ADD COLUMN host_key TEXT NOT NULL DEFAULT ''`,
 
 	`CREATE TABLE IF NOT EXISTS cron_jobs (
 		id         TEXT PRIMARY KEY,

@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -21,6 +22,19 @@ func targetFor(v *store.VPSHost) vps.Target {
 	return vps.Target{
 		Host: v.Host, Port: v.Port, Username: v.Username, AuthMethod: v.AuthMethod,
 		Password: v.Password, PrivateKey: v.PrivateKey, Passphrase: v.Passphrase,
+		KnownHostKey: v.HostKey,
+	}
+}
+
+// pinHostKey records a server's SSH key on first connect (TOFU). It only writes
+// when the host had no key yet and the connect produced one, so a later key
+// change is a blocking ErrHostKeyChanged rather than a silent re-pin.
+func (s *Server) pinHostKey(ctx context.Context, v *store.VPSHost, seen string) {
+	if v == nil || v.HostKey != "" || strings.TrimSpace(seen) == "" {
+		return
+	}
+	if err := s.db.SetVPSHostKey(ctx, v.ID, seen); err != nil {
+		slog.Warn("vps: could not pin host key", "id", v.ID, "error", err)
 	}
 }
 
@@ -28,16 +42,16 @@ func targetFor(v *store.VPSHost) vps.Target {
 // saying whether a password / key is on file.
 func vpsView(v store.VPSHost) map[string]any {
 	return map[string]any{
-		"id":          v.ID,
-		"label":       v.Label,
-		"host":        v.Host,
-		"port":        v.Port,
-		"username":    v.Username,
-		"auth_method": v.AuthMethod,
+		"id":           v.ID,
+		"label":        v.Label,
+		"host":         v.Host,
+		"port":         v.Port,
+		"username":     v.Username,
+		"auth_method":  v.AuthMethod,
 		"has_password": v.Password != "",
 		"has_key":      v.PrivateKey != "",
-		"created_at":  v.CreatedAt,
-		"updated_at":  v.UpdatedAt,
+		"created_at":   v.CreatedAt,
+		"updated_at":   v.UpdatedAt,
 	}
 }
 
@@ -146,12 +160,14 @@ func (s *Server) handleTestVPS(w http.ResponseWriter, r *http.Request) {
 	_ = decodeBody(r, &body)
 
 	var t vps.Target
+	var saved *store.VPSHost // set only when testing a stored host, so we can pin
 	if id := strings.TrimSpace(body.ID); id != "" {
 		v, err := s.db.GetVPSHost(r.Context(), id)
 		if err != nil {
 			writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": "host not found"})
 			return
 		}
+		saved = v
 		t = targetFor(v)
 		// Allow overriding a just-typed secret before saving.
 		if body.Password != "" {
@@ -174,11 +190,15 @@ func (s *Server) handleTestVPS(w http.ResponseWriter, r *http.Request) {
 
 	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
 	defer cancel()
-	who, err := vps.Ping(ctx, t)
+	who, seen, err := vps.Ping(ctx, t)
 	if err != nil {
+		// A changed host key is a security signal the user should see verbatim;
+		// other dial failures pass through their message too (this is the user's
+		// own tool, behind the dashboard auth).
 		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": err.Error()})
 		return
 	}
+	s.pinHostKey(ctx, saved, seen) // no-op for ad-hoc tests and already-pinned hosts
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "as": who})
 }
 
@@ -192,7 +212,10 @@ func (s *Server) handleVPSMetrics(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 25*time.Second)
 	defer cancel()
-	m := vps.Collect(ctx, targetFor(v))
+	m, seen := vps.Collect(ctx, targetFor(v))
+	if m.Reachable {
+		s.pinHostKey(ctx, v, seen)
+	}
 	writeJSON(w, http.StatusOK, m)
 }
 
@@ -207,11 +230,12 @@ func (s *Server) handleVPSProcesses(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 25*time.Second)
 	defer cancel()
-	procs, err := vps.Processes(ctx, targetFor(v))
+	procs, seen, err := vps.Processes(ctx, targetFor(v))
 	if err != nil {
 		writeJSON(w, http.StatusOK, map[string]any{"error": err.Error(), "processes": []any{}})
 		return
 	}
+	s.pinHostKey(ctx, v, seen)
 	writeJSON(w, http.StatusOK, map[string]any{"processes": procs})
 }
 

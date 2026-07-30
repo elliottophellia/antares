@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -69,16 +70,17 @@ func (vpsRunTool) Execute(ctx context.Context, in Input) Result {
 
 	// Resolve by id, then case-insensitive label.
 	var target *vps.Target
-	label := ""
+	label, hostID, hadKey := "", "", false
 	for i := range hosts {
 		h := hosts[i]
 		if h.ID == ref || strings.EqualFold(h.Label, ref) {
 			t := vps.Target{
 				Host: h.Host, Port: h.Port, Username: h.Username, AuthMethod: h.AuthMethod,
 				Password: h.Password, PrivateKey: h.PrivateKey, Passphrase: h.Passphrase,
+				KnownHostKey: h.HostKey,
 			}
 			target = &t
-			label = h.Label
+			label, hostID, hadKey = h.Label, h.ID, h.HostKey != ""
 			break
 		}
 	}
@@ -93,7 +95,11 @@ func (vpsRunTool) Execute(ctx context.Context, in Input) Result {
 	defer cancel()
 
 	in.Emit(Progress{Tool: "vps_run", Message: fmt.Sprintf("running on %s…", label)})
-	out, err := vps.Run(runCtx, *target, args.Command)
+	out, seen, err := vps.Run(runCtx, *target, args.Command)
+	// Pin the host key on first successful connect (TOFU).
+	if !hadKey && seen != "" && !errors.Is(err, vps.ErrHostKeyChanged) {
+		_ = in.Deps.Store.SetVPSHostKey(ctx, hostID, seen)
+	}
 	out = strings.TrimRight(out, "\n")
 	if err != nil {
 		// Include whatever output there was (usually stderr) — more useful than

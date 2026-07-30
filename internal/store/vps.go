@@ -9,7 +9,7 @@ import (
 	"github.com/enowdev/antares/internal/secret"
 )
 
-const vpsCols = `id,label,host,port,username,auth_method,password,private_key,passphrase,created_at,updated_at`
+const vpsCols = `id,label,host,port,username,auth_method,password,private_key,passphrase,host_key,created_at,updated_at`
 
 // crypter returns the process secret box, obtained once. VPS credentials are
 // unusable without it, so a failure here fails the operation rather than
@@ -47,12 +47,22 @@ func (s *sqlStore) PutVPSHost(ctx context.Context, v *VPSHost) error {
 		return err
 	}
 
-	_, err = s.exec(ctx, `INSERT INTO vps_hosts (`+vpsCols+`) VALUES (?,?,?,?,?,?,?,?,?,?,?)`+
+	// host_key is deliberately NOT in the conflict-update set: it is pinned by
+	// SetVPSHostKey on first connect and must survive an edit of the other
+	// fields. On insert it starts empty.
+	_, err = s.exec(ctx, `INSERT INTO vps_hosts (`+vpsCols+`) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`+
 		onConflict("id", `label=EXCLUDED.label, host=EXCLUDED.host, port=EXCLUDED.port,
 			username=EXCLUDED.username, auth_method=EXCLUDED.auth_method, password=EXCLUDED.password,
 			private_key=EXCLUDED.private_key, passphrase=EXCLUDED.passphrase, updated_at=EXCLUDED.updated_at`),
 		v.ID, v.Label, v.Host, v.Port, v.Username, v.AuthMethod,
-		encPass, encKey, encPhrase, ms(v.CreatedAt), ms(v.UpdatedAt))
+		encPass, encKey, encPhrase, v.HostKey, ms(v.CreatedAt), ms(v.UpdatedAt))
+	return err
+}
+
+// SetVPSHostKey pins (or updates) a host's SSH public key — called on first
+// connect for TOFU, and again only when the user has confirmed a key change.
+func (s *sqlStore) SetVPSHostKey(ctx context.Context, id, hostKey string) error {
+	_, err := s.exec(ctx, `UPDATE vps_hosts SET host_key=? WHERE id=?`, hostKey, id)
 	return err
 }
 
@@ -106,7 +116,7 @@ func scanVPSHost(sc interface{ Scan(...any) error }) (*VPSHost, error) {
 	var v VPSHost
 	var created, updated int64
 	if err := sc.Scan(&v.ID, &v.Label, &v.Host, &v.Port, &v.Username, &v.AuthMethod,
-		&v.Password, &v.PrivateKey, &v.Passphrase, &created, &updated); err != nil {
+		&v.Password, &v.PrivateKey, &v.Passphrase, &v.HostKey, &created, &updated); err != nil {
 		return nil, err
 	}
 	v.CreatedAt = fromMS(created)

@@ -122,8 +122,11 @@ type VPSHost struct {
 	Password   string    `json:"password,omitempty"`
 	PrivateKey string    `json:"private_key,omitempty"`
 	Passphrase string    `json:"passphrase,omitempty"`
-	CreatedAt  time.Time `json:"created_at"`
-	UpdatedAt  time.Time `json:"updated_at"`
+	// HostKey is the server's SSH public key, pinned on first connect (TOFU).
+	// A later connection presenting a different key is refused. Not secret.
+	HostKey   string    `json:"host_key,omitempty"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
 // Addr is the host:port to dial.
@@ -297,6 +300,7 @@ type Store interface {
 	GetVPSHost(ctx context.Context, id string) (*VPSHost, error)
 	ListVPSHosts(ctx context.Context) ([]VPSHost, error)
 	DeleteVPSHost(ctx context.Context, id string) error
+	SetVPSHostKey(ctx context.Context, id, hostKey string) error
 
 	PutCronJob(ctx context.Context, j *CronJob) error
 	GetCronJob(ctx context.Context, id string) (*CronJob, error)

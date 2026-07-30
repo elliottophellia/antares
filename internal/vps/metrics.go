@@ -55,17 +55,18 @@ echo "@@TOP"; ps -eo pid,pcpu,pmem,comm --sort=-pcpu 2>/dev/null | head -n 6
 echo "@@END"
 `
 
-// Collect reads a fresh snapshot over one SSH connection. It never returns an
-// error for an unreachable host — that is expressed in Metrics.Reachable/Error
-// so the caller can render a card either way.
-func Collect(ctx context.Context, t Target) Metrics {
-	out, err := Run(ctx, t, metricsScript)
+// Collect reads a fresh snapshot over one SSH connection, and returns the host
+// key the server presented (for TOFU pinning). It never returns an error for an
+// unreachable host — that is expressed in Metrics.Reachable/Error so the caller
+// can render a card either way.
+func Collect(ctx context.Context, t Target) (Metrics, string) {
+	out, seen, err := Run(ctx, t, metricsScript)
 	if err != nil && strings.TrimSpace(out) == "" {
-		return Metrics{Reachable: false, Error: err.Error()}
+		return Metrics{Reachable: false, Error: err.Error()}, seen
 	}
 	m := parseMetrics(out)
 	m.Reachable = true
-	return m
+	return m, seen
 }
 
 func parseMetrics(out string) Metrics {
