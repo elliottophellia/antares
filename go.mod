@@ -55,7 +55,7 @@ require (
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
 	github.com/rivo/uniseg v0.4.7 // indirect
 	github.com/rogpeppe/go-internal v1.15.0 // indirect
-	github.com/sardanioss/http v1.1.0 // indirect
+	github.com/sardanioss/http v1.2.0 // indirect
 	github.com/sardanioss/net v1.1.0 // indirect
 	github.com/sardanioss/qpack v0.6.2 // indirect
 	github.com/sardanioss/quic-go v1.2.13 // indirect
