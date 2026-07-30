@@ -1,7 +1,16 @@
 SHELL := /bin/bash
-GO     ?= $(HOME)/.local/sdk/go/bin/go
-BUN    ?= $(HOME)/.bun/bin/bun
-AIR    ?= $(HOME)/go/bin/air
+
+# Resolve each tool from $PATH first, then fall back to its common install
+# location. Override any of them explicitly, e.g. `make GO=/opt/go/bin/go build`.
+# `tool <name> <fallback>` = the binary on PATH if present, else the fallback.
+tool = $(shell command -v $(1) 2>/dev/null || echo $(2))
+
+GO     ?= $(call tool,go,$(HOME)/.local/sdk/go/bin/go)
+BUN    ?= $(call tool,bun,$(HOME)/.bun/bin/bun)
+# air lives in GOPATH/bin after `make install`; if GOPATH can't be read, use the
+# conventional ~/go.
+GOPATH ?= $(shell $(GO) env GOPATH 2>/dev/null || echo $(HOME)/go)
+AIR    ?= $(call tool,air,$(GOPATH)/bin/air)
 PREFIX ?= $(HOME)/.local
 
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo 0.1.0-dev)
