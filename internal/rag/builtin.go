@@ -8,17 +8,18 @@ import (
 	"log/slog"
 
 	"github.com/enowdev/antares/internal/config"
-	"github.com/enowdev/antares/internal/llm"
 	"github.com/enowdev/antares/internal/store"
 	"github.com/enowdev/antares/internal/tools"
 )
 
 // builtinProvider embeds chunks with the configured model and stores the
-// vectors in the Antares database. No external service required.
+// vectors in the Antares database. It recalls candidates by hybrid similarity,
+// then reranks and dedups them. No external service required.
 type builtinProvider struct {
-	cfg   *config.Config
-	db    store.Store
-	embed llm.Client
+	cfg    *config.Config
+	db     store.Store
+	embed  embedder
+	rerank reranker // nil = keep retrieval order
 }
 
 func (p *builtinProvider) Name() string { return "builtin" }
@@ -28,21 +29,29 @@ func (p *builtinProvider) Probe(ctx context.Context) (bool, string) {
 	if model == "" {
 		return false, "rag.embed_model is not set"
 	}
-	if _, err := p.embed.Embed(ctx, model, []string{"ping"}); err != nil {
+	if _, err := p.embed.Embed(ctx, []string{"ping"}); err != nil {
 		return false, fmt.Sprintf("embedding failed: %v", err)
 	}
 	return true, fmt.Sprintf("built-in vector store · model %s", model)
 }
 
 func (p *builtinProvider) Search(ctx context.Context, collection, query string, topK int) ([]tools.RAGResult, error) {
-	vecs, err := p.embed.Embed(ctx, p.cfg.RAG.EmbedModel, []string{query})
+	if topK <= 0 {
+		topK = p.cfg.RAG.TopK
+	}
+	// Recall a wider set than we return, so rerank and dedup have room to work.
+	recall := p.cfg.RAG.Recall
+	if recall < topK {
+		recall = topK
+	}
+
+	// EmbedQuery lets a backend that distinguishes query vs document input
+	// (Voyage) embed the query with the right type; others just embed it.
+	qvec, err := p.embed.EmbedQuery(ctx, query)
 	if err != nil {
 		return nil, fmt.Errorf("embed query: %w", err)
 	}
-	if len(vecs) == 0 {
-		return nil, fmt.Errorf("embedding provider returned no vector")
-	}
-	chunks, scores, err := p.db.SearchChunks(ctx, collection, vecs[0], query, topK, p.cfg.RAG.Hybrid)
+	chunks, scores, err := p.db.SearchChunks(ctx, collection, qvec, query, recall, p.cfg.RAG.Hybrid)
 	if err != nil {
 		return nil, err
 	}
@@ -51,6 +60,18 @@ func (p *builtinProvider) Search(ctx context.Context, collection, query string, 
 		out = append(out, tools.RAGResult{
 			Content: c.Content, Path: c.Path, DocID: c.DocID, Score: scores[i],
 		})
+	}
+
+	// Rerank the candidates (best-effort — returns retrieval order on any error).
+	if p.rerank != nil && len(out) > 1 {
+		out = p.rerank.rerank(ctx, query, out, recall)
+	}
+	// Collapse near-duplicates before narrowing to the final top-K.
+	if p.cfg.RAG.Compress {
+		out = dedupe(out)
+	}
+	if len(out) > topK {
+		out = out[:topK]
 	}
 	return out, nil
 }
@@ -99,7 +120,7 @@ func (p *builtinProvider) Index(ctx context.Context, collection string, docs []t
 		for i, q := range batch {
 			texts[i] = q.text
 		}
-		vecs, err := p.embed.Embed(ctx, p.cfg.RAG.EmbedModel, texts)
+		vecs, err := p.embed.Embed(ctx, texts)
 		if err != nil {
 			return written, fmt.Errorf("embed batch %d-%d: %w", start, end, err)
 		}

@@ -381,11 +381,6 @@ func (ragIndexTool) Execute(ctx context.Context, in Input) Result {
 }
 
 func defaultCollection(in Input) string {
-	if in.Deps != nil && in.Deps.Config != nil {
-		if p := strings.TrimSpace(in.Deps.Config.RAG.EnowxProject); p != "" {
-			return p
-		}
-	}
 	return "antares"
 }
 

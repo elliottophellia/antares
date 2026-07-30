@@ -120,7 +120,7 @@ func (s *Server) handleRagIndex(w http.ResponseWriter, r *http.Request) {
 	cfg := s.config()
 	collection := body.Collection
 	if collection == "" {
-		collection = firstNonEmpty(cfg.RAG.EnowxProject, "antares")
+		collection = "antares"
 	}
 
 	docs, err := collectDocs(cfg.Agent.Workspace, body.Path)
@@ -157,17 +157,32 @@ func (s *Server) handleRagSearch(w http.ResponseWriter, r *http.Request) {
 	}
 	cfg := s.config()
 	if body.Collection == "" {
-		body.Collection = firstNonEmpty(cfg.RAG.EnowxProject, "antares")
+		body.Collection = "antares"
 	}
 	if body.TopK <= 0 {
 		body.TopK = cfg.RAG.TopK
 	}
+	started := time.Now()
 	hits, err := provider.Search(r.Context(), body.Collection, body.Query, body.TopK)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"results": hits})
+	writeJSON(w, http.StatusOK, map[string]any{
+		"results":    hits,
+		"took_ms":    time.Since(started).Milliseconds(),
+		"collection": body.Collection,
+		// The pipeline actually applied, so the dashboard can show how the result
+		// was produced (matching the native recall→rerank→compress→topK flow).
+		"pipeline": map[string]any{
+			"embed_model": cfg.RAG.EmbedModel,
+			"hybrid":      cfg.RAG.Hybrid,
+			"recall":      cfg.RAG.Recall,
+			"rerank_mode": rag.EffectiveRerank(cfg),
+			"compress":    cfg.RAG.Compress,
+			"top_k":       body.TopK,
+		},
+	})
 }
 
 func (s *Server) handleRagDelete(w http.ResponseWriter, r *http.Request) {

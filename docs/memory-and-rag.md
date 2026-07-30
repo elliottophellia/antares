@@ -53,12 +53,15 @@ search meaning rather than exact words.
 ```yaml
 rag:
   enabled: true
-  provider: builtin
   embed_model: text-embedding-3-small
   chunk_size: 1200
   chunk_overlap: 150
+  recall: 40          # candidates pulled before rerank/dedup narrow to top_k
   top_k: 8
   hybrid: true
+  rerank_mode: llm    # llm | api | off
+  compress: true      # drop near-duplicate results
+  auto_context: true  # index conversations and auto-recall into every turn
 ```
 
 ### Indexing
@@ -73,27 +76,27 @@ conversation.
 
 Collections keep bodies separate so a search can be scoped.
 
-### Two backends
+### How it works (native, in-process)
 
-**`builtin`** embeds with your configured model and stores vectors in the
-Antares database. Nothing else to run. With `hybrid: true` it fuses dense
-similarity with lexical matching, which is noticeably better for code and exact
-identifiers — reciprocal-rank fusion over both result sets.
+Retrieval is built in — no external daemon. Vectors live in the Antares
+database, embedded with your configured model. A query runs a four-stage
+pipeline:
 
-**`enowx`** delegates to an [enowx-rag](https://github.com/enowdev/enowx-rag)
-daemon, which adds reranking and near-duplicate compression.
+1. **Recall** — hybrid search pulls `recall` candidates (default 40), fusing
+   dense similarity with lexical matching (good for code and exact identifiers).
+2. **Rerank** — the candidates are reordered by relevance to the query.
+   `rerank_mode: llm` (default) has an auxiliary model score them; `api` calls an
+   external reranker (`rerank_url` + `rerank_api_key`, Voyage/Jina/Cohere-shaped);
+   `off` keeps retrieval order. Rerank is separate from embedding.
+3. **Compress** — with `compress: true`, near-duplicate results are collapsed.
+4. **Top-K** — the best `top_k` (default 8) are returned.
 
-```yaml
-rag:
-  provider: enowx
-  enowx_base_url: http://127.0.0.1:8080
-  enowx_project: antares
-  enowx_rerank: true
-  enowx_compress: true
-```
+### Auto-context (living memory)
 
-The tools are the same either way. Switching backends does not change how the
-agent works, only what comes back.
+With `auto_context: true`, retrieval is wired into every chat turn: each finished
+exchange is indexed into a `conversations` collection, and relevant indexed
+knowledge plus past conversation is pulled back into the system prompt
+automatically. It is best-effort and never blocks a turn.
 
 ### Chunking
 

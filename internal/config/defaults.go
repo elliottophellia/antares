@@ -96,11 +96,10 @@ func Default() *Config {
 			NudgeInterval: 20, FlushMinTurns: 4, SearchLimit: 20,
 		},
 		RAG: RAG{
-			Enabled: false, Provider: "builtin",
+			Enabled:       false,
 			EmbedProvider: "openai", EmbedModel: "text-embedding-3-small",
-			ChunkSize: 1200, ChunkOverlap: 200, TopK: 8, Hybrid: true,
-			EnowxBaseURL: "http://127.0.0.1:7777", EnowxProject: "antares",
-			EnowxRerank: true, EnowxCompress: true,
+			ChunkSize: 1200, ChunkOverlap: 200, TopK: 8, Recall: 40, Hybrid: true,
+			RerankMode: "llm", Compress: true, AutoContext: true,
 		},
 		Plugins: Plugins{
 			Enabled: true, Dirs: []string{"~/.antares/plugins"},

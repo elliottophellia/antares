@@ -42,7 +42,6 @@ var essential = map[string]bool{
 	"server.auth_token": true,
 	"tools.toolset":     true,
 	"rag.enabled":       true,
-	"rag.provider":      true,
 	"display.theme":     true,
 }
 
@@ -68,8 +67,7 @@ var common = map[string]bool{
 	"memory.user_profile_enabled": true,
 	"rag.embed_model":             true,
 	"rag.embed_provider":          true,
-	"rag.enowx_base_url":          true,
-	"rag.enowx_project":           true,
+	"rag.rerank_mode":             true,
 	"skills.enabled":              true,
 	"skills.auto_create":          true,
 	"cron.enabled":                true,
@@ -98,9 +96,18 @@ func tierFor(path string) string {
 	}
 }
 
+// hidden lists paths that must never appear in the raw config editor. The
+// dashboard password is a bcrypt HASH, not a value to type: it has a dedicated
+// "set password" card that hashes the plaintext. Exposing the raw field invites
+// someone to paste a plaintext password straight into the hash, which then can
+// never match a login (a non-bcrypt string fails every comparison).
+var hidden = map[string]bool{
+	"server.dashboard_password_hash": true,
+}
+
 var enums = map[string][]string{
 	"database.driver":           {"sqlite", "postgres", "memory"},
-	"rag.provider":              {"builtin", "enowx", "none"},
+	"rag.rerank_mode":           {"llm", "api", "off"},
 	"terminal.backend":          {"local", "docker", "ssh"},
 	"tools.approval_mode":       {"auto", "prompt", "deny"},
 	"session_reset.mode":        {"never", "idle", "daily"},
@@ -124,8 +131,8 @@ var help = map[string]string{
 	"agent.system_prompt_extra": "Appended to the system prompt on every turn.",
 	"tools.toolset":             "Preset deciding which tools reach the model.",
 	"tools.approval_mode":       "auto runs mutating tools directly; deny blocks them.",
-	"rag.provider":              "builtin uses the internal vector store; enowx calls an enowx-rag daemon.",
-	"rag.embed_model":           "Required by the builtin provider, e.g. text-embedding-3-small.",
+	"rag.rerank_mode":           "How to reorder results: llm (an auxiliary model scores them), api (an external reranker), or off.",
+	"rag.embed_model":           "The embedding model for indexing and search, e.g. text-embedding-3-small.",
 	"compression.threshold":     "Fraction of the context window that triggers automatic compaction.",
 	"terminal.backend":          "local runs on this machine; docker and ssh sandbox it elsewhere.",
 	"memory.memory_enabled":     "Lets the agent store durable facts between sessions.",
@@ -178,6 +185,9 @@ func walk(v reflect.Value, prefix, group string, out *[]Field) {
 		fv := v.Field(i)
 		if prefix != "" {
 			path = prefix + "." + name
+			if hidden[path] {
+				continue
+			}
 		} else if fv.Kind() == reflect.Struct {
 			// A struct at the root names its own group; a bare scalar does not.
 			grp = name

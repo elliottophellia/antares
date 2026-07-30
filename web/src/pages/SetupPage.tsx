@@ -86,9 +86,9 @@ export default function SetupPage() {
   const [dbDSN, setDbDSN] = useState('')
 
   const [ragEnabled, setRagEnabled] = useState(false)
-  const [ragProvider, setRagProvider] = useState('builtin')
-  const [embedModel, setEmbedModel] = useState('text-embedding-3-small')
-  const [enowxURL, setEnowxURL] = useState('http://127.0.0.1:7777')
+  const [embedProvider, setEmbedProvider] = useState('voyage')
+  const [embedModel, setEmbedModel] = useState('voyage-4')
+  const [embedKey, setEmbedKey] = useState('')
   const [telegram, setTelegram] = useState('')
   const [dashboardPassword, setDashboardPassword] = useState('')
 
@@ -166,9 +166,9 @@ export default function SetupPage() {
         },
         rag: {
           enabled: ragEnabled,
-          provider: ragProvider,
+          embed_provider: embedProvider,
           embed_model: embedModel,
-          enowx_url: enowxURL,
+          embed_api_key: embedKey,
         },
         telegram_token: telegram,
         dashboard_password: dashboardPassword,
@@ -468,48 +468,58 @@ export default function SetupPage() {
             </CardHeader>
             {ragEnabled ? (
               <CardContent className="space-y-3">
-                <div className="grid gap-2 sm:grid-cols-2">
-                  {(
-                    [
-                      ['builtin', t('setup.ragBuiltin')],
-                      ['enowx', t('setup.ragEnowx')],
-                    ] as const
-                  ).map(([id, label]) => (
-                    <button
-                      key={id}
-                      onClick={() => setRagProvider(id)}
-                      className={cn(
-                        'rounded-[var(--radius-sm)] border p-3 text-left text-xs transition-colors',
-                        ragProvider === id
-                          ? 'border-primary bg-primary/8'
-                          : 'border-border hover:border-primary/40',
-                      )}
-                    >
-                      {label}
-                    </button>
-                  ))}
+                <div className="space-y-1.5">
+                  <Label>{t('setup.embedProvider')}</Label>
+                  <div className="grid grid-cols-3 gap-2">
+                    {(
+                      [
+                        ['voyage', 'Voyage', 'voyage-4'],
+                        ['openai', 'OpenAI', 'text-embedding-3-small'],
+                        ['custom', t('setup.custom'), ''],
+                      ] as const
+                    ).map(([id, label, defModel]) => (
+                      <button
+                        key={id}
+                        onClick={() => {
+                          setEmbedProvider(id)
+                          if (defModel) setEmbedModel(defModel)
+                        }}
+                        className={cn(
+                          'rounded-[var(--radius-sm)] border p-2.5 text-center text-xs transition-colors',
+                          embedProvider === id
+                            ? 'border-primary bg-primary/8'
+                            : 'border-border hover:border-primary/40',
+                        )}
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  </div>
                 </div>
-                {ragProvider === 'builtin' ? (
+                <div className="space-y-1.5">
+                  <Label htmlFor="embed">{t('setup.embedModel')}</Label>
+                  <Input
+                    id="embed"
+                    value={embedModel}
+                    onChange={(e) => setEmbedModel(e.target.value)}
+                    className="font-mono text-xs"
+                  />
+                </div>
+                {embedProvider !== 'openai' ? (
                   <div className="space-y-1.5">
-                    <Label htmlFor="embed">{t('setup.embedModel')}</Label>
+                    <Label htmlFor="embedkey">{t('setup.embedKey')}</Label>
                     <Input
-                      id="embed"
-                      value={embedModel}
-                      onChange={(e) => setEmbedModel(e.target.value)}
+                      id="embedkey"
+                      type="password"
+                      value={embedKey}
+                      onChange={(e) => setEmbedKey(e.target.value)}
+                      placeholder={embedProvider === 'voyage' ? 'pa-…' : t('setup.embedKeyPlaceholder')}
+                      autoComplete="off"
                       className="font-mono text-xs"
                     />
+                    <p className="text-[11px] text-muted-foreground">{t('setup.embedKeyHint')}</p>
                   </div>
-                ) : (
-                  <div className="space-y-1.5">
-                    <Label htmlFor="enowx">enowx-rag URL</Label>
-                    <Input
-                      id="enowx"
-                      value={enowxURL}
-                      onChange={(e) => setEnowxURL(e.target.value)}
-                      className="font-mono text-xs"
-                    />
-                  </div>
-                )}
+                ) : null}
               </CardContent>
             ) : null}
           </Card>

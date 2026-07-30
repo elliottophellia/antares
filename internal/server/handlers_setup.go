@@ -256,11 +256,10 @@ func (s *Server) handleSetupComplete(w http.ResponseWriter, r *http.Request) {
 			DSN    string `json:"dsn"`
 		} `json:"database"`
 		RAG struct {
-			Enabled    bool   `json:"enabled"`
-			Provider   string `json:"provider"`
-			EmbedModel string `json:"embed_model"`
-			EnowxURL   string `json:"enowx_url"`
-			EnowxToken string `json:"enowx_token"`
+			Enabled       bool   `json:"enabled"`
+			EmbedProvider string `json:"embed_provider"`
+			EmbedModel    string `json:"embed_model"`
+			EmbedAPIKey   string `json:"embed_api_key"`
 		} `json:"rag"`
 		Telegram          string `json:"telegram_token"`
 		Discord           string `json:"discord_token"`
@@ -342,20 +341,16 @@ func (s *Server) handleSetupComplete(w http.ResponseWriter, r *http.Request) {
 
 	cfg.RAG.Enabled = body.RAG.Enabled
 	if body.RAG.Enabled {
-		if p := strings.TrimSpace(body.RAG.Provider); p != "" {
-			cfg.RAG.Provider = p
+		if p := strings.TrimSpace(body.RAG.EmbedProvider); p != "" {
+			cfg.RAG.EmbedProvider = p
+		} else if cfg.RAG.EmbedProvider == "" {
+			cfg.RAG.EmbedProvider = body.Provider
 		}
 		if m := strings.TrimSpace(body.RAG.EmbedModel); m != "" {
 			cfg.RAG.EmbedModel = m
 		}
-		if cfg.RAG.EmbedProvider == "" {
-			cfg.RAG.EmbedProvider = body.Provider
-		}
-		if u := strings.TrimSpace(body.RAG.EnowxURL); u != "" {
-			cfg.RAG.EnowxBaseURL = u
-		}
-		if tk := strings.TrimSpace(body.RAG.EnowxToken); tk != "" {
-			cfg.RAG.EnowxToken = tk
+		if k := strings.TrimSpace(body.RAG.EmbedAPIKey); k != "" {
+			cfg.RAG.EmbedAPIKey = k
 		}
 	}
 

@@ -192,11 +192,9 @@ func applyEnv(c *Config) {
 	num("ANTARES_MAX_TURNS", &c.Agent.MaxTurns)
 
 	boolean("ANTARES_RAG_ENABLED", &c.RAG.Enabled)
-	str("ANTARES_RAG_PROVIDER", &c.RAG.Provider)
-	str("ANTARES_RAG_ENOWX_URL", &c.RAG.EnowxBaseURL)
-	str("RAG_ADMIN_TOKEN", &c.RAG.EnowxToken)
-	str("ANTARES_RAG_ENOWX_TOKEN", &c.RAG.EnowxToken)
-	str("ANTARES_RAG_ENOWX_PROJECT", &c.RAG.EnowxProject)
+	str("ANTARES_RAG_EMBED_MODEL", &c.RAG.EmbedModel)
+	str("ANTARES_RAG_RERANK_MODE", &c.RAG.RerankMode)
+	str("ANTARES_RAG_RERANK_KEY", &c.RAG.RerankAPIKey)
 
 	str("TELEGRAM_BOT_TOKEN", &c.Gateway.Telegram.BotToken)
 	str("DISCORD_BOT_TOKEN", &c.Gateway.Discord.BotToken)

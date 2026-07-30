@@ -287,12 +287,13 @@ type Memory struct {
 	SearchLimit        int  `yaml:"search_limit" json:"search_limit"`
 }
 
-// RAG selects the retrieval backend used for semantic recall.
+// RAG is the native retrieval store: embeds chunks with the configured model,
+// keeps vectors in the Antares database, and layers rerank + dedup on top. There
+// is no external backend anymore — it is all in-process.
 type RAG struct {
-	Enabled  bool   `yaml:"enabled" json:"enabled"`
-	Provider string `yaml:"provider" json:"provider"` // builtin|enowx|none
+	Enabled bool `yaml:"enabled" json:"enabled"`
 
-	// Builtin vector store settings.
+	// Embedding + vector store settings.
 	EmbedProvider string `yaml:"embed_provider" json:"embed_provider"`
 	EmbedModel    string `yaml:"embed_model" json:"embed_model"`
 	EmbedBaseURL  string `yaml:"embed_base_url" json:"embed_base_url"`
@@ -301,13 +302,20 @@ type RAG struct {
 	ChunkOverlap  int    `yaml:"chunk_overlap" json:"chunk_overlap"`
 	TopK          int    `yaml:"top_k" json:"top_k"`
 	Hybrid        bool   `yaml:"hybrid" json:"hybrid"`
+	// Recall is how many candidates to pull before rerank/dedup narrow to TopK.
+	Recall int `yaml:"recall" json:"recall"`
 
-	// enowx-rag daemon settings.
-	EnowxBaseURL  string `yaml:"enowx_base_url" json:"enowx_base_url"`
-	EnowxToken    string `yaml:"enowx_token" json:"enowx_token"`
-	EnowxProject  string `yaml:"enowx_project" json:"enowx_project"`
-	EnowxRerank   bool   `yaml:"enowx_rerank" json:"enowx_rerank"`
-	EnowxCompress bool   `yaml:"enowx_compress" json:"enowx_compress"`
+	// Reranking, applied to the recalled candidates. Mode: llm | api | off.
+	RerankMode   string `yaml:"rerank_mode" json:"rerank_mode"`
+	RerankURL    string `yaml:"rerank_url" json:"rerank_url"`
+	RerankModel  string `yaml:"rerank_model" json:"rerank_model"`
+	RerankAPIKey string `yaml:"rerank_api_key" json:"rerank_api_key"`
+	// Compress collapses near-duplicate results (exact content) before TopK.
+	Compress bool `yaml:"compress" json:"compress"`
+
+	// AutoContext feeds every chat turn: index the conversation and surface
+	// relevant memory/docs into the prompt automatically.
+	AutoContext bool `yaml:"auto_context" json:"auto_context"`
 }
 
 // ImageGen configures text-to-image generation.

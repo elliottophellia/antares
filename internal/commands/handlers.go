@@ -78,7 +78,7 @@ func cmdStatus(ctx context.Context, d Deps, _ Input) (Result, error) {
 		fmt.Fprintf(&b, "- Skills: %d\n", d.Skills.Count())
 	}
 	if cfg.RAG.Enabled {
-		fmt.Fprintf(&b, "- Retrieval: `%s`\n", orDash(cfg.RAG.Provider))
+		fmt.Fprintf(&b, "- Retrieval: `builtin · %s`\n", orDash(cfg.RAG.EmbedModel))
 	}
 	return Result{Output: b.String()}, nil
 }

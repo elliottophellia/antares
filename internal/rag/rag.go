@@ -1,5 +1,7 @@
-// Package rag provides pluggable retrieval backends: a builtin vector store
-// backed by the Antares database, or a remote enowx-rag daemon.
+// Package rag is Antares' native retrieval store: it embeds chunks with the
+// configured model, keeps the vectors in the Antares database, and layers
+// reranking and near-duplicate compression on top of hybrid search. There is no
+// external service — it all runs in-process.
 package rag
 
 import (
@@ -8,18 +10,31 @@ import (
 	"strings"
 
 	"github.com/enowdev/antares/internal/config"
-	"github.com/enowdev/antares/internal/llm"
 	"github.com/enowdev/antares/internal/store"
 	"github.com/enowdev/antares/internal/tools"
 )
 
 // Status summarises the active backend for the dashboard.
 type Status struct {
-	Enabled     bool     `json:"enabled"`
-	Provider    string   `json:"provider"`
-	Collections []string `json:"collections"`
-	Reachable   bool     `json:"reachable"`
-	Detail      string   `json:"detail"`
+	Enabled     bool        `json:"enabled"`
+	Provider    string      `json:"provider"`
+	Collections []string    `json:"collections"`
+	Reachable   bool        `json:"reachable"`
+	Detail      string      `json:"detail"`
+	Pipeline    *StatusPipe `json:"pipeline,omitempty"`
+}
+
+// StatusPipe describes the configured retrieval pipeline, so the dashboard can
+// show how searches run before one is even issued.
+type StatusPipe struct {
+	EmbedProvider string `json:"embed_provider"`
+	EmbedModel    string `json:"embed_model"`
+	Hybrid        bool   `json:"hybrid"`
+	Recall        int    `json:"recall"`
+	RerankMode    string `json:"rerank_mode"`
+	Compress      bool   `json:"compress"`
+	TopK          int    `json:"top_k"`
+	AutoContext   bool   `json:"auto_context"`
 }
 
 // Prober is implemented by backends that can report reachability.
@@ -27,33 +42,37 @@ type Prober interface {
 	Probe(ctx context.Context) (bool, string)
 }
 
-// New builds the retrieval provider selected in config. It returns nil when RAG
-// is disabled, which callers treat as "tool unavailable".
+// New builds the native retrieval provider. It returns nil when RAG is disabled,
+// which callers treat as "tool unavailable".
 func New(cfg *config.Config, db store.Store) (tools.RAGProvider, error) {
 	if !cfg.RAG.Enabled {
 		return nil, nil
 	}
-	switch strings.ToLower(strings.TrimSpace(cfg.RAG.Provider)) {
-	case "", "builtin", "local":
-		embedder, err := newEmbedder(cfg)
-		if err != nil {
-			return nil, fmt.Errorf("builtin rag: %w", err)
-		}
-		return &builtinProvider{cfg: cfg, db: db, embed: embedder}, nil
-	case "enowx", "enowx-rag":
-		return newEnowxProvider(cfg), nil
-	case "none", "off":
-		return nil, nil
-	default:
-		return nil, fmt.Errorf("unknown rag provider %q (want builtin, enowx, or none)", cfg.RAG.Provider)
+	embedder, err := newEmbedder(cfg)
+	if err != nil {
+		return nil, fmt.Errorf("rag: %w", err)
 	}
+	return &builtinProvider{cfg: cfg, db: db, embed: embedder, rerank: newReranker(cfg)}, nil
 }
 
 // Describe reports the current backend status for /api/rag/status.
 func Describe(ctx context.Context, cfg *config.Config, p tools.RAGProvider) Status {
 	st := Status{Enabled: cfg.RAG.Enabled}
+	if cfg.RAG.Enabled {
+		st.Pipeline = &StatusPipe{
+			EmbedProvider: cfg.RAG.EmbedProvider, EmbedModel: cfg.RAG.EmbedModel,
+			Hybrid: cfg.RAG.Hybrid, Recall: cfg.RAG.Recall, RerankMode: EffectiveRerank(cfg),
+			Compress: cfg.RAG.Compress, TopK: cfg.RAG.TopK, AutoContext: cfg.RAG.AutoContext,
+		}
+	}
 	if p == nil {
-		st.Detail = "RAG is disabled in the configuration."
+		// Enabled in config but the provider could not be built (e.g. missing
+		// embedding key) — say so rather than just "disabled".
+		if cfg.RAG.Enabled {
+			st.Detail = "RAG is enabled but the embedding provider is not configured (set rag.embed_api_key)."
+		} else {
+			st.Detail = "RAG is disabled in the configuration."
+		}
 		return st
 	}
 	st.Provider = p.Name()
@@ -67,26 +86,6 @@ func Describe(ctx context.Context, cfg *config.Config, p tools.RAGProvider) Stat
 		st.Detail = err.Error()
 	}
 	return st
-}
-
-// newEmbedder builds the LLM client used to embed text for the builtin store.
-func newEmbedder(cfg *config.Config) (llm.Client, error) {
-	name := cfg.RAG.EmbedProvider
-	if name == "" {
-		name = cfg.Model.Provider
-	}
-	_, p := cfg.ResolveProvider(name)
-	baseURL := cfg.RAG.EmbedBaseURL
-	if baseURL == "" {
-		baseURL = p.BaseURL
-	}
-	apiKey := cfg.RAG.EmbedAPIKey
-	if apiKey == "" {
-		apiKey = p.APIKey
-	}
-	return llm.New(llm.Options{
-		Kind: p.Kind, BaseURL: baseURL, APIKey: apiKey, Headers: p.Headers, ProviderID: name,
-	})
 }
 
 // chunkText splits content into overlapping windows, preferring paragraph and

@@ -9,6 +9,24 @@ import (
 	"github.com/enowdev/antares/internal/llm"
 )
 
+// contextWindowFor returns the active model's token budget for the usage event,
+// preferring a per-model override from the provider config and falling back to
+// the configured window (then a sane default). It mirrors the window
+// maybeCompact governs, so the UI's "context full" bar agrees with compaction.
+func (a *Agent) contextWindowFor(model string) int {
+	if a.cfg != nil {
+		for _, p := range a.cfg.Providers {
+			if m, ok := p.ModelMeta[model]; ok && m.ContextWindow > 0 {
+				return m.ContextWindow
+			}
+		}
+		if a.cfg.Model.ContextWindow > 0 {
+			return a.cfg.Model.ContextWindow
+		}
+	}
+	return 128000
+}
+
 // maybeCompact summarises older turns once the conversation approaches the
 // model's context window, keeping recent turns verbatim.
 func (a *Agent) maybeCompact(ctx context.Context, history []llm.Message, system string, emit Emit) []llm.Message {

@@ -317,8 +317,8 @@ func runTerminalSetup(ctx context.Context, rt *runtimeServices) error {
 	}
 	cfg.Model.Default = model
 
-	// 5. Workspace — only record the path here; create the directory after the
-	// full wizard finishes so a cancelled run does not leave an empty folder.
+	// 5. Workspace — only record the path here; the directory is created after
+	// the wizard finishes (see below), so an abandoned wizard leaves nothing.
 	fmt.Println()
 	ws := promptLine(fmt.Sprintf("  Workspace directory (default %s): ", cfg.Agent.Workspace), cfg.Agent.Workspace)
 	cfg.Agent.Workspace = config.Expand(ws)
@@ -351,16 +351,22 @@ func runTerminalSetup(ctx context.Context, rt *runtimeServices) error {
 	fmt.Println()
 	if promptYesNo("  Enable semantic search (RAG)?", false) {
 		cfg.RAG.Enabled = true
-		fmt.Println("    1  builtin  " + dim("vectors stored in the Antares database"))
-		fmt.Println("    2  enowx    " + dim("an enowx-rag daemon you already run"))
-		if promptIndex("  Choose [1-2] (default 1): ", 2, 1) == 1 {
-			cfg.RAG.Provider = "enowx"
-			cfg.RAG.EnowxBaseURL = promptLine("  enowx-rag URL (default http://127.0.0.1:7777): ", "http://127.0.0.1:7777")
-			cfg.RAG.EnowxToken = promptSecret("  enowx-rag token (blank if none): ")
-		} else {
-			cfg.RAG.Provider = "builtin"
-			cfg.RAG.EmbedProvider = chosen.id
+		fmt.Println("    1  voyage   " + dim("Voyage AI embeddings (voyage-4)"))
+		fmt.Println("    2  openai   " + dim("OpenAI-compatible /v1/embeddings"))
+		fmt.Println("    3  custom   " + dim("your own OpenAI-compatible endpoint"))
+		switch promptIndex("  Embedding provider [1-3] (default 1): ", 3, 1) {
+		case 2:
+			cfg.RAG.EmbedProvider = "openai"
 			cfg.RAG.EmbedModel = promptLine("  Embedding model (default text-embedding-3-small): ", "text-embedding-3-small")
+		case 3:
+			cfg.RAG.EmbedProvider = "custom"
+			cfg.RAG.EmbedBaseURL = promptLine("  Embeddings endpoint URL: ", "")
+			cfg.RAG.EmbedModel = promptLine("  Embedding model: ", "")
+			cfg.RAG.EmbedAPIKey = promptSecret("  API key (blank if none): ")
+		default:
+			cfg.RAG.EmbedProvider = "voyage"
+			cfg.RAG.EmbedModel = promptLine("  Embedding model (default voyage-4): ", "voyage-4")
+			cfg.RAG.EmbedAPIKey = promptSecret("  Voyage API key: ")
 		}
 	}
 
@@ -390,6 +396,7 @@ func runTerminalSetup(ctx context.Context, rt *runtimeServices) error {
 	if err := config.Save(cfg); err != nil {
 		return fmt.Errorf("saving configuration: %w", err)
 	}
+	// Now that setup completed, create the chosen workspace directory.
 	if err := os.MkdirAll(cfg.Agent.Workspace, 0o755); err != nil {
 		return fmt.Errorf("creating workspace: %w", err)
 	}

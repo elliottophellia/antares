@@ -53,6 +53,16 @@ interface RagStatus {
   collections: string[]
   reachable: boolean
   detail: string
+  pipeline?: {
+    embed_provider: string
+    embed_model: string
+    hybrid: boolean
+    recall: number
+    rerank_mode: string
+    compress: boolean
+    top_k: number
+    auto_context: boolean
+  }
 }
 
 const PAGE = 24
@@ -326,6 +336,21 @@ interface RagResult {
   score: number
 }
 
+interface RagPipeline {
+  embed_model: string
+  hybrid: boolean
+  recall: number
+  rerank_mode: string
+  compress: boolean
+  top_k: number
+}
+interface RagSearchResponse {
+  results: RagResult[]
+  took_ms: number
+  collection: string
+  pipeline: RagPipeline
+}
+
 function RagTab() {
   const { t } = useI18n()
   const { data, loading, reload } = useApi<RagStatus>('/rag/status')
@@ -336,9 +361,13 @@ function RagTab() {
 
   // Search-the-index state.
   const [query, setQuery] = useState('')
+  const [searchCollection, setSearchCollection] = useState('')
+  const [topK, setTopK] = useState(8)
   const [searching, setSearching] = useState(false)
   const [results, setResults] = useState<RagResult[] | null>(null)
+  const [searchMeta, setSearchMeta] = useState<{ took: number; pipeline: RagPipeline } | null>(null)
   const [searchErr, setSearchErr] = useState<string>()
+  const [expanded, setExpanded] = useState<Record<number, boolean>>({})
 
   const index = async () => {
     if (!path.trim()) return
@@ -362,15 +391,19 @@ function RagTab() {
     if (!query.trim()) return
     setSearching(true)
     setSearchErr(undefined)
+    setExpanded({})
     try {
-      const r = await post<{ results: RagResult[] }>('/rag/search', {
+      const r = await post<RagSearchResponse>('/rag/search', {
         query: query.trim(),
-        collection: collection.trim(),
+        collection: searchCollection.trim(),
+        top_k: topK,
       })
       setResults(r.results ?? [])
+      setSearchMeta({ took: r.took_ms, pipeline: r.pipeline })
     } catch (e) {
       setSearchErr((e as Error).message)
       setResults(null)
+      setSearchMeta(null)
     } finally {
       setSearching(false)
     }
@@ -390,17 +423,30 @@ function RagTab() {
           <CardTitle className="flex items-center gap-2">
             {t('memory.ragStatus')}
             {data?.enabled ? (
-              <Badge variant={data.reachable ? 'success' : 'destructive'}>{data.provider}</Badge>
+              <Badge variant={data.reachable ? 'success' : 'destructive'}>
+                {data.reachable ? t('memory.ragReady') : t('memory.ragNotReady')}
+              </Badge>
             ) : (
               <Badge variant="outline">{t('memory.inactive')}</Badge>
             )}
           </CardTitle>
           <CardDescription>
-            {data?.enabled
-              ? data.detail || t('memory.ragBackend', { provider: data.provider })
-              : t('memory.ragDisabled')}
+            {data?.enabled ? data.detail || t('memory.ragReadyDesc') : t('memory.ragDisabled')}
           </CardDescription>
         </CardHeader>
+        {data?.pipeline ? (
+          <CardContent className="flex flex-wrap items-center gap-1.5 pb-3 text-[10px] text-muted-foreground">
+            <PipeBadge label={t('memory.ragEmbed')} value={`${data.pipeline.embed_provider}·${data.pipeline.embed_model}`} />
+            {data.pipeline.hybrid ? <PipeBadge label="hybrid" /> : null}
+            <PipeBadge label="recall" value={String(data.pipeline.recall)} />
+            {data.pipeline.rerank_mode !== 'off' ? (
+              <PipeBadge label="rerank" value={data.pipeline.rerank_mode} />
+            ) : null}
+            {data.pipeline.compress ? <PipeBadge label="dedup" /> : null}
+            <PipeBadge label="top" value={String(data.pipeline.top_k)} />
+            {data.pipeline.auto_context ? <PipeBadge label="auto-context" /> : null}
+          </CardContent>
+        ) : null}
         {data?.collections?.length ? (
           <CardContent className="flex flex-wrap gap-1.5">
             {data.collections.map((c) => (
@@ -422,7 +468,7 @@ function RagTab() {
         ) : null}
       </Card>
 
-      {/* Search the index. */}
+      {/* Search the index — the RAG playground. */}
       <Card>
         <CardHeader>
           <CardTitle>{t('memory.ragSearch')}</CardTitle>
@@ -442,7 +488,6 @@ function RagTab() {
               />
             </div>
             <Button
-              variant="outline"
               onClick={runSearch}
               loading={searching}
               disabled={!data?.enabled || !query.trim()}
@@ -451,29 +496,102 @@ function RagTab() {
               {t('common.search')}
             </Button>
           </div>
+
+          {/* Scope + top-k controls. */}
+          <div className="flex flex-wrap items-center gap-2">
+            <select
+              value={searchCollection}
+              onChange={(e) => setSearchCollection(e.target.value)}
+              disabled={!data?.enabled}
+              className="h-8 rounded-[var(--radius-sm)] border border-border bg-background px-2 text-xs outline-none focus:border-ring"
+            >
+              <option value="">{t('memory.ragAllCollections')}</option>
+              {(data?.collections ?? []).map((c) => (
+                <option key={c} value={c}>
+                  {c}
+                </option>
+              ))}
+            </select>
+            <label className="flex items-center gap-2 text-xs text-muted-foreground">
+              {t('memory.ragTopK')}
+              <input
+                type="range"
+                min={1}
+                max={20}
+                value={topK}
+                onChange={(e) => setTopK(Number(e.target.value))}
+                className="w-28 accent-[var(--primary)]"
+              />
+              <span className="w-5 tabular-nums text-foreground">{topK}</span>
+            </label>
+          </div>
+
           {searchErr ? <p className="text-xs text-destructive">{searchErr}</p> : null}
+
+          {/* Pipeline + latency readout, so it's clear how a result was produced. */}
+          {searchMeta ? (
+            <div className="flex flex-wrap items-center gap-1.5 text-[10px] text-muted-foreground">
+              <PipeBadge label={t('memory.ragEmbed')} value={searchMeta.pipeline.embed_model} />
+              {searchMeta.pipeline.hybrid ? <PipeBadge label="hybrid" /> : null}
+              <PipeBadge label="recall" value={String(searchMeta.pipeline.recall)} />
+              {searchMeta.pipeline.rerank_mode !== 'off' ? (
+                <PipeBadge label="rerank" value={searchMeta.pipeline.rerank_mode} />
+              ) : null}
+              {searchMeta.pipeline.compress ? <PipeBadge label="dedup" /> : null}
+              <PipeBadge label="top" value={String(searchMeta.pipeline.top_k)} />
+              <span className="ml-auto tabular-nums">{searchMeta.took} ms</span>
+            </div>
+          ) : null}
+
           {results !== null ? (
             results.length === 0 ? (
               <p className="text-xs text-muted-foreground">{t('memory.ragNoHits')}</p>
             ) : (
               <div className="space-y-2">
-                {results.map((r, i) => (
-                  <div key={i} className="rounded-[var(--radius-sm)] border border-border p-2.5">
-                    <div className="mb-1 flex items-center gap-2">
-                      {r.path ? (
-                        <span className="min-w-0 truncate font-mono text-[11px] text-muted-foreground">
-                          {r.path}
+                {results.map((r, i) => {
+                  const open = expanded[i]
+                  const long = r.content.length > 500
+                  const shown = open || !long ? r.content : r.content.slice(0, 500) + '…'
+                  // Score bar scaled to the top hit, so relative relevance is visible.
+                  const top = results[0]?.score || 1
+                  const pct = Math.max(4, Math.min(100, Math.round((r.score / (top || 1)) * 100)))
+                  return (
+                    <div key={i} className="rounded-[var(--radius-sm)] border border-border p-2.5">
+                      <div className="mb-1 flex items-center gap-2">
+                        <span className="grid size-4 shrink-0 place-items-center rounded-full bg-muted text-[9px] font-medium tabular-nums text-muted-foreground">
+                          {i + 1}
                         </span>
+                        {r.path ? (
+                          <span className="min-w-0 truncate font-mono text-[11px] text-muted-foreground">
+                            {r.path}
+                          </span>
+                        ) : null}
+                        <div className="ml-auto flex shrink-0 items-center gap-2">
+                          <div className="h-1 w-12 overflow-hidden rounded-full bg-muted">
+                            <div
+                              className="h-full rounded-full bg-primary"
+                              style={{ width: `${pct}%` }}
+                            />
+                          </div>
+                          <Badge variant="secondary" className="tabular-nums">
+                            {r.score.toFixed(3)}
+                          </Badge>
+                        </div>
+                      </div>
+                      <p className="whitespace-pre-wrap break-words text-[11px] leading-relaxed text-foreground/90">
+                        {shown}
+                      </p>
+                      {long ? (
+                        <button
+                          onClick={() => setExpanded((e) => ({ ...e, [i]: !open }))}
+                          className="mt-1 text-[10px] text-primary hover:underline"
+                        >
+                          {open ? t('memory.ragCollapse') : t('memory.ragExpand')}
+                        </button>
                       ) : null}
-                      <Badge variant="secondary" className="ml-auto shrink-0 tabular-nums">
-                        {r.score.toFixed(3)}
-                      </Badge>
                     </div>
-                    <p className="whitespace-pre-wrap break-words text-[11px] leading-relaxed text-foreground/90">
-                      {r.content.length > 500 ? r.content.slice(0, 500) + '…' : r.content}
-                    </p>
-                  </div>
-                ))}
+                  )
+                })}
               </div>
             )
           ) : null}
@@ -516,5 +634,15 @@ function RagTab() {
         </CardContent>
       </Card>
     </div>
+  )
+}
+
+// PipeBadge is a small pill describing one stage of the retrieval pipeline.
+function PipeBadge({ label, value }: { label: string; value?: string }) {
+  return (
+    <span className="inline-flex items-center gap-1 rounded-full border border-border bg-muted/40 px-1.5 py-0.5">
+      <span className="font-medium">{label}</span>
+      {value ? <span className="font-mono text-foreground/80">{value}</span> : null}
+    </span>
   )
 }
