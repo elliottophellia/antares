@@ -373,6 +373,19 @@ func (p Proxies) Find(ref string) string {
 	return ""
 }
 
+// First returns the dial URL of the first stored proxy, or "" when none are
+// saved. Tools that want to route through a proxy by default (rather than wait
+// for the agent to pick one) use this — the store is small and unordered, so
+// "first" is simply "any saved proxy".
+func (p Proxies) First() string {
+	for _, e := range p.Entries {
+		if u := e.ProxyURL(); u != "" {
+			return u
+		}
+	}
+	return ""
+}
+
 // ProxyEntry is one saved proxy. URL is the full endpoint; the convenience
 // fields (Scheme/Host/Port/Username/Password) let the dashboard edit parts
 // without re-typing the whole URL, and ProxyURL() composes them when URL is

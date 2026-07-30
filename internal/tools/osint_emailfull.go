@@ -43,15 +43,16 @@ func (osintEmailFullTool) Description() string {
 		"data (names, usernames, bios, locations), data-breach and stealer-log exposure, and an AI risk summary. " +
 		"Briefly opens the headless anti-detect browser to solve the site's Cloudflare Turnstile (closed right " +
 		"after), then runs the whole lookup over HTTP. ALWAYS use this FIRST for an email and use ONLY this tool " +
-		"until it succeeds — its accounts and usernames seed everything else. The solve is flaky (~80%/try): on a " +
-		"Turnstile/token error, just call this tool again, up to 5 times, before falling back to other tools. On " +
-		"HTTP 429 (IP rate-limit), retry with a proxy (see list_proxies). For authorized use."
+		"until it succeeds — its accounts and usernames seed everything else. If a proxy is stored it is used " +
+		"automatically (no need to pass one). The solve is flaky (~65%/try) and can rate-limit: on ANY error " +
+		"(Turnstile/token/HTTP 429/timeout), just call this exact tool again — up to 5 times — before ever " +
+		"reaching for another tool. Do not run osint_email/osint_username/etc. until this has failed 5×. For authorized use."
 }
 func (osintEmailFullTool) Schema() map[string]any {
 	return schema(map[string]any{
 		"email":           prop("string", "The email address to investigate."),
 		"timeout_seconds": propDefault("integer", "Overall budget for the solve + stream.", 90),
-		"proxy":           prop("string", "Optional. Route through a stored proxy — its id or label (see list_proxies). Use this if a direct request is rate-limited (HTTP 429). Omit for a direct connection."),
+		"proxy":           prop("string", "Optional. Force a specific stored proxy by id or label (see list_proxies). Normally leave this empty — the first stored proxy is used automatically, and direct if none is stored."),
 	}, "email")
 }
 func (osintEmailFullTool) RequiresApproval() bool { return false }
@@ -80,14 +81,21 @@ func (osintEmailFullTool) Execute(ctx context.Context, in Input) Result {
 		return Errorf("emailosint.org needs a Turnstile token, which requires the browser — enable tools.browser.enabled")
 	}
 
-	// Resolve an agent-chosen proxy (id or label) to a dial URL. An unknown ref
-	// is an error rather than a silent direct connection.
+	// Proxy selection:
+	//   - explicit ref (id/label) → use exactly that (error if unknown)
+	//   - no ref, but a proxy is stored → auto-use it from the first call, so the
+	//     lookup routes through a non-home IP and the agent never sees a 429 that
+	//     would tempt it to wander off to other tools
+	//   - no ref, no stored proxy → direct
 	proxyURL := ""
 	if ref := strings.TrimSpace(args.Proxy); ref != "" {
 		proxyURL = cfg.Proxies.Find(ref)
 		if proxyURL == "" {
 			return Errorf("no stored proxy matches %q — check list_proxies", ref)
 		}
+	} else if p := cfg.Proxies.First(); p != "" {
+		proxyURL = p
+		in.Emit(Progress{Tool: "osint_email_full", Message: "routing through the stored proxy"})
 	}
 
 	ctx, cancel := context.WithTimeout(ctx, time.Duration(args.Timeout)*time.Second)
@@ -351,13 +359,16 @@ func emailOSINTStreamLookup(ctx context.Context, in Input, email, token, proxyUR
 		return Result{}, fmt.Errorf("HTTP %d — the Turnstile token was rejected (expired or invalid); try again", resp.StatusCode)
 	}
 	if resp.StatusCode == 429 {
+		// A stored proxy is already applied automatically; a 429 through it means
+		// that IP is limited too. Either way the answer is the same: retry this
+		// exact tool — do NOT fan out to other tools. (A residential proxy usually
+		// rotates its exit IP per connection, so the next attempt often clears.)
 		if proxyURL != "" {
-			return Result{}, fmt.Errorf("HTTP 429 — rate-limited even through the proxy; try a different stored proxy (list_proxies) or wait a few minutes")
+			return Result{}, fmt.Errorf("HTTP 429 — the proxy IP is rate-limited. Do NOT switch tools: call osint_email_full again (up to 5×); the proxy typically rotates to a fresh IP")
 		}
-		// Self-documenting so the model retries via a proxy instead of giving up.
-		return Result{}, fmt.Errorf("HTTP 429 — emailosint.org rate-limits by IP. Do NOT proceed without this data: " +
-			"call list_proxies, then retry osint_email_full with proxy=<id or label> to route through a different IP. " +
-			"Only if there are no proxies, wait a few minutes and retry.")
+		return Result{}, fmt.Errorf("HTTP 429 — emailosint.org rate-limits by IP. Do NOT proceed to other tools. " +
+			"Add a proxy on the Proxies page (it is then used automatically) and call osint_email_full again — up to 5×. " +
+			"With no proxy, retry after a few minutes.")
 	}
 	if resp.StatusCode != 200 {
 		return Result{}, fmt.Errorf("HTTP %d from emailosint.org", resp.StatusCode)

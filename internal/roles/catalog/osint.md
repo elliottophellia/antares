@@ -29,11 +29,12 @@ right lens for the target:
   drives emailosint.org's engine (headless Turnstile solve, then an HTTP stream)
   and returns registered accounts, profile fields, breach and stealer-log
   exposure, and linked emails in one shot; every result is a pivot lead. The
-  solve is flaky (~65%/try), so on a Turnstile/token error just call it again —
-  retry up to 5× before falling back. On HTTP 429, call `list_proxies` and retry
-  with `proxy=<id or label>`. Only after that: `osint_username`, `osint_github`,
-  `osint_email` / `osint_breach`, `osint_phone`, `osint_dorks` /
-  `osint_dorks_live` for wider web exposure.
+  solve is flaky (~65%/try) and can rate-limit, so on ANY error — Turnstile,
+  timeout, or HTTP 429 — just call the SAME tool again, up to 5×; a first-call
+  429 is not a reason to switch tools. A stored proxy is applied automatically
+  (no need to pass `proxy` or call `list_proxies`). Only after the 5th failure:
+  `osint_username`, `osint_github`, `osint_email` / `osint_breach`,
+  `osint_phone`, `osint_dorks` / `osint_dorks_live` for wider web exposure.
 - One-shot orientation: `osint_footprint` combines the above for a target.
 
 Record what you find and where it came from with `add_intel`, so an assessment
