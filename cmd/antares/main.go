@@ -171,11 +171,12 @@ func cmdTUI() error {
 		}
 		rt.cfg = cfg
 		rt.agent.SetConfig(cfg)
-		// Setup (web or terminal) creates the chosen workspace; ensure it
-		// exists before the TUI starts in case the path was only written.
-		if err := os.MkdirAll(cfg.Agent.Workspace, 0o755); err != nil {
-			return fmt.Errorf("preparing workspace: %w", err)
-		}
+	}
+
+	// bootstrap defers workspace creation until setup is done; ensure it exists
+	// now (idempotent) before the TUI starts using it.
+	if err := os.MkdirAll(rt.cfg.Agent.Workspace, 0o755); err != nil {
+		return fmt.Errorf("preparing workspace: %w", err)
 	}
 
 	return tui.New(rt.agent, rt.cfg, rt.db).Run(ctx)
@@ -206,9 +207,8 @@ func bootstrap(ctx context.Context) (*runtimeServices, error) {
 	if err := logx.Setup(cfg.Logging.Level, cfg.Logging.File, cfg.Logging.JSON); err != nil {
 		return nil, fmt.Errorf("setting up logging: %w", err)
 	}
-	// Defer workspace creation until setup finishes. Creating the default
-	// path here leaves a leftover ~/antares-workspace when the user picks a
-	// custom directory in the wizard.
+	// Don't create the default workspace before the wizard has run — a fresh
+	// install shouldn't leave ~/antares-workspace behind if setup is abandoned.
 	if !needsSetup(cfg) {
 		if err := os.MkdirAll(cfg.Agent.Workspace, 0o755); err != nil {
 			return nil, fmt.Errorf("preparing workspace: %w", err)

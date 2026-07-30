@@ -29,6 +29,24 @@ Runs on **Linux**, **macOS**, and **Windows**.
 
 ---
 
+## A look at it
+
+<p align="center">
+  <img src="docs/screenshots/chat.png" alt="Antares chat" width="880">
+</p>
+
+<table>
+  <tr>
+    <td width="50%"><img src="docs/screenshots/memory-rag.png" alt="Memory & RAG"><br><sub><b>Memory & native RAG</b> — durable facts the agent learns, plus an in-process retrieval index (hybrid search + rerank) wired into every turn.</sub></td>
+    <td width="50%"><img src="docs/screenshots/vps.png" alt="VPS monitoring"><br><sub><b>VPS over SSH</b> — live CPU/RAM/disk, process lists, and agent-driven management, credentials encrypted at rest.</sub></td>
+  </tr>
+  <tr>
+    <td colspan="2"><img src="docs/screenshots/soul.png" alt="Soul / identity"><br><sub><b>Soul</b> — give the agent a name and personality (SOUL.md), set once in a friendly first-run interview and applied everywhere: web, terminal, and every gateway.</sub></td>
+  </tr>
+</table>
+
+---
+
 ## Why it is built this way
 
 | Decision | Reason |
@@ -135,7 +153,7 @@ antares config path
 | `providers.*` | Endpoints and API keys |
 | `database.driver` | `sqlite`, `postgres`, or `memory` |
 | `tools.toolset` | Which tools the model gets: `minimal`, `coding`, `research`, `default`, `all` |
-| `rag.provider` | `builtin` (internal vector store) or `enowx` (enowx-rag daemon) |
+| `rag.embed_provider` / `rag.rerank_mode` | Native retrieval: embeddings (`voyage`, `openai`, custom) and rerank (`llm`, `api`, `off`) |
 | `gateway.telegram` / `gateway.discord` | Messaging bots |
 | `tools.browser` | The real-browser tool: executable, viewport, headed mode, stealth |
 | `tools.http` | The http_request tool: browser-fingerprinted API calls, proxy |
@@ -225,12 +243,13 @@ the goal is really met and, if not, names the next step. See
 storage. Memories are injected into the system prompt on every turn, bounded by
 `memory.memory_char_limit`.
 
-**RAG.** Two interchangeable backends:
-
-- `builtin` — embeds with your configured model, stores vectors in the Antares
-  database, optional hybrid dense + lexical fusion.
-- `enowx` — delegates to an [enowx-rag](https://github.com/enowdev/enowx-rag)
-  daemon, which brings reranking and near-duplicate compression.
+**RAG.** Fully native, in-process — no external daemon. Embeds with your
+configured provider (Voyage, OpenAI, or any compatible endpoint), stores vectors
+in the Antares database, and runs a four-stage pipeline: hybrid recall (dense +
+lexical) → rerank (Voyage/API when available, else an auxiliary model, else off)
+→ near-duplicate compression → top-k. With `auto_context` on it indexes each
+conversation and pulls relevant knowledge into every turn; a project session can
+index its whole folder and keep it fresh as files change.
 
 **Skills.** Markdown files with YAML front matter in `~/.antares/skills`. The
 agent writes its own after solving something non-obvious; the catalogue (names
