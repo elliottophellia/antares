@@ -273,6 +273,12 @@ type Store interface {
 	CreateSession(ctx context.Context, s *Session) error
 	GetSession(ctx context.Context, id string) (*Session, error)
 	UpdateSession(ctx context.Context, s *Session) error
+	// SetSessionTitle updates only the title (and updated_at), leaving meta and
+	// the message counters untouched — so a title save from a stale in-memory
+	// struct cannot clobber a tool's concurrent meta write.
+	SetSessionTitle(ctx context.Context, id, title string) error
+	// TouchSession bumps only updated_at.
+	TouchSession(ctx context.Context, id string) error
 	ListSessions(ctx context.Context, f SessionFilter) ([]Session, int64, error)
 	DeleteSession(ctx context.Context, id string) error
 	DeleteSessions(ctx context.Context, ids []string) (int64, error)
@@ -283,6 +289,9 @@ type Store interface {
 	AppendMessage(ctx context.Context, m *Message) error
 	ListMessages(ctx context.Context, sessionID string, limit, offset int) ([]Message, error)
 	DeleteMessage(ctx context.Context, id string) error
+	// DeleteMessagesFrom removes a message and everything after it in its session,
+	// then recomputes the session tallies. Powers "edit message".
+	DeleteMessagesFrom(ctx context.Context, sessionID, fromID string) error
 	SearchMessages(ctx context.Context, query string, limit int) ([]SearchHit, error)
 
 	PutMemory(ctx context.Context, m *Memory) error

@@ -523,11 +523,11 @@ func (a *Agent) followUp(
 // saveCheckpoint keeps a copy of a file before a tool changes it. A failure
 // here must not stop the edit — losing the ability to undo is bad, refusing to
 // work is worse.
-func (a *Agent) saveCheckpoint(sessionID, path, tool string) {
+func (a *Agent) saveCheckpoint(sessionID, path, tool, marker string) {
 	if a.checks == nil {
 		return
 	}
-	if err := a.checks.Save(sessionID, path, tool); err != nil {
+	if err := a.checks.Save(sessionID, path, tool, marker); err != nil {
 		slog.Debug("could not checkpoint a file", "path", path, "error", err)
 	}
 }
@@ -547,6 +547,24 @@ func (a *Agent) Rollback(sessionID string, paths []string) (*checkpoint.RestoreR
 		return nil, errors.New("checkpoints are not enabled")
 	}
 	return a.checks.Restore(sessionID, paths)
+}
+
+// PreviewChangesSince lists files a session changed at/after a message marker,
+// for the "edit message → revert?" prompt.
+func (a *Agent) PreviewChangesSince(sessionID, marker string) ([]checkpoint.ChangedSince, error) {
+	if a.checks == nil {
+		return nil, errors.New("checkpoints are not enabled")
+	}
+	return a.checks.PreviewSince(sessionID, marker)
+}
+
+// RollbackSince reverts files changed at/after a message marker to their state
+// just before it, optionally skipping files edited outside the session.
+func (a *Agent) RollbackSince(sessionID, marker string, skipExternal bool) (*checkpoint.RestoreResult, error) {
+	if a.checks == nil {
+		return nil, errors.New("checkpoints are not enabled")
+	}
+	return a.checks.RestoreSince(sessionID, marker, skipExternal)
 }
 
 // PruneCheckpoints drops the ones older than the given age.

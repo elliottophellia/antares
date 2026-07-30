@@ -31,6 +31,20 @@ func (s *sqlStore) CreateSession(ctx context.Context, sess *Session) error {
 
 const sessionCols = `id,title,platform,channel_id,user_id,model,provider,workspace,message_count,tokens_in,tokens_out,cost,archived,pinned,created_at,updated_at,meta`
 
+// SetSessionTitle updates only the title, never touching meta or the counters —
+// so a title save from a struct loaded before a tool wrote meta cannot undo it.
+func (s *sqlStore) SetSessionTitle(ctx context.Context, id, title string) error {
+	_, err := s.exec(ctx, `UPDATE sessions SET title=?, updated_at=? WHERE id=?`,
+		title, ms(time.Now()), id)
+	return err
+}
+
+// TouchSession bumps only updated_at.
+func (s *sqlStore) TouchSession(ctx context.Context, id string) error {
+	_, err := s.exec(ctx, `UPDATE sessions SET updated_at=? WHERE id=?`, ms(time.Now()), id)
+	return err
+}
+
 func scanSession(sc interface{ Scan(...any) error }) (*Session, error) {
 	var (
 		s            Session
@@ -247,6 +261,26 @@ func (s *sqlStore) ListMessages(ctx context.Context, sessionID string, limit, of
 
 func (s *sqlStore) DeleteMessage(ctx context.Context, id string) error {
 	_, err := s.exec(ctx, `DELETE FROM messages WHERE id=?`, id)
+	return err
+}
+
+// DeleteMessagesFrom removes the message with fromID and every message after it
+// in the session (by seq), then recomputes the session's message/token tallies
+// from what remains. Used by "edit message", which drops the edited turn and all
+// that followed so the conversation can be re-sent from that point.
+func (s *sqlStore) DeleteMessagesFrom(ctx context.Context, sessionID, fromID string) error {
+	_, err := s.exec(ctx,
+		`DELETE FROM messages WHERE session_id=? AND seq >= (SELECT seq FROM messages WHERE id=?)`,
+		sessionID, fromID)
+	if err != nil {
+		return err
+	}
+	// Keep the owned counters honest (see session-counter ownership).
+	_, err = s.exec(ctx, `UPDATE sessions SET
+		message_count = (SELECT COUNT(*) FROM messages WHERE session_id=?),
+		tokens_in     = (SELECT COALESCE(SUM(tokens_in),0) FROM messages WHERE session_id=?),
+		tokens_out    = (SELECT COALESCE(SUM(tokens_out),0) FROM messages WHERE session_id=?)
+		WHERE id=?`, sessionID, sessionID, sessionID, sessionID)
 	return err
 }
 

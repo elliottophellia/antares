@@ -16,7 +16,7 @@ func TestRestoreModifiedFile(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := s.Save("sess1", path, "write_file"); err != nil {
+	if err := s.Save("sess1", path, "write_file", ""); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(path, []byte("mangled\n"), 0o644); err != nil {
@@ -42,7 +42,7 @@ func TestRestoreDeletesFilesThatDidNotExist(t *testing.T) {
 
 	path := filepath.Join(work, "new.txt")
 	// Saved before it existed, which is what a create looks like.
-	if err := s.Save("sess1", path, "write_file"); err != nil {
+	if err := s.Save("sess1", path, "write_file", ""); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(path, []byte("hello\n"), 0o644); err != nil {
@@ -69,11 +69,11 @@ func TestFirstSaveWins(t *testing.T) {
 	if err := os.WriteFile(path, []byte("v1\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	_ = s.Save("sess1", path, "write_file")
+	_ = s.Save("sess1", path, "write_file", "")
 	_ = os.WriteFile(path, []byte("v2\n"), 0o644)
 	// A second save must not overwrite the original copy, or rolling back
 	// would only undo the most recent edit.
-	_ = s.Save("sess1", path, "edit_file")
+	_ = s.Save("sess1", path, "edit_file", "")
 	_ = os.WriteFile(path, []byte("v3\n"), 0o644)
 
 	if _, err := s.Restore("sess1", nil); err != nil {
@@ -95,7 +95,7 @@ func TestRestoreOneFileOnly(t *testing.T) {
 		if err := os.WriteFile(p, []byte("before\n"), 0o644); err != nil {
 			t.Fatal(err)
 		}
-		_ = s.Save("sess1", p, "write_file")
+		_ = s.Save("sess1", p, "write_file", "")
 		_ = os.WriteFile(p, []byte("after\n"), 0o644)
 	}
 
@@ -123,9 +123,9 @@ func TestSessionsAreSeparate(t *testing.T) {
 	path := filepath.Join(work, "a.txt")
 	_ = os.WriteFile(path, []byte("one\n"), 0o644)
 
-	_ = s.Save("sess1", path, "write_file")
+	_ = s.Save("sess1", path, "write_file", "")
 	_ = os.WriteFile(path, []byte("two\n"), 0o644)
-	_ = s.Save("sess2", path, "write_file")
+	_ = s.Save("sess2", path, "write_file", "")
 	_ = os.WriteFile(path, []byte("three\n"), 0o644)
 
 	// Rolling back the second session goes to what the second session found.
@@ -145,7 +145,7 @@ func TestPathTraversalIsContained(t *testing.T) {
 	_ = os.WriteFile(path, []byte("x\n"), 0o644)
 
 	// A session id that tries to escape must land inside the root anyway.
-	if err := s.Save("../../etc", path, "write_file"); err != nil {
+	if err := s.Save("../../etc", path, "write_file", ""); err != nil {
 		t.Fatal(err)
 	}
 	entries, err := os.ReadDir(root)
@@ -166,7 +166,7 @@ func TestPrune(t *testing.T) {
 	work := t.TempDir()
 	path := filepath.Join(work, "a.txt")
 	_ = os.WriteFile(path, []byte("x\n"), 0o644)
-	_ = s.Save("old", path, "write_file")
+	_ = s.Save("old", path, "write_file", "")
 
 	// Nothing is old enough yet.
 	if n, err := s.Prune(time.Hour); err != nil || n != 0 {
@@ -183,7 +183,7 @@ func TestClear(t *testing.T) {
 	work := t.TempDir()
 	path := filepath.Join(work, "a.txt")
 	_ = os.WriteFile(path, []byte("x\n"), 0o644)
-	_ = s.Save("sess1", path, "write_file")
+	_ = s.Save("sess1", path, "write_file", "")
 
 	if err := s.Clear("sess1"); err != nil {
 		t.Fatal(err)
