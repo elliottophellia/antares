@@ -225,7 +225,15 @@ export default function ChatPage() {
   // Non-image attachments, uploaded to a temp dir. The agent reads them with
   // the read_document tool via the path we hand it on send.
   const [docs, setDocs] = useState<{ path: string; name: string }[]>([])
-  const [role, setRole] = useState('')
+  // Role remembers the last one you used across sessions/reloads. An existing
+  // session's own stored role still wins when you open it; new chats fall back
+  // to this remembered value instead of resetting to the default.
+  const [role, setRole] = useState(() => localStorage.getItem('antares:last-role') ?? '')
+  const pickRole = useCallback((r: string) => {
+    setRole(r)
+    if (r) localStorage.setItem('antares:last-role', r)
+    else localStorage.removeItem('antares:last-role')
+  }, [])
   // When set, an overlay shows this sub-agent's live transcript instead of the
   // main one; clearing it returns to the main agent.
   const [viewingAgent, setViewingAgent] = useState<ActiveAgent | null>(null)
@@ -530,7 +538,11 @@ export default function ChatPage() {
         setError(e instanceof Error ? e.message : String(e))
       })
     get<{ role?: string }>(`/sessions/${sessionId}/role`)
-      .then((r) => setRole(r.role ?? ''))
+      .then((r) => {
+        // The session's own role wins; if it has none, keep the remembered
+        // last-used role rather than snapping back to the default.
+        if (r.role) pickRole(r.role)
+      })
       .catch(() => {})
       .finally(() => setLoading(false))
     // t is stable per language; refetching on language change is harmless.
@@ -821,7 +833,8 @@ export default function ChatPage() {
     localStorage.removeItem('antares:last-session')
     setMessages([])
     setTitle('')
-    setRole('')
+    // Keep the remembered role for the new chat instead of resetting to default.
+    setRole(localStorage.getItem('antares:last-role') ?? '')
     navigate('/', { state: { fresh: true } })
   }
 
@@ -851,7 +864,7 @@ export default function ChatPage() {
         attachLabel={t('chat.attach')}
         roleSlot={
           <div className="flex min-w-0 items-center gap-1.5">
-            <RolePicker value={role} onChange={setRole} compact />
+            <RolePicker value={role} onChange={pickRole} compact />
             <ModelPicker />
           </div>
         }

@@ -29,13 +29,27 @@ export function ModelPicker() {
   const [saving, setSaving] = useState('')
   const ref = useRef<HTMLDivElement>(null)
 
+  const [activeConfig, setActiveConfig] = useState<{ model: string; provider: string } | null>(null)
+
   const load = () =>
     get<ListAll>('/model/list-all')
       .then((d) => setData(d))
       .catch(() => {})
 
-  // Fetch lazily on first open, and refresh each open so a newly connected
-  // provider's models show up without a reload.
+  // On mount, fetch just the active model from the cheap /model/options endpoint
+  // (config only, no per-provider probing) so the trigger shows the persisted
+  // last-used model immediately instead of the "pick a model" placeholder —
+  // otherwise it looks like the selection resets on every reload.
+  const loadActive = () =>
+    get<{ active: { model: string; provider: string } }>('/model/options')
+      .then((d) => setActiveConfig(d.active))
+      .catch(() => {})
+  useEffect(() => {
+    loadActive()
+  }, [])
+
+  // The full model list (which probes every provider) is fetched lazily on open,
+  // and refreshed each open so a newly connected provider's models appear.
   useEffect(() => {
     if (open) load()
   }, [open])
@@ -49,7 +63,8 @@ export function ModelPicker() {
     return () => document.removeEventListener('mousedown', onClick)
   }, [open])
 
-  const active = data?.active
+  // Prefer the freshly-probed list's active; fall back to the cheap mount fetch.
+  const active = data?.active ?? activeConfig
   const activeLabel = active?.model || t('models.pickModel')
 
   const shown = useMemo(() => {
@@ -68,6 +83,7 @@ export function ModelPicker() {
     setSaving(`${m.provider}/${m.id}`)
     try {
       await post('/model/set', { model: m.id, provider: m.provider })
+      setActiveConfig({ model: m.id, provider: m.provider })
       await load()
       setOpen(false)
       setQuery('')
