@@ -9,7 +9,9 @@ import {
   Copy,
   FileText,
   Paperclip,
+  PencilSimple,
   Plus,
+  SidebarSimple,
   Stop,
   Terminal,
   Warning,
@@ -29,6 +31,10 @@ import { ApprovalCard, type ApprovalView } from '@/components/chat/ApprovalCard'
 import { AskUserCard } from '@/components/chat/AskUserCard'
 import { RolePicker } from '@/components/chat/RolePicker'
 import { ModelPicker } from '@/components/chat/ModelPicker'
+import { ProjectPicker } from '@/components/chat/ProjectPicker'
+import { ProjectSidebar } from '@/components/chat/ProjectSidebar'
+import { AnalyzeProjectDialog } from '@/components/chat/AnalyzeProjectDialog'
+import { EditMessageDialog } from '@/components/chat/EditMessageDialog'
 import { SubAgentPanel, type ActiveAgent } from '@/components/chat/SubAgentPanel'
 import {
   SlashPalette,
@@ -108,7 +114,13 @@ export function updateToolSeg(m: ChatMessage, id: string, fn: (c: ToolCallView) 
 }
 
 interface SessionDetail {
-  session: { id: string; title: string; model: string; provider: string }
+  session: {
+    id: string
+    title: string
+    model: string
+    provider: string
+    meta?: { project_dir?: string } | null
+  }
   messages: Array<{
     id: string
     role: ChatMessage['role']
@@ -234,9 +246,37 @@ export default function ChatPage() {
     if (r) localStorage.setItem('antares:last-role', r)
     else localStorage.removeItem('antares:last-role')
   }, [])
+  // Project session: the folder this chat is bound to. Chosen on a NEW chat and
+  // sent with the first message; once the session exists it is fixed (locked).
+  const [projectDir, setProjectDir] = useState('')
+  // A folder just picked but not yet confirmed: drives the "analyze first?"
+  // dialog. Choosing binds it as projectDir (and optionally analyzes).
+  const [pendingProject, setPendingProject] = useState('')
+  // Whether the project sidebar is expanded. Only meaningful for project chats.
+  // Desktop: a docked column (starts open). Mobile: a slide-over overlay driven
+  // by sidebarMobileOpen (starts closed so the chat has the full width).
+  const [sidebarOpen, setSidebarOpen] = useState(true)
+  const [sidebarMobileOpen, setSidebarMobileOpen] = useState(false)
+  // Bumped when a turn finishes, so the sidebar re-reads project_info the agent
+  // may have just written.
+  const [sidebarRefresh, setSidebarRefresh] = useState(0)
+  // Context-window fill: the last turn's prompt tokens over the model's window,
+  // shown as a ring in the composer. `used` comes from the latest usage event
+  // (live) or the last persisted message (on hydrate); `window` from the usage
+  // event or, before any turn, the active model's window fetched on mount.
+  const [ctxUsed, setCtxUsed] = useState(0)
+  const [ctxWindow, setCtxWindow] = useState(0)
+  // The model's context window, known even before the first turn.
+  useEffect(() => {
+    get<{ context_window?: number }>('/context-window')
+      .then((d) => setCtxWindow((w) => w || Number(d.context_window ?? 0)))
+      .catch(() => {})
+  }, [])
   // When set, an overlay shows this sub-agent's live transcript instead of the
   // main one; clearing it returns to the main agent.
   const [viewingAgent, setViewingAgent] = useState<ActiveAgent | null>(null)
+  // The user message being edited (id + current text), driving EditMessageDialog.
+  const [editing, setEditing] = useState<{ id: string; content: string } | null>(null)
 
   const commands = useCommands()
   const matches = useMatches(input, commands)
@@ -258,7 +298,58 @@ export default function ChatPage() {
     return []
   }, [messages])
 
+  // Per-tool usage this session (count + last-used), from the transcript's tool
+  // calls — drives the sidebar's Tools tab. Sorted most-recent first.
+  const toolStats = useMemo(() => {
+    const by = new Map<string, { name: string; count: number; last?: string }>()
+    for (const m of messages) {
+      if (!m.toolCalls) continue
+      for (const c of m.toolCalls) {
+        const s = by.get(c.name) ?? { name: c.name, count: 0 }
+        s.count++
+        if (m.createdAt) s.last = m.createdAt
+        by.set(c.name, s)
+      }
+    }
+    return [...by.values()].sort((a, b) => (b.last ?? '').localeCompare(a.last ?? '') || b.count - a.count)
+  }, [messages])
+
+  // Files the agent wrote/edited this session, newest first and de-duplicated —
+  // drives the sidebar's Changes tab. Parsed from write_file/edit_file calls.
+  const changedFiles = useMemo(() => {
+    const seen = new Set<string>()
+    const out: { path: string; tool: string }[] = []
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const calls = messages[i].toolCalls
+      if (!calls) continue
+      for (let j = calls.length - 1; j >= 0; j--) {
+        const c = calls[j]
+        if (c.name !== 'write_file' && c.name !== 'edit_file') continue
+        try {
+          const path = String(JSON.parse(c.args)?.path ?? '').trim()
+          if (path && !seen.has(path)) {
+            seen.add(path)
+            out.push({ path, tool: c.name })
+          }
+        } catch {
+          /* ignore unparseable args */
+        }
+      }
+    }
+    return out
+  }, [messages])
+
   const abortRef = useRef<(() => void) | null>(null)
+  // The bound project dir tracked in a ref, so a turn fired immediately after
+  // binding (the auto-analyze on "Yes") posts with the project even before the
+  // projectDir state re-render lands.
+  const projectDirRef = useRef('')
+  useEffect(() => {
+    projectDirRef.current = projectDir
+  }, [projectDir])
+  // Whether the just-bound project opted into RAG indexing; carried on the first
+  // turn alongside project_dir.
+  const indexRagRef = useRef(false)
   // Holds the id of a session that was just created mid-stream on this page.
   // Its messages are already live on screen, so the hydrate effect must not
   // re-fetch and overwrite them before the turn is persisted.
@@ -384,6 +475,14 @@ export default function ChatPage() {
             tokensIn: Number(event.input_tokens ?? m.tokensIn ?? 0),
             tokensOut: Number(event.output_tokens ?? m.tokensOut ?? 0),
           }))
+          {
+            // The input tokens of the latest turn ≈ everything currently in
+            // context, so input/window is the context-fill gauge.
+            const win = Number(event.context_window ?? 0)
+            const used = Number(event.input_tokens ?? 0)
+            if (used > 0) setCtxUsed(used)
+            if (win > 0) setCtxWindow(win)
+          }
           break
         case 'reset':
           // The turn is being retried after a provider glitch — throw away the
@@ -497,6 +596,8 @@ export default function ChatPage() {
     if (!sessionId) {
       setMessages([])
       setTitle('')
+      setProjectDir('')
+      setCtxUsed(0)
       setLoading(false)
       return
     }
@@ -515,6 +616,17 @@ export default function ChatPage() {
         if (cancelled) return
         setMessages(hydrate(d))
         setTitle(d.session.title || t('chat.conversation'))
+        setProjectDir(d.session.meta?.project_dir ?? '')
+        // Restore the context gauge from persisted usage: the last turn's input
+        // tokens ≈ what was in context, so the ring is right on reload — no need
+        // to send a message first.
+        for (let i = d.messages.length - 1; i >= 0; i--) {
+          const ti = Number(d.messages[i].tokens_in ?? 0)
+          if (ti > 0) {
+            setCtxUsed(ti)
+            break
+          }
+        }
         setError(undefined)
         // Once the persisted history is on screen, reconnect to any turn still
         // in flight for this session so streaming continues where it left off.
@@ -663,7 +775,18 @@ export default function ChatPage() {
 
     abortRef.current = streamPost(
       '/chat',
-      { session_id: sessionIdRef.current ?? '', message, images: attached, role },
+      {
+        session_id: sessionIdRef.current ?? '',
+        message,
+        images: attached,
+        role,
+        // Only meaningful when starting a new session; the server ignores it once
+        // the session exists. Read from the ref so an auto-analyze turn fired
+        // right after binding still carries the project.
+        ...(projectDirRef.current && !sessionIdRef.current
+          ? { project_dir: projectDirRef.current, index_rag: indexRagRef.current }
+          : {}),
+      },
       (event: StreamEvent) => {
         // End-of-turn: stop streaming immediately rather than waiting for the
         // socket to close. A detached run keeps the connection open past the
@@ -676,6 +799,8 @@ export default function ChatPage() {
           abortRef.current?.()
           abortRef.current = null
           localSessionRef.current = null
+          // The turn may have written project_info — refresh the sidebar.
+          setSidebarRefresh((n) => n + 1)
           return
         }
         applyEvent(assistantId, event, (id, evtTitle) => {
@@ -710,7 +835,7 @@ export default function ChatPage() {
       },
     )
     },
-    [role, streaming, sessionId, navigate, runCommand, applyEvent, t],
+    [role, projectDir, streaming, sessionId, navigate, runCommand, applyEvent, t],
   )
 
   const send = useCallback(() => {
@@ -718,6 +843,50 @@ export default function ChatPage() {
     if ((!text && images.length === 0 && docs.length === 0) || streaming) return
     sendText(text, images, docs)
   }, [input, images, docs, streaming, sendText])
+
+  // Resolve the "analyze first?" dialog: bind the pending folder as the project,
+  // then either fire an automatic analysis turn (Yes) or just open the chat (No).
+  const resolveAnalyze = useCallback(
+    (analyze: boolean, indexRag: boolean) => {
+      const dir = pendingProject
+      setPendingProject('')
+      if (!dir) return
+      setProjectDir(dir)
+      projectDirRef.current = dir // so the turn below carries it immediately
+      indexRagRef.current = indexRag
+      setSidebarOpen(true)
+      if (analyze) sendText(t('project.analyzePrompt'))
+    },
+    [pendingProject, sendText, t],
+  )
+
+  // applyEdit commits a message edit: drop the edited message and everything
+  // after it (optionally reverting file changes since), then re-send the new
+  // text so the conversation continues from that point.
+  const applyEdit = useCallback(
+    async (text: string, revert: boolean) => {
+      const target = editing
+      setEditing(null)
+      if (!target || !sessionIdRef.current) return
+      try {
+        await post(`/sessions/${sessionIdRef.current}/edit`, {
+          message_id: target.id,
+          revert,
+        })
+      } catch (e) {
+        setError(e instanceof Error ? e.message : String(e))
+        return
+      }
+      // Trim the on-screen transcript to before the edited message, then re-send.
+      setMessages((prev) => {
+        const idx = prev.findIndex((m) => m.id === target.id)
+        return idx >= 0 ? prev.slice(0, idx) : prev
+      })
+      setSidebarRefresh((n) => n + 1) // files may have been reverted
+      sendText(text)
+    },
+    [editing, sendText],
+  )
 
   // answerAsk delivers an ask_user answer to the paused turn. Unlike sending a
   // message, this resumes the SAME turn: the answer becomes the tool result and
@@ -835,6 +1004,12 @@ export default function ChatPage() {
     setTitle('')
     // Keep the remembered role for the new chat instead of resetting to default.
     setRole(localStorage.getItem('antares:last-role') ?? '')
+    // A project binding belongs to one session; a new chat starts unbound.
+    setProjectDir('')
+    projectDirRef.current = ''
+    setPendingProject('')
+    setSidebarOpen(true)
+    setCtxUsed(0)
     navigate('/', { state: { fresh: true } })
   }
 
@@ -866,6 +1041,16 @@ export default function ChatPage() {
           <div className="flex min-w-0 items-center gap-1.5">
             <RolePicker value={role} onChange={pickRole} compact />
             <ModelPicker />
+            <ProjectPicker
+              value={projectDir}
+              onChange={(dir) => {
+                // Clearing the binding is immediate; picking a folder first asks
+                // whether the agent should analyze the project.
+                if (!dir) setProjectDir('')
+                else setPendingProject(dir)
+              }}
+              locked={Boolean(sessionId)}
+            />
           </div>
         }
         topSlot={
@@ -878,17 +1063,28 @@ export default function ChatPage() {
             />
           ) : undefined
         }
+        contextSlot={<ContextBar used={ctxUsed} window={ctxWindow} />}
       />
     </>
   )
 
   const isEmpty = !loading && messages.length === 0
 
+  // The "analyze first?" dialog is rendered in both the empty and normal states.
+  const analyzeDialog = (
+    <AnalyzeProjectDialog
+      open={Boolean(pendingProject)}
+      projectDir={pendingProject}
+      onChoose={resolveAnalyze}
+    />
+  )
+
   // Empty state mirrors the familiar centred layout: greeting, composer, then
   // starter prompts — no bottom-anchored bar on an otherwise blank page.
   if (isEmpty) {
     return (
       <div className="flex min-h-[calc(100dvh-8rem)] flex-col lg:min-h-dvh">
+        {analyzeDialog}
         <div className="flex flex-1 items-center justify-center px-4 py-10 sm:px-6">
           <div className="w-full max-w-3xl space-y-6">
             <div className="space-y-3 text-center">
@@ -933,8 +1129,22 @@ export default function ChatPage() {
     )
   }
 
+  // A project session splits the view: the chat column on the left and a
+  // collapsible sidebar on the right. An ordinary chat renders full width.
+  const isProject = Boolean(projectDir)
+
   return (
-    <div className="relative flex h-[calc(100dvh-8rem)] flex-col overflow-x-hidden lg:h-dvh">
+    <div className="flex h-[calc(100dvh-8rem)] overflow-hidden lg:h-dvh">
+      <div className="relative flex min-w-0 flex-1 flex-col overflow-x-hidden">
+      {analyzeDialog}
+      <EditMessageDialog
+        open={Boolean(editing)}
+        onOpenChange={(o) => !o && setEditing(null)}
+        sessionId={sessionId}
+        messageId={editing?.id ?? ''}
+        initialText={editing?.content ?? ''}
+        onSubmit={applyEdit}
+      />
       {/* Sub-agent live view: overlays the chat while keeping the main
           transcript state intact underneath, so "back to Main" is instant. */}
       {viewingAgent ? (
@@ -956,6 +1166,28 @@ export default function ChatPage() {
           <Plus className="size-4" />
           <span className="hidden sm:inline">{t('common.new')}</span>
         </Button>
+        {isProject ? (
+          <Button
+            // On desktop the sidebar is a docked column toggled by sidebarOpen;
+            // on mobile it is an overlay toggled by sidebarMobileOpen. This one
+            // button drives whichever applies, and always shows for a project.
+            variant="outline"
+            size="icon-sm"
+            onClick={() => {
+              // Toggle only the state for the current breakpoint (lg = 1024px),
+              // so the desktop column and mobile overlay don't fight each other.
+              if (window.matchMedia('(min-width: 1024px)').matches) {
+                setSidebarOpen((v) => !v)
+              } else {
+                setSidebarMobileOpen((v) => !v)
+              }
+            }}
+            title={t('project.sidebarShow')}
+            aria-label={t('project.sidebarShow')}
+          >
+            <SidebarSimple className="size-4" mirrored />
+          </Button>
+        ) : null}
       </div>
 
       {loading ? (
@@ -980,7 +1212,14 @@ export default function ChatPage() {
           itemContent={(_, m) => (
             <div className="mx-auto w-full min-w-0 max-w-3xl overflow-x-clip px-4 sm:px-6">
               <div className="min-w-0 py-2.5">
-                <MessageBubble message={m} askActive={!!askId} onAnswer={answerAsk} />
+                <MessageBubble
+                  message={m}
+                  askActive={!!askId}
+                  onAnswer={answerAsk}
+                  onEdit={
+                    streaming ? undefined : (id, content) => setEditing({ id, content })
+                  }
+                />
               </div>
             </div>
           )}
@@ -1013,6 +1252,52 @@ export default function ChatPage() {
       <div className="bg-gradient-to-t from-background via-background to-transparent px-4 pt-3 pb-[max(1.5rem,env(safe-area-inset-bottom))] sm:px-6 sm:pb-[max(2rem,env(safe-area-inset-bottom))]">
         <div className="mx-auto w-full max-w-3xl">{composerCard(true)}</div>
       </div>
+      </div>
+
+      {/* Right sidebar — project sessions only. Docked column on desktop, a
+          slide-over overlay on mobile. */}
+      {isProject ? (
+        <>
+          {/* Desktop: docked column, toggled by sidebarOpen. */}
+          {sidebarOpen ? (
+            <div className="hidden w-[26rem] shrink-0 lg:block xl:w-[30rem]">
+              <ProjectSidebar
+                projectDir={projectDir}
+                sessionId={sessionId}
+                refreshKey={sidebarRefresh}
+                changedFiles={changedFiles}
+                toolStats={toolStats}
+                onRun={(command) => sendText(t('project.runReq', { command }))}
+                onCollapse={() => setSidebarOpen(false)}
+              />
+            </div>
+          ) : null}
+
+          {/* Mobile: full-height overlay from the right + dimmed backdrop. */}
+          {sidebarMobileOpen ? (
+            <div className="fixed inset-0 z-40 lg:hidden">
+              <div
+                className="absolute inset-0 bg-black/40"
+                onClick={() => setSidebarMobileOpen(false)}
+              />
+              <div className="absolute inset-y-0 right-0 w-[85%] max-w-sm bg-background shadow-xl">
+                <ProjectSidebar
+                  projectDir={projectDir}
+                  sessionId={sessionId}
+                  refreshKey={sidebarRefresh}
+                  changedFiles={changedFiles}
+                  toolStats={toolStats}
+                  onRun={(command) => {
+                    setSidebarMobileOpen(false)
+                    sendText(t('project.runReq', { command }))
+                  }}
+                  onCollapse={() => setSidebarMobileOpen(false)}
+                />
+              </div>
+            </div>
+          ) : null}
+        </>
+      ) : null}
     </div>
   )
 }
@@ -1039,6 +1324,9 @@ interface ComposerProps {
   // topSlot renders above the textarea inside the same card (the task list),
   // separated by a divider — so tasks and composer read as one surface.
   topSlot?: React.ReactNode
+  // contextSlot renders on the right of the control row, before attach/send —
+  // the context-window fill gauge.
+  contextSlot?: React.ReactNode
 }
 
 /** Rounded single-surface composer with the actions inside the field. */
@@ -1062,6 +1350,7 @@ const Composer = ({
   attachLabel,
   roleSlot,
   topSlot,
+  contextSlot,
 }: ComposerProps & { ref: React.RefObject<HTMLTextAreaElement | null> }) => {
   const fileRef = useRef<HTMLInputElement>(null)
 
@@ -1146,42 +1435,141 @@ const Composer = ({
           className="max-h-50 min-h-9 w-full resize-none border-0 bg-transparent px-1.5 py-1.5 shadow-none outline-none focus-visible:border-0 focus-visible:outline-none focus-visible:ring-0 focus-visible:ring-offset-0"
         />
 
-        {/* Row 2: controls — role on the left, attach + send on the right. */}
+        {/* Row 2: controls — pickers on the left, actions on the right. The
+            pickers collapse to icon-only chips on small screens (labels return
+            at sm), so the whole row stays on one tidy line even on a phone. */}
         <div className="mt-1 flex items-center gap-1.5">
-          {roleSlot}
-          <div className="min-w-0 flex-1" />
-          <Button
-            size="icon"
-            variant="ghost"
-            onClick={() => fileRef.current?.click()}
-            aria-label={attachLabel}
-            className="shrink-0 rounded-full text-muted-foreground"
-          >
-            <Paperclip className="size-5" />
-          </Button>
-          {streaming ? (
+          <div className="flex min-w-0 flex-1 items-center gap-1.5">{roleSlot}</div>
+          <div className="flex shrink-0 items-center gap-1.5">
+            {contextSlot}
             <Button
               size="icon"
-              variant="destructive"
-              onClick={onStop}
-              aria-label={stopLabel}
-              className="shrink-0 rounded-full"
+              variant="ghost"
+              onClick={() => fileRef.current?.click()}
+              aria-label={attachLabel}
+              className="shrink-0 rounded-full text-muted-foreground"
             >
-              <Stop weight="fill" />
+              <Paperclip className="size-5" />
             </Button>
-          ) : (
-            <Button
-              size="icon"
-              onClick={onSend}
-              disabled={!value.trim() && images.length === 0}
-              aria-label={sendLabel}
-              className="shrink-0 rounded-full"
-            >
-              <ArrowUp weight="bold" />
-            </Button>
-          )}
+            {streaming ? (
+              <Button
+                size="icon"
+                variant="destructive"
+                onClick={onStop}
+                aria-label={stopLabel}
+                className="shrink-0 rounded-full"
+              >
+                <Stop weight="fill" />
+              </Button>
+            ) : (
+              <Button
+                size="icon"
+                onClick={onSend}
+                disabled={!value.trim() && images.length === 0}
+                aria-label={sendLabel}
+                className="shrink-0 rounded-full"
+              >
+                <ArrowUp weight="bold" />
+              </Button>
+            )}
+          </div>
         </div>
       </div>
+    </div>
+  )
+}
+
+/** Rounded compact token count for the context gauge: 512, 48k, 1.2M, 1M.
+ *  Distinct from formatCount (which keeps a decimal for k) — the gauge is an
+ *  approximation, so whole-k reads cleaner (48k, not 48.2k). */
+function ctxTokens(n: number): string {
+  if (n < 1000) return String(n)
+  if (n < 1_000_000) return `${Math.round(n / 1000)}k`
+  const m = n / 1_000_000
+  return `${(Math.round(m * 10) / 10).toString().replace(/\.0$/, '')}M`
+}
+
+/** Context-window fill gauge for the composer: a compact progress RING that,
+ *  on hover, reveals a popover card with the used/total token counts, the
+ *  percentage, and a horizontal fill bar. The ring is tinted green→amber→red as
+ *  the window fills. Before the first turn it reads 0 / 0. */
+function ContextBar({ used, window }: { used: number; window: number }) {
+  const { t } = useI18n()
+  const pct = window > 0 ? Math.min(100, Math.round((used / window) * 100)) : 0
+  const tone =
+    pct >= 90 ? 'var(--destructive)' : pct >= 70 ? 'var(--warning)' : 'var(--success)'
+
+  // SVG ring geometry.
+  const r = 7
+  const circ = 2 * Math.PI * r
+  const dash = (pct / 100) * circ
+
+  // Click/tap toggles the detail popover — works on touch (no hover). On devices
+  // that do have hover, opening on hover too is a nicety layered on top.
+  const [open, setOpen] = useState(false)
+  const ref = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (!open) return
+    const onDown = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false)
+    }
+    document.addEventListener('mousedown', onDown)
+    return () => document.removeEventListener('mousedown', onDown)
+  }, [open])
+
+  return (
+    <div
+      ref={ref}
+      className="group relative block"
+      onMouseEnter={() => setOpen(true)}
+      onMouseLeave={() => setOpen(false)}
+    >
+      <button
+        type="button"
+        aria-label={t('chat.contextLabel')}
+        onClick={() => setOpen((v) => !v)}
+        className="grid size-7 place-items-center rounded-full text-muted-foreground transition-colors hover:bg-muted"
+      >
+        <svg width="18" height="18" viewBox="0 0 18 18" className="-rotate-90">
+          <circle cx="9" cy="9" r={r} fill="none" stroke="var(--muted)" strokeWidth="2.5" />
+          <circle
+            cx="9"
+            cy="9"
+            r={r}
+            fill="none"
+            stroke={tone}
+            strokeWidth="2.5"
+            strokeLinecap="round"
+            strokeDasharray={`${dash} ${circ}`}
+            className="transition-all duration-500"
+          />
+        </svg>
+      </button>
+
+      {/* Detail popover, anchored above the ring. Shown on tap (mobile) or
+          hover (desktop). */}
+      {open ? (
+        <div className="absolute bottom-full right-0 z-30 mb-2 w-60 origin-bottom-right">
+          <div className="rounded-[var(--radius-lg)] border border-border bg-popover p-3 shadow-lg">
+            <div className="flex items-baseline justify-between">
+              <span className="text-xs font-medium">{t('chat.contextLabel')}</span>
+              <span className="text-[11px] tabular-nums text-muted-foreground">
+                {ctxTokens(used)}/{ctxTokens(window)}{' '}
+                <span style={{ color: tone }}>({pct}%)</span>
+              </span>
+            </div>
+            <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-muted">
+              <div
+                className="h-full rounded-full transition-all duration-500"
+                style={{ width: `${pct === 0 ? 0 : Math.max(2, pct)}%`, backgroundColor: tone }}
+              />
+            </div>
+            <p className="mt-2 text-[10.5px] leading-relaxed text-muted-foreground">
+              {t('chat.contextHint')}
+            </p>
+          </div>
+        </div>
+      ) : null}
     </div>
   )
 }
@@ -1277,12 +1665,16 @@ export const MessageBubble = memo(function MessageBubble({
   message,
   askActive,
   onAnswer,
+  onEdit,
 }: {
   message: ChatMessage
   // Whether an ask_user question is still awaiting an answer. When false the
   // card locks (already answered, or the run ended).
   askActive?: boolean
   onAnswer?: (text: string) => void
+  // Edit this (user) message: re-send from here, optionally reverting file
+  // changes made since. Absent while streaming or for a local optimistic msg.
+  onEdit?: (id: string, content: string) => void
 }) {
   const { t } = useI18n()
   const timeAgo = useTimeAgo()
@@ -1328,10 +1720,25 @@ export const MessageBubble = memo(function MessageBubble({
           </div>
         ) : null}
         {message.content ? (
-          <div className="rounded-[var(--radius-md)] border-l-2 border-primary bg-muted/40 px-3.5 py-2.5">
+          <div className="group/user relative rounded-[var(--radius-md)] border-l-2 border-primary bg-muted/40 px-3.5 py-2.5">
             <p className="whitespace-pre-wrap break-words text-[13px] leading-relaxed text-foreground">
               {message.content}
             </p>
+            {/* Edit affordance: re-send the conversation from this message,
+                optionally reverting file changes made after it. Only when an
+                onEdit handler is wired and the message has a real (persisted) id
+                — a local optimistic id cannot be edited server-side yet. */}
+            {onEdit && !message.id.startsWith('local_') && !message.id.startsWith('you_') ? (
+              <button
+                onClick={() => onEdit(message.id, message.content)}
+                title={t('edit.button')}
+                aria-label={t('edit.button')}
+                className="absolute -top-2 right-2 hidden items-center gap-1 rounded-full border border-border bg-background px-2 py-0.5 text-[10px] text-muted-foreground shadow-sm transition-colors hover:text-foreground group-hover/user:flex"
+              >
+                <PencilSimple className="size-3" />
+                {t('edit.button')}
+              </button>
+            ) : null}
           </div>
         ) : null}
       </div>

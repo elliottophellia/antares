@@ -82,6 +82,9 @@ type Event struct {
 	InputTokens  int     `json:"input_tokens,omitempty"`
 	OutputTokens int     `json:"output_tokens,omitempty"`
 	Cost         float64 `json:"cost,omitempty"`
+	// ContextWindow is the active model's token budget, so the UI can show how
+	// full the context is (input tokens / window).
+	ContextWindow int `json:"context_window,omitempty"`
 
 	// error
 	Err string `json:"error,omitempty"`
@@ -118,12 +121,27 @@ type Request struct {
 	// Workspace overrides the working directory for this run, used by an
 	// isolated sub-agent running in its own worktree.
 	Workspace string
+	// ProjectDir, when set on a session's first turn, makes it a PROJECT
+	// session bound to that folder: the workspace becomes the project, writes
+	// are confined to the project (plus the antares workspace), reads are allowed
+	// anywhere, and the project's AGENTS.md/README are folded into the prompt.
+	// Persisted in the session's Meta; ignored on later turns of the same
+	// session (the session already carries it).
+	ProjectDir string
+	// IndexRAG, set with ProjectDir on a project session's first turn, opts the
+	// project into RAG: the folder is indexed into its own collection and that
+	// collection joins auto-context. Persisted in Meta as rag_indexed.
+	IndexRAG bool
 	// ContextInject is background context the agent should act on this turn —
 	// currently a finished sub-agent's result. It is fed to the model as new
 	// input (so the agent resumes and processes it), but it is NOT shown as a
 	// user message in the transcript: it is persisted hidden, so it reads as the
 	// agent simply continuing on its own rather than the user asking again.
 	ContextInject string
+	// turnMarker is the persisted user-message id for this turn, used to tag file
+	// checkpoints so an "edit message" rollback can revert exactly this turn's
+	// changes. Set internally by Run; not part of the public request.
+	turnMarker string
 }
 
 // Result summarises a completed run.
@@ -151,6 +169,8 @@ type Agent struct {
 	board    *board.Board
 
 	bg *bgManager
+	// bgAct tracks background-tool usage per session (RAG index/retrieve, etc.).
+	bgAct *bgActivity
 	// onBgDone is fired when a background sub-agent finishes, so the server can
 	// resume the delegating session with the result rather than the agent
 	// polling for it. Nil until the server registers it.
@@ -171,6 +191,7 @@ func New(cfg *config.Config, db store.Store, reg *tools.Registry, shell *tools.S
 		roleperf: roleperf.NewTracker(config.Path("role-performance.json")),
 		board:    board.New(config.Path("boards")),
 		bg:       newBGManager(),
+		bgAct:    newBgActivity(),
 		active:   map[string]context.CancelFunc{},
 	}
 }
@@ -234,6 +255,18 @@ func (a *Agent) Run(ctx context.Context, req Request, emit Emit) (*Result, error
 	if err != nil {
 		return nil, err
 	}
+	// A project binding is stored on the session, so it survives across turns even
+	// though the client only sends project_dir on the first message. Backfill the
+	// request from it so the rest of the turn — write confinement and any
+	// delegated sub-agents — sees the project regardless of which turn this is.
+	if pd, _ := sess.Meta["project_dir"].(string); strings.TrimSpace(pd) != "" {
+		req.ProjectDir = pd
+		// First turn of a project that opted into RAG: index the folder into its
+		// own collection in the background. IndexRAG is only set on turn one.
+		if req.IndexRAG {
+			a.indexProject(sess.ID, pd)
+		}
+	}
 
 	// A role folds its prompt, toolset, and model into the request. When the
 	// request names none, the session's stored role applies — set once with
@@ -276,6 +309,10 @@ func (a *Agent) Run(ctx context.Context, req Request, emit Emit) (*Result, error
 	// Persist the user turn before calling the model so a crash mid-run does not
 	// lose it. A pure context-inject turn (no user message) skips this — the note
 	// is added just below as hidden context, so there is no empty user bubble.
+	// turnMarker groups this turn's file checkpoints under the user message that
+	// opened it, so an "edit message" rollback can revert exactly the files this
+	// turn (and later ones) changed. It is the persisted user-message id.
+	turnMarker := ""
 	hasUserMsg := strings.TrimSpace(req.Message) != "" || len(req.Images) > 0
 	if hasUserMsg {
 		userMsg := llm.Message{Role: llm.RoleUser, Content: req.Message, Parts: req.Images}
@@ -286,8 +323,10 @@ func (a *Agent) Run(ctx context.Context, req Request, emit Emit) (*Result, error
 					attachments = string(b)
 				}
 			}
+			turnMarker = newID("msg")
+			req.turnMarker = turnMarker
 			if err := a.db.AppendMessage(ctx, &store.Message{
-				ID: newID("msg"), SessionID: sess.ID, Role: store.RoleUser,
+				ID: turnMarker, SessionID: sess.ID, Role: store.RoleUser,
 				Content: req.Message, Attachments: attachments,
 			}); err != nil {
 				slog.Warn("persist user message failed", "error", err)
@@ -406,6 +445,7 @@ func (a *Agent) Run(ctx context.Context, req Request, emit Emit) (*Result, error
 		if resp.Usage.InputTokens > 0 || resp.Usage.OutputTokens > 0 {
 			_ = emit(Event{
 				Type: EventUsage, InputTokens: total.InputTokens, OutputTokens: total.OutputTokens,
+				ContextWindow: a.contextWindowFor(modelName),
 			})
 			if !req.Quiet {
 				a.recordUsage(ctx, sess.ID, providerName, modelName, resp.Usage)
@@ -553,6 +593,9 @@ func (a *Agent) Run(ctx context.Context, req Request, emit Emit) (*Result, error
 		if len(failures) > 0 && strings.TrimSpace(lastReply) != "" {
 			go a.learnFromErrors(context.Background(), req.Message, lastReply, failures)
 		}
+		// Fold this exchange into the conversation memory so later turns and
+		// sessions can recall it. Non-blocking, best-effort.
+		a.indexTurn(sess, req.Message, lastReply)
 	}
 	_ = emit(Event{Type: EventDone})
 
@@ -682,13 +725,24 @@ func (a *Agent) executeTools(
 		if workspace == "" {
 			workspace = a.cfg.Agent.Workspace
 		}
+		// A project session confines writes to the project folder plus the
+		// antares workspace, while allowing reads anywhere. Empty for an
+		// ordinary session (reads and writes both stay in the workspace).
+		var writeRoots []string
+		if pd, _ := sess.Meta["project_dir"].(string); strings.TrimSpace(pd) != "" {
+			writeRoots = []string{pd}
+			if aw := a.cfg.Agent.Workspace; aw != "" && aw != pd {
+				writeRoots = append(writeRoots, aw)
+			}
+		}
 		in := tools.Input{
-			Args:      json.RawMessage(call.Arguments),
-			CallID:    call.ID,
-			SessionID: sess.ID,
-			UserID:    req.UserID,
-			Platform:  req.Platform,
-			Workspace: workspace,
+			Args:       json.RawMessage(call.Arguments),
+			CallID:     call.ID,
+			SessionID:  sess.ID,
+			UserID:     req.UserID,
+			Platform:   req.Platform,
+			Workspace:  workspace,
+			WriteRoots: writeRoots,
 			Emit: func(p tools.Progress) {
 				_ = safeEmit(Event{
 					Type: EventToolProgress, ID: call.ID, Name: call.Name,
@@ -699,7 +753,20 @@ func (a *Agent) executeTools(
 			Deps: &tools.Deps{
 				Config: a.cfg, Store: a.db, RAG: a.rag, Shell: a.shell,
 				Sub: a.subAgentFor(req), Tasks: a.backgroundFor(req), Skills: a.skillLibrary(),
-				Checkpoint: a.saveCheckpoint,
+				Checkpoint: func(sessionID, path, tool string) {
+					a.saveCheckpoint(sessionID, path, tool, req.turnMarker)
+				},
+				RecordResult: func(sessionID, path, resultHash string) {
+					if a.checks != nil {
+						_ = a.checks.RecordResult(sessionID, path, req.turnMarker, resultHash)
+					}
+					// Keep a RAG-indexed project's collection fresh: re-embed the
+					// file the agent just wrote. No-op unless this is an indexed
+					// project session and the file is inside it.
+					if indexed, _ := sess.Meta["rag_indexed"].(bool); indexed {
+						a.reindexFile(sess.ID, req.ProjectDir, path)
+					}
+				},
 				Roles:      a.roleInfos,
 				Vision:     a.describeImage,
 				Speak:      a.speak,
@@ -815,6 +882,17 @@ func (a *Agent) subAgentFor(parent Request) tools.SubAgent {
 		// the same repository do not conflict. When it cannot be set up, the
 		// sub-agent shares the workspace rather than failing.
 		workspace := sub.Workspace
+		// A sub-agent of a project session inherits the project: it works in the
+		// project folder and its writes stay confined there (plus the antares
+		// workspace), same as the parent. An isolated worktree opts out — it gets
+		// its own tree below.
+		projectDir := ""
+		if !sub.Isolate && strings.TrimSpace(parent.ProjectDir) != "" {
+			projectDir = parent.ProjectDir
+			if workspace == "" {
+				workspace = parent.ProjectDir
+			}
+		}
 		var wt *worktree.Worktree
 		if sub.Isolate {
 			base := firstNonEmpty(sub.Workspace, a.cfg.Agent.Workspace)
@@ -836,6 +914,7 @@ func (a *Agent) subAgentFor(parent Request) tools.SubAgent {
 			Model:       sub.Model,
 			Role:        sub.Role,
 			Workspace:   workspace,
+			ProjectDir:  projectDir,
 			MaxTurns:    sub.MaxTurns,
 			Platform:    "subagent",
 			UserID:      parent.UserID,

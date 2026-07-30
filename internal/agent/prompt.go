@@ -4,10 +4,12 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"time"
 
+	"github.com/enowdev/antares/internal/config"
 	"github.com/enowdev/antares/internal/engagement"
 	"github.com/enowdev/antares/internal/llm"
 	"github.com/enowdev/antares/internal/store"
@@ -23,6 +25,29 @@ func (a *Agent) buildSystemPrompt(ctx context.Context, req Request, sess *store.
 	b.WriteString("You are ")
 	b.WriteString(version.Display)
 	b.WriteString(", an autonomous AI agent that works on the user's behalf on their own machine.\n\n")
+
+	// The soul is the agent's chosen identity — name, persona, voice — set by the
+	// user (often via the first-conversation interview). It comes right after the
+	// base line so it colours everything below. When it is still unset, the agent
+	// is told to run that interview before getting to work.
+	soul := config.Soul()
+	b.WriteString("## Who you are\n\n")
+	b.WriteString(soul)
+	b.WriteString("\n")
+	if config.SoulIsUnset() && req.Platform != "subagent" {
+		b.WriteString(`
+You have not been given an identity yet. Before anything else this conversation,
+introduce yourself warmly and briefly — you have just "woken up" here and are
+curious. Ask the user, in a light and friendly way (a few questions, not an
+interrogation): what should they call you? who are they / what should you call
+them? how do they want you to talk (concise, detailed, formal, casual)? any
+personality, quirks, or principles they'd like you to have? Keep it short and
+cheerful. Once they have answered enough, call the set_soul tool to record it,
+then confirm your new name and carry on with whatever they actually asked. If the
+user clearly just wants to get straight to a task, offer to set this up later and
+help them now — do not block them.
+`)
+	}
 
 	b.WriteString(`## How you work
 
@@ -127,7 +152,93 @@ func (a *Agent) buildSystemPrompt(ctx context.Context, req Request, sess *store.
 		fmt.Fprintf(&b, "\n## Persona\n\n%s\n", p)
 	}
 
+	// Project session: fold in the project's own instructions and a map of it,
+	// and state the write boundary plainly so the model respects it.
+	if pd, _ := sess.Meta["project_dir"].(string); strings.TrimSpace(pd) != "" {
+		b.WriteString(projectBlock(pd, cfg.Agent.Workspace))
+	}
+
+	// Native RAG auto-context: relevant indexed knowledge and past conversation
+	// pulled for this turn. Best-effort — empty when RAG is off or nothing hits.
+	if block := a.autoContext(ctx, req, sess); block != "" {
+		b.WriteString(block)
+	}
+
 	return b.String()
+}
+
+// projectBlock builds the "## Project" section for a project session: the write
+// rule, the project's AGENTS.md/CLAUDE.md instructions, its README summary, and
+// a shallow listing of its top level.
+func projectBlock(projectDir, antaresWorkspace string) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "\n## Project\n\nThis is a PROJECT session bound to %s.\n", projectDir)
+	b.WriteString("- You may WRITE and edit files only inside this project")
+	if antaresWorkspace != "" && antaresWorkspace != projectDir {
+		fmt.Fprintf(&b, " (and the antares workspace %s)", antaresWorkspace)
+	}
+	b.WriteString(". Writing anywhere else is refused by the file tools.\n")
+	b.WriteString("- You may READ and copy files from anywhere on the machine.\n")
+	b.WriteString("- The terminal runs with its working directory in the project. Do not modify files outside the project from the shell either.\n")
+	b.WriteString("- Follow the project's own conventions below over your defaults.\n")
+	b.WriteString("- Keep the project sidebar current with the project_info tool: record the essential facts (summary, main languages/frameworks, a few key libraries, build/run commands) after you understand the project, and update them when the stack meaningfully changes. Keep each list short.\n")
+
+	// AGENTS.md / CLAUDE.md — the project's instructions to an agent.
+	for _, name := range []string{"AGENTS.md", "CLAUDE.md"} {
+		if txt := readCapped(filepath.Join(projectDir, name), 8000); txt != "" {
+			fmt.Fprintf(&b, "\n### %s\n\n%s\n", name, txt)
+		}
+	}
+	// README — project overview.
+	for _, name := range []string{"README.md", "readme.md", "README"} {
+		if txt := readCapped(filepath.Join(projectDir, name), 4000); txt != "" {
+			fmt.Fprintf(&b, "\n### README\n\n%s\n", txt)
+			break
+		}
+	}
+	// A shallow map of the top level so the agent orients without a list_files.
+	if tree := shallowTree(projectDir); tree != "" {
+		fmt.Fprintf(&b, "\n### Project layout (top level)\n\n%s\n", tree)
+	}
+	return b.String()
+}
+
+// readCapped returns a file's text truncated to max bytes, or "" if unreadable.
+func readCapped(path string, max int) string {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	if len(data) > max {
+		return strings.TrimSpace(string(data[:max])) + "\n… (truncated)"
+	}
+	return strings.TrimSpace(string(data))
+}
+
+// shallowTree lists the immediate entries of dir (dirs marked with a trailing
+// slash), skipping the noisy ones, so the prompt shows the project's shape.
+func shallowTree(dir string) string {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return ""
+	}
+	skip := map[string]bool{".git": true, "node_modules": true, ".DS_Store": true}
+	var out []string
+	for _, e := range entries {
+		if skip[e.Name()] {
+			continue
+		}
+		if e.IsDir() {
+			out = append(out, e.Name()+"/")
+		} else {
+			out = append(out, e.Name())
+		}
+		if len(out) >= 60 {
+			out = append(out, "…")
+			break
+		}
+	}
+	return strings.Join(out, "\n")
 }
 
 // methodologyBlock renders the live assessment state — which phases have

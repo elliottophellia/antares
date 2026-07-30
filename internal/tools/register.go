@@ -29,6 +29,8 @@ func init() {
 		speakTool{},
 		transcribeTool{},
 		boardTool{},
+		projectInfoTool{},
+		setSoulTool{},
 		computerTool{},
 		askUserTool{},
 		scheduleTool{},

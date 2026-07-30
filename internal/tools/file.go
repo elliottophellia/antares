@@ -2,6 +2,8 @@ package tools
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -15,43 +17,114 @@ import (
 const maxReadBytes = 400 * 1024
 
 // resolvePath joins a user-supplied path against the workspace and refuses to
-// escape it, which is the sandbox boundary for every file tool.
+// escape it, which is the sandbox boundary for every file tool. It is the
+// confined form: an ordinary (non-project) session uses it for both reads and
+// writes. Project sessions use resolveRead / resolveWrite instead.
 func resolvePath(workspace, p string) (string, error) {
+	clean, err := cleanPath(workspace, p)
+	if err != nil {
+		return "", err
+	}
+	if withinRoot(workspace, clean) {
+		return clean, nil
+	}
+	return "", fmt.Errorf("path %q is outside the workspace (%s)", p, workspace)
+}
+
+// cleanPath expands ~, joins a relative path onto workspace, and cleans it,
+// without any boundary check.
+func cleanPath(workspace, p string) (string, error) {
 	if strings.TrimSpace(p) == "" {
 		return "", errors.New("path is required")
 	}
 	if strings.HasPrefix(p, "~") {
-		home, err := os.UserHomeDir()
-		if err == nil {
+		if home, err := os.UserHomeDir(); err == nil {
 			p = filepath.Join(home, strings.TrimPrefix(p, "~"))
 		}
 	}
 	if !filepath.IsAbs(p) {
 		p = filepath.Join(workspace, p)
 	}
-	clean := filepath.Clean(p)
+	return filepath.Clean(p), nil
+}
 
-	root, err := filepath.Abs(workspace)
+// within reports whether clean resolves inside root (through symlinks).
+func withinRoot(root, clean string) bool {
+	r, err := filepath.Abs(root)
 	if err != nil {
-		return clean, nil
+		return false
 	}
 	abs, err := filepath.Abs(clean)
 	if err != nil {
+		return false
+	}
+	if real, err := filepath.EvalSymlinks(r); err == nil {
+		r = real
+	}
+	// A write target frequently does not exist yet (creating a new file, or a
+	// file in a new directory), so EvalSymlinks on the full path would fail and
+	// leave symlinks in the parent unresolved — on macOS the temp/root dirs are
+	// themselves symlinks, so an unresolved target then looks "outside" a
+	// resolved root. Resolve the deepest existing ancestor instead and re-append
+	// the missing tail, so the comparison is symlink-correct either way.
+	abs = evalExisting(abs)
+	rel, err := filepath.Rel(r, abs)
+	if err != nil {
+		return false
+	}
+	return rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+}
+
+// evalExisting resolves symlinks over the longest existing prefix of p and
+// re-joins the not-yet-created tail, so paths that point at files or dirs that
+// do not exist yet still compare correctly against a symlink-resolved root.
+func evalExisting(p string) string {
+	tail := ""
+	cur := p
+	for {
+		if real, err := filepath.EvalSymlinks(cur); err == nil {
+			return filepath.Join(real, tail)
+		}
+		parent := filepath.Dir(cur)
+		if parent == cur {
+			// Reached the root without finding an existing ancestor.
+			return p
+		}
+		tail = filepath.Join(filepath.Base(cur), tail)
+		cur = parent
+	}
+}
+
+// resolveRead resolves a path for a READ. In a project session (WriteRoots set)
+// reads are allowed anywhere on the machine, so the agent can read and copy
+// files from outside the project. In an ordinary session reads stay confined to
+// the workspace, exactly as before.
+func resolveRead(in Input, p string) (string, error) {
+	if len(in.WriteRoots) == 0 {
+		return resolvePath(in.Workspace, p)
+	}
+	return cleanPath(in.Workspace, p)
+}
+
+// resolveWrite resolves a path for a WRITE and confines it to the allowed roots.
+// An ordinary session confines to the workspace; a project session confines to
+// its WriteRoots (the project folder plus the antares workspace). Writing
+// anywhere else is refused — this is a hard boundary the model cannot cross.
+func resolveWrite(in Input, p string) (string, error) {
+	if len(in.WriteRoots) == 0 {
+		return resolvePath(in.Workspace, p)
+	}
+	clean, err := cleanPath(in.Workspace, p)
+	if err != nil {
 		return "", err
 	}
-	// Compare through resolved symlinks where possible so /tmp -> /private/tmp
-	// style aliases do not read as escapes.
-	if realRoot, err := filepath.EvalSymlinks(root); err == nil {
-		root = realRoot
+	for _, root := range in.WriteRoots {
+		if strings.TrimSpace(root) != "" && withinRoot(root, clean) {
+			return clean, nil
+		}
 	}
-	if realAbs, err := filepath.EvalSymlinks(abs); err == nil {
-		abs = realAbs
-	}
-	rel, err := filepath.Rel(root, abs)
-	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		return "", fmt.Errorf("path %q is outside the workspace (%s)", p, workspace)
-	}
-	return clean, nil
+	return "", fmt.Errorf("path %q is outside this project — writes are only allowed inside %s (reads and copies from elsewhere are fine)",
+		p, strings.Join(in.WriteRoots, ", "))
 }
 
 func relTo(workspace, p string) string {
@@ -86,7 +159,7 @@ func (readFileTool) Execute(_ context.Context, in Input) Result {
 	if err := in.Bind(&args); err != nil {
 		return Errorf("%v", err)
 	}
-	path, err := resolvePath(in.Workspace, args.Path)
+	path, err := resolveRead(in, args.Path)
 	if err != nil {
 		return Errorf("%v", err)
 	}
@@ -168,7 +241,7 @@ func (writeFileTool) Execute(_ context.Context, in Input) Result {
 	if err := in.Bind(&args); err != nil {
 		return Errorf("%v", err)
 	}
-	path, err := resolvePath(in.Workspace, args.Path)
+	path, err := resolveWrite(in, args.Path)
 	if err != nil {
 		return Errorf("%v", err)
 	}
@@ -238,7 +311,7 @@ func (editFileTool) Execute(_ context.Context, in Input) Result {
 	if args.OldString == args.NewString {
 		return Errorf("old_string and new_string are identical")
 	}
-	path, err := resolvePath(in.Workspace, args.Path)
+	path, err := resolveWrite(in, args.Path)
 	if err != nil {
 		return Errorf("%v", err)
 	}
@@ -314,7 +387,7 @@ func (listFilesTool) Execute(_ context.Context, in Input) Result {
 	if args.Depth <= 0 {
 		args.Depth = 3
 	}
-	root, err := resolvePath(in.Workspace, args.Path)
+	root, err := resolveRead(in, args.Path)
 	if err != nil {
 		return Errorf("%v", err)
 	}
@@ -400,5 +473,14 @@ func writeWithCheckpoint(in Input, path string, content []byte, tool string) err
 	if in.Deps != nil && in.Deps.Checkpoint != nil {
 		in.Deps.Checkpoint(in.SessionID, path, tool)
 	}
-	return os.WriteFile(path, content, 0o644)
+	if err := os.WriteFile(path, content, 0o644); err != nil {
+		return err
+	}
+	// Record what we just wrote, so an edit-message rollback can distinguish our
+	// own output from a later manual edit of the same file.
+	if in.Deps != nil && in.Deps.RecordResult != nil {
+		sum := sha256.Sum256(content)
+		in.Deps.RecordResult(in.SessionID, path, hex.EncodeToString(sum[:]))
+	}
+	return nil
 }

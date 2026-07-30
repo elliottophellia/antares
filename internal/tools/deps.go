@@ -19,7 +19,7 @@ type RAGResult struct {
 	Score   float64 `json:"score"`
 }
 
-// RAGProvider is the retrieval backend (builtin vector store or enowx-rag).
+// RAGProvider is the native retrieval backend (vectors in the Antares DB).
 type RAGProvider interface {
 	Name() string
 	Search(ctx context.Context, collection, query string, topK int) ([]RAGResult, error)
@@ -125,6 +125,10 @@ type Deps struct {
 	// Checkpoint saves a copy of a file about to be changed. It may be nil,
 	// in which case nothing is kept and an edit cannot be undone.
 	Checkpoint func(sessionID, path, tool string)
+	// RecordResult notes the sha256 of what a tool just wrote to a file, so a
+	// later rollback can tell session-produced content from an outside edit. Nil
+	// when checkpoints are off.
+	RecordResult func(sessionID, path, resultHash string)
 	// Roles lists the specialist roles available for delegation. It may be nil.
 	Roles func() []RoleInfo
 	// Vision describes an image using a vision model. It may be nil.

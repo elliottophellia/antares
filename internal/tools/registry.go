@@ -27,6 +27,12 @@ type Input struct {
 	UserID    string
 	Platform  string
 	Workspace string
+	// WriteRoots, when non-empty, marks this a project session: file writes are
+	// confined to these directories (the project folder plus the antares
+	// workspace), while reads are allowed anywhere on the machine so the agent
+	// can read and copy from outside. Empty = an ordinary session, where reads
+	// and writes are both confined to Workspace.
+	WriteRoots []string
 	// Emit reports progress; it is never nil.
 	Emit func(Progress)
 	// AskUser blocks the current turn to put questions to the person and returns
@@ -197,7 +203,7 @@ var Toolsets = map[string][]string{
 	"minimal": {"read_file", "list_files", "grep", "todo"},
 	"coding": {
 		"read_file", "read_document", "write_file", "edit_file", "list_files", "glob", "grep",
-		"terminal", "todo", "board", "skill", "delegate_task", "task", "list_roles", "diagnostics", "http_request", "ask_user", "schedule",
+		"terminal", "todo", "board", "project_info", "set_soul", "skill", "delegate_task", "task", "list_roles", "diagnostics", "http_request", "ask_user", "schedule",
 	},
 	"research": {
 		"read_file", "read_document", "web_search", "web_fetch", "http_request", "browser", "grep", "todo", "memory",
@@ -233,7 +239,7 @@ var Toolsets = map[string][]string{
 	},
 	"default": {
 		"read_file", "read_document", "write_file", "edit_file", "list_files", "glob", "grep",
-		"terminal", "web_search", "web_fetch", "http_request", "browser", "todo", "board", "memory", "list_proxies", "vps_run",
+		"terminal", "web_search", "web_fetch", "http_request", "browser", "todo", "board", "project_info", "set_soul", "memory", "list_proxies", "vps_run",
 		"session_search", "rag_search", "rag_index", "skill", "delegate_task", "task", "list_roles", "image_generate", "view_image", "speak", "transcribe", "computer", "diagnostics", "ask_user", "schedule",
 		"osint_dns", "osint_dorks", "osint_whois", "osint_ip", "osint_username", "osint_github", "osint_email", "osint_email_full", "osint_breach", "osint_shodan", "osint_reputation", "osint_crypto", "osint_domain", "osint_phone", "osint_scrape", "osint_paste", "osint_footprint", "osint_pivot", "osint_google", "osint_dorks_live", "check_dependencies", "re_info", "re_strings", "re_analyze", "re_decompile", "solve_captcha", "intercept",
 	},

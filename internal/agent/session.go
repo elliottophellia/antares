@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/enowdev/antares/internal/config"
 	"github.com/enowdev/antares/internal/llm"
 	"github.com/enowdev/antares/internal/store"
 )
@@ -38,6 +39,16 @@ func (a *Agent) resolveSession(ctx context.Context, req *Request) (*store.Sessio
 		Provider:  a.cfg.Model.Provider,
 		Workspace: firstNonEmpty(req.Workspace, a.cfg.Agent.Workspace),
 		Meta:      store.Meta{},
+	}
+	// A project session binds to a chosen folder: the workspace becomes the
+	// project (so the terminal, reads, and relative paths all centre on it), and
+	// the project dir is recorded in Meta so later turns and the UI know it.
+	if pd := strings.TrimSpace(config.Expand(req.ProjectDir)); pd != "" {
+		sess.Workspace = pd
+		sess.Meta["project_dir"] = pd
+		if req.IndexRAG {
+			sess.Meta["rag_indexed"] = true
+		}
 	}
 	if req.Quiet {
 		// Sub-agent runs are ephemeral: keep the session in memory only.
@@ -153,7 +164,10 @@ func (a *Agent) maybeTitle(ctx context.Context, sess *store.Session, userMsg, re
 		return
 	}
 	sess.Title = title
-	if err := a.db.UpdateSession(ctx, sess); err != nil {
+	// Save ONLY the title. Using UpdateSession here would write the whole row
+	// from this in-memory struct, whose Meta was loaded at turn start — clobbering
+	// any meta a tool wrote mid-turn (e.g. project_info). See session-counter bug.
+	if err := a.db.SetSessionTitle(ctx, sess.ID, title); err != nil {
 		slog.Debug("update session title failed", "error", err)
 	}
 }
@@ -253,8 +267,9 @@ func minInt(a, b int) int {
 	return b
 }
 
-// touchSession refreshes the updated_at stamp without other changes.
+// touchSession refreshes the updated_at stamp without other changes. It writes
+// only that column so it cannot clobber meta/title a tool changed mid-turn.
 func (a *Agent) touchSession(ctx context.Context, sess *store.Session) {
 	sess.UpdatedAt = time.Now()
-	_ = a.db.UpdateSession(ctx, sess)
+	_ = a.db.TouchSession(ctx, sess.ID)
 }
