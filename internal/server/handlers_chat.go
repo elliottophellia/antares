@@ -97,6 +97,11 @@ type chatRequest struct {
 	Model     string   `json:"model"`
 	Toolset   string   `json:"toolset"`
 	UserID    string   `json:"user_id"`
+	// ProjectDir turns a NEW session into a project session bound to this folder.
+	// Only read on the session's first turn; ignored once the session exists.
+	ProjectDir string `json:"project_dir"`
+	// IndexRAG opts a new project session into RAG indexing + retrieval.
+	IndexRAG bool `json:"index_rag"`
 }
 
 // handleChat streams a full agent turn as server-sent events.
@@ -155,8 +160,10 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		Role:      req.Role,
 		Platform:  "web",
 		UserID:    req.UserID,
-		Model:     req.Model,
-		Toolset:   req.Toolset,
+		Model:      req.Model,
+		Toolset:    req.Toolset,
+		ProjectDir: req.ProjectDir,
+		IndexRAG:   req.IndexRAG,
 	}
 
 	// The turn is driven on a background context so it survives this request:
@@ -322,6 +329,78 @@ func (s *Server) handleGetSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"session": sess, "messages": messages})
+}
+
+// handleEditPreview lists the files the agent changed at/after a given user
+// message, so the "edit message" UI can ask whether to revert them. The message
+// id doubles as the checkpoint marker for its turn.
+func (s *Server) handleEditPreview(w http.ResponseWriter, r *http.Request) {
+	sessionID := r.PathValue("id")
+	msgID := strings.TrimSpace(r.URL.Query().Get("message_id"))
+	if msgID == "" {
+		writeError(w, http.StatusBadRequest, errors.New("message_id is required"))
+		return
+	}
+	changes, err := s.agent.PreviewChangesSince(sessionID, msgID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"changes": changes})
+}
+
+// handleEditMessage applies an edit: it optionally reverts the files changed
+// since the edited message, then drops that message and everything after it.
+// The dashboard follows up by sending the edited text as a new message, so the
+// conversation resumes from that point.
+func (s *Server) handleEditMessage(w http.ResponseWriter, r *http.Request) {
+	sessionID := r.PathValue("id")
+	var body struct {
+		MessageID string `json:"message_id"`
+		Revert    bool   `json:"revert"`
+	}
+	if err := decodeBody(r, &body); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	if strings.TrimSpace(body.MessageID) == "" {
+		writeError(w, http.StatusBadRequest, errors.New("message_id is required"))
+		return
+	}
+
+	var reverted, skipped []string
+	if body.Revert {
+		// Skip files edited outside the session, per the product decision.
+		res, err := s.agent.RollbackSince(sessionID, body.MessageID, true)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+		reverted = append(append([]string{}, res.Restored...), res.Deleted...)
+		for p := range res.Failed {
+			skipped = append(skipped, p)
+		}
+	}
+
+	if err := s.db.DeleteMessagesFrom(r.Context(), sessionID, body.MessageID); err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ok":       true,
+		"reverted": reverted,
+		"skipped":  skipped,
+	})
+}
+
+// handleBackgroundActivity reports the background-tool usage for a session (RAG
+// index/retrieve, etc.) — the actions that never appear in the transcript as
+// model tool calls. The sidebar's Tools panel shows these next to the
+// transcript-derived counts.
+func (s *Server) handleBackgroundActivity(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]any{
+		"activity": s.agent.BackgroundActivity(r.PathValue("id")),
+	})
 }
 
 func (s *Server) handleDeleteSession(w http.ResponseWriter, r *http.Request) {

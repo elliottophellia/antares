@@ -100,7 +100,7 @@ export function ModelPicker() {
         className="flex h-8 items-center gap-1.5 rounded-[var(--radius-md)] border border-border bg-card px-2.5 text-xs transition-colors hover:border-primary/40"
       >
         <Cpu className="size-3.5 shrink-0 text-muted-foreground" />
-        <span className="max-w-32 truncate">{activeLabel}</span>
+        <span className="hidden max-w-32 truncate sm:inline">{activeLabel}</span>
         <CaretDown className="size-3 shrink-0 text-muted-foreground" />
       </button>
 

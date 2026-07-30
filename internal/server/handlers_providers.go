@@ -38,6 +38,26 @@ func (s *Server) handleProviderModelInfo(w http.ResponseWriter, r *http.Request)
 	writeJSON(w, http.StatusOK, map[string]any{"found": false})
 }
 
+// handleContextWindow reports the active model's token budget, so the composer's
+// context gauge can show "0 / <window>" before the first turn (usage events
+// carry the window once a turn runs, but not before one has). Mirrors the
+// agent's own resolution: per-model provider meta, then the configured window,
+// then a sane default.
+func (s *Server) handleContextWindow(w http.ResponseWriter, r *http.Request) {
+	cfg := s.config()
+	window := 128000
+	if cfg.Model.ContextWindow > 0 {
+		window = cfg.Model.ContextWindow
+	}
+	for _, p := range cfg.Providers {
+		if m, ok := p.ModelMeta[cfg.Model.Default]; ok && m.ContextWindow > 0 {
+			window = m.ContextWindow
+			break
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"context_window": window, "model": cfg.Model.Default})
+}
+
 // handleAddProviderModel adds a model id to providers.<id>.models, with an
 // optional context window stored in model_meta. Manually added models then
 // appear in the model list alongside auto-discovered ones (see agent.Models).

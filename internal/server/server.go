@@ -252,8 +252,13 @@ func (s *Server) withAuth(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
-		// Health and status stay reachable so the UI can report "needs token".
-		if r.URL.Path == "/api/health" {
+		// Health stays reachable so the UI can report "needs token". The dashboard
+		// auth endpoints are also exempt: a browser authenticates with the
+		// dashboard PASSWORD (a cookie), not the bearer token, so it must reach
+		// login/status/logout without already holding the token. The password
+		// login then gates the rest of the dashboard via withDashboardAuth.
+		switch r.URL.Path {
+		case "/api/health", "/api/auth/status", "/api/auth/login", "/api/auth/logout", "/api/auth/password":
 			next.ServeHTTP(w, r)
 			return
 		}

@@ -37,9 +37,15 @@ func (s *Server) withDashboardAuth(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
-		// Endpoints the login flow and liveness checks must reach unauthenticated.
+		// Endpoints the login flow and liveness/readiness checks must reach
+		// unauthenticated. /api/auth/password does its own authorization (it must
+		// accept the current password to change it). /api/status and
+		// /api/setup/status are non-sensitive readiness checks the setup gate and
+		// status pill read before a login can happen.
 		switch r.URL.Path {
-		case "/api/health", "/api/auth/login", "/api/auth/logout", "/api/auth/status":
+		case "/api/health", "/api/status",
+			"/api/auth/login", "/api/auth/logout", "/api/auth/status", "/api/auth/password",
+			"/api/setup/status":
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -171,6 +177,53 @@ func (s *Server) handleAuthLogout(w http.ResponseWriter, r *http.Request) {
 		MaxAge:   -1,
 	})
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+// handleAuthSetPassword sets or changes the dashboard password (or clears it).
+// Setting the FIRST password is allowed while the dashboard is still open. Once
+// a password exists, changing or clearing it requires proving you already hold
+// it — either a valid login session or the current password — so a drive-by
+// request cannot take over or unlock a protected dashboard.
+func (s *Server) handleAuthSetPassword(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Current  string `json:"current"`  // required once a password is already set
+		Password string `json:"password"` // new password; empty clears (removes) it
+	}
+	if err := decodeBody(r, &body); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	cfg := s.config()
+	if cfg.Server.DashboardLocked() {
+		authorized := s.dashSessionValid(r) || config.CheckPassword(cfg.Server.DashboardPasswordHash, body.Current)
+		if !authorized {
+			writeError(w, http.StatusUnauthorized, errors.New("current password required"))
+			return
+		}
+	}
+
+	next := strings.TrimSpace(body.Password)
+	if next == "" {
+		cfg.Server.DashboardPasswordHash = ""
+	} else {
+		hash, err := config.HashPassword(next)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+		cfg.Server.DashboardPasswordHash = hash
+	}
+	if err := config.Save(cfg); err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	if err := s.applyReload(); err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	// Any old login must not outlive a password change; the caller re-logs in.
+	s.invalidateDashSessions()
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "locked": cfg.Server.DashboardLocked()})
 }
 
 // invalidateDashSessions drops every active dashboard session. Call after the

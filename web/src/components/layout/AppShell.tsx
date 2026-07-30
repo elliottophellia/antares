@@ -8,6 +8,7 @@ import { NAV_LABELS, PRIMARY_ROUTES, ROUTES, routeFor } from '@/lib/routes'
 import { Button } from '@/components/ui/button'
 import { TooltipProvider } from '@/components/ui/primitives'
 import { StatusPill } from '@/components/layout/StatusPill'
+import { UpdateBanner } from '@/components/layout/UpdateBanner'
 import { PageChromeProvider, usePageChrome } from '@/components/layout/PageChrome'
 import { ErrorBoundary } from '@/components/layout/ErrorBoundary'
 import { SkeletonList, SkeletonStats } from '@/components/ui/skeleton'
@@ -101,6 +102,7 @@ function SidebarFooter() {
   const { t } = useI18n()
   return (
     <div className="space-y-1 border-t border-border p-3">
+      <UpdateBanner />
       <StatusPill />
       <LanguagePicker />
       <Button

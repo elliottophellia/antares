@@ -7,6 +7,7 @@ import {
   EyeSlash,
   FloppyDisk,
   GoogleLogo,
+  Lock,
   MagnifyingGlass,
   Sparkle,
   Warning,
@@ -293,6 +294,10 @@ export default function ConfigPage() {
 
                 {section === 'osint' ? (
                   <GoogleOsintCard cookieEdited={edits['osint.google_cookie'] as string | undefined} />
+                ) : null}
+
+                {section === 'server' || section === ESSENTIALS ? (
+                  <DashboardPasswordCard />
                 ) : null}
 
                 {visible.length === 0 ? (
@@ -706,6 +711,128 @@ function GoogleOsintCard({ cookieEdited }: { cookieEdited?: string }) {
           </ol>
           <p className="mt-2">{t('osintg.note')}</p>
         </div>
+      </CardContent>
+    </Card>
+  )
+}
+
+/**
+ * Set, change, or remove the dashboard password from Config — the same lock that
+ * onboarding offers, reachable later. The plaintext is hashed server-side; only
+ * the hash is ever stored. Changing an existing password requires the current
+ * one (unless a live login session already proves it), matching the backend.
+ */
+function DashboardPasswordCard() {
+  const { t } = useI18n()
+  const status = useApi<{ password_required?: boolean }>('/auth/status')
+  const locked = !!status.data?.password_required
+
+  const [current, setCurrent] = useState('')
+  const [next, setNext] = useState('')
+  const [confirm, setConfirm] = useState('')
+  const [show, setShow] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const [done, setDone] = useState<string>()
+  const [error, setError] = useState<string>()
+
+  const submit = async (clear: boolean) => {
+    setError(undefined)
+    setDone(undefined)
+    if (!clear) {
+      if (!next) return setError(t('dashpw.errEmpty'))
+      if (next !== confirm) return setError(t('dashpw.errMismatch'))
+    }
+    setBusy(true)
+    try {
+      await post('/auth/password', { current, password: clear ? '' : next })
+      setCurrent('')
+      setNext('')
+      setConfirm('')
+      setDone(clear ? t('dashpw.cleared') : t('dashpw.saved'))
+      status.reload()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2">
+          <Lock className="size-4 text-primary" weight="fill" />
+          {t('dashpw.title')}
+        </CardTitle>
+        <CardDescription>
+          {locked ? t('dashpw.descLocked') : t('dashpw.descOpen')}
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        {locked ? (
+          <div className="space-y-1.5">
+            <Label htmlFor="dashpw-current">{t('dashpw.current')}</Label>
+            <Input
+              id="dashpw-current"
+              type={show ? 'text' : 'password'}
+              value={current}
+              onChange={(e) => setCurrent(e.target.value)}
+              autoComplete="current-password"
+              placeholder="••••••••"
+            />
+          </div>
+        ) : null}
+
+        <div className="space-y-1.5">
+          <Label htmlFor="dashpw-new">{locked ? t('dashpw.new') : t('dashpw.password')}</Label>
+          <div className="relative">
+            <Input
+              id="dashpw-new"
+              type={show ? 'text' : 'password'}
+              value={next}
+              onChange={(e) => setNext(e.target.value)}
+              autoComplete="new-password"
+              placeholder="••••••••"
+            />
+            <button
+              type="button"
+              onClick={() => setShow((v) => !v)}
+              className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+              aria-label={t('config.reveal')}
+            >
+              {show ? <EyeSlash className="size-4" /> : <Eye className="size-4" />}
+            </button>
+          </div>
+        </div>
+
+        <div className="space-y-1.5">
+          <Label htmlFor="dashpw-confirm">{t('dashpw.confirm')}</Label>
+          <Input
+            id="dashpw-confirm"
+            type={show ? 'text' : 'password'}
+            value={confirm}
+            onChange={(e) => setConfirm(e.target.value)}
+            onKeyDown={(e) => e.key === 'Enter' && submit(false)}
+            autoComplete="new-password"
+            placeholder="••••••••"
+          />
+        </div>
+
+        {error ? <p className="text-xs text-[var(--destructive)]">{error}</p> : null}
+        {done ? <p className="text-xs text-[var(--success)]">{done}</p> : null}
+
+        <div className="flex flex-wrap items-center gap-2">
+          <Button size="sm" onClick={() => submit(false)} loading={busy} className="gap-1.5">
+            <FloppyDisk className="size-4" />
+            {locked ? t('dashpw.change') : t('dashpw.set')}
+          </Button>
+          {locked ? (
+            <Button size="sm" variant="outline" onClick={() => submit(true)} disabled={busy}>
+              {t('dashpw.remove')}
+            </Button>
+          ) : null}
+        </div>
+        <p className="text-[11px] leading-relaxed text-muted-foreground">{t('dashpw.note')}</p>
       </CardContent>
     </Card>
   )

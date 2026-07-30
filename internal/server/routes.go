@@ -53,16 +53,28 @@ func (s *Server) routes() {
 	m.HandleFunc("GET /api/sessions/{id}/role", s.handleSessionRole)
 	m.HandleFunc("DELETE /api/sessions/{id}", s.handleDeleteSession)
 	m.HandleFunc("POST /api/sessions/{id}/title", s.handleRenameSession)
+	m.HandleFunc("GET /api/sessions/{id}/bg-activity", s.handleBackgroundActivity)
+	m.HandleFunc("GET /api/sessions/{id}/edit-preview", s.handleEditPreview)
+	m.HandleFunc("POST /api/sessions/{id}/edit", s.handleEditMessage)
 
 	// Dashboard login (web-only; TUI and gateways are unaffected)
 	m.HandleFunc("GET /api/auth/status", s.handleAuthStatus)
 	m.HandleFunc("POST /api/auth/login", s.handleAuthLogin)
 	m.HandleFunc("POST /api/auth/logout", s.handleAuthLogout)
+	m.HandleFunc("POST /api/auth/password", s.handleAuthSetPassword)
 
 	// Setup / onboarding
 	m.HandleFunc("GET /api/setup/status", s.handleSetupStatus)
 	m.HandleFunc("POST /api/setup/test", s.handleSetupTest)
 	m.HandleFunc("POST /api/setup/complete", s.handleSetupComplete)
+
+	// Soul — the agent's identity (SOUL.md)
+	m.HandleFunc("GET /api/soul", s.handleGetSoul)
+	m.HandleFunc("POST /api/soul", s.handleSaveSoul)
+
+	// Update — check for a newer release and run the in-place upgrade.
+	m.HandleFunc("GET /api/update/check", s.handleUpdateCheck)
+	m.HandleFunc("POST /api/update/run", s.handleUpdateRun)
 
 	// Config
 	m.HandleFunc("GET /api/config", s.handleGetConfig)
@@ -73,6 +85,7 @@ func (s *Server) routes() {
 
 	// Models & providers
 	m.HandleFunc("GET /api/model/options", s.handleModelOptions)
+	m.HandleFunc("GET /api/context-window", s.handleContextWindow)
 	m.HandleFunc("GET /api/model/list", s.handleModelList)
 	m.HandleFunc("GET /api/model/list-all", s.handleModelListAll)
 	m.HandleFunc("POST /api/model/set", s.handleModelSet)
@@ -111,6 +124,19 @@ func (s *Server) routes() {
 	m.HandleFunc("GET /api/files", s.handleListFiles)
 	m.HandleFunc("GET /api/files/read", s.handleReadFile)
 	m.HandleFunc("GET /api/files/raw", s.handleRawFile)
+
+	// Project sessions: browse the machine's directories for the folder picker.
+	m.HandleFunc("GET /api/project/browse", s.handleBrowseDirs)
+	m.HandleFunc("GET /api/project/complete", s.handleCompleteDir)
+	// Project sidebar: environment (.env) viewer/editor and plan viewer.
+	m.HandleFunc("GET /api/project/env", s.handleProjectEnv)
+	m.HandleFunc("POST /api/project/env", s.handleSaveProjectEnv)
+	m.HandleFunc("GET /api/project/plan", s.handleProjectPlan)
+	// Project sidebar: git status, runnable scripts, file tree.
+	m.HandleFunc("POST /api/project/index-rag", s.handleIndexProject)
+	m.HandleFunc("GET /api/project/git", s.handleProjectGit)
+	m.HandleFunc("GET /api/project/scripts", s.handleProjectScripts)
+	m.HandleFunc("GET /api/project/tree", s.handleProjectTree)
 
 	// Skills
 	m.HandleFunc("GET /api/skills", s.handleListSkills)

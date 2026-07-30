@@ -94,7 +94,9 @@ export function RolePicker({
         )}
       >
         <UsersThree className={cn('shrink-0 text-muted-foreground', compact ? 'size-3.5' : 'size-4')} />
-        <span className="max-w-28 truncate">{current ? current.title : t('roles.orchestrator')}</span>
+        <span className="hidden max-w-28 truncate sm:inline">
+          {current ? current.title : t('roles.orchestrator')}
+        </span>
         <CaretDown className="size-3 shrink-0 text-muted-foreground" />
       </button>
 

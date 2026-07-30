@@ -1,13 +1,13 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
-import { ChatCircleDots, Broom, MagnifyingGlass, Trash } from '@phosphor-icons/react'
+import { ChatCircleDots, Broom, FolderOpen, MagnifyingGlass, Trash } from '@phosphor-icons/react'
 import { del, get, post } from '@/lib/api'
 import { useApi } from '@/lib/hooks'
 import { formatCount } from '@/lib/utils'
 import { PageLayout } from '@/components/layout/PageLayout'
 import { Pagination } from '@/components/ui/Pagination'
 import { Button } from '@/components/ui/button'
-import { Badge, Card, EmptyState, Input } from '@/components/ui/primitives'
+import { Badge, Card, EmptyState, Input, Tabs, TabsList, TabsTrigger } from '@/components/ui/primitives'
 import { SkeletonList } from '@/components/ui/skeleton'
 import { useI18n, useTimeAgo } from '@/lib/i18n'
 import { usePageActions } from '@/components/layout/PageChrome'
@@ -21,6 +21,7 @@ interface Session {
   tokens_in: number
   tokens_out: number
   updated_at: string
+  meta?: { project_dir?: string } | null
 }
 
 interface SessionList {
@@ -45,6 +46,7 @@ export default function SessionsPage() {
   const [busy, setBusy] = useState(false)
   const [hits, setHits] = useState<SearchHit[] | null>(null)
   const [offset, setOffset] = useState(0)
+  const [tab, setTab] = useState<'chat' | 'project'>('chat')
   const PAGE = 20
 
   const { data, loading, reload } = useApi<SessionList>('/sessions?limit=100')
@@ -69,15 +71,26 @@ export default function SessionsPage() {
     }
   }, [debounced])
 
-  const sessions = useMemo(() => {
+  const isProject = (s: Session) => Boolean(s.meta?.project_dir)
+
+  // Counts per tab, before the search/text filter, so the tab labels are stable.
+  const counts = useMemo(() => {
     const all = data?.sessions ?? []
+    let project = 0
+    for (const s of all) if (isProject(s)) project++
+    return { chat: all.length - project, project }
+  }, [data])
+
+  const sessions = useMemo(() => {
+    let all = data?.sessions ?? []
+    all = all.filter((s) => (tab === 'project' ? isProject(s) : !isProject(s)))
     if (!debounced) return all
     const q = debounced.toLowerCase()
     return all.filter((s) => s.title.toLowerCase().includes(q))
-  }, [data, debounced])
+  }, [data, debounced, tab])
 
   // Reset to the first page whenever the filter changes the result set.
-  useEffect(() => setOffset(0), [debounced])
+  useEffect(() => setOffset(0), [debounced, tab])
   const paged = sessions.slice(offset, offset + PAGE)
 
   const removeSession = async (id: string) => {
@@ -122,14 +135,26 @@ export default function SessionsPage() {
   return (
     <PageLayout
       header={
-        <div className="relative">
-          <MagnifyingGlass className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
-          <Input
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            placeholder={t('sessions.searchPlaceholder')}
-            className="pl-9"
-          />
+        <div className="space-y-3">
+          <Tabs value={tab} onValueChange={(v) => setTab(v as 'chat' | 'project')}>
+            <TabsList>
+              <TabsTrigger value="chat" className="gap-1.5">
+                <ChatCircleDots className="size-3.5" /> {t('sessions.tabChat')} ({counts.chat})
+              </TabsTrigger>
+              <TabsTrigger value="project" className="gap-1.5">
+                <FolderOpen className="size-3.5" /> {t('sessions.tabProject')} ({counts.project})
+              </TabsTrigger>
+            </TabsList>
+          </Tabs>
+          <div className="relative">
+            <MagnifyingGlass className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+            <Input
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder={t('sessions.searchPlaceholder')}
+              className="pl-9"
+            />
+          </div>
         </div>
       }
       footer={
@@ -164,9 +189,9 @@ export default function SessionsPage() {
         <SkeletonList count={6} />
       ) : sessions.length === 0 ? (
         <EmptyState
-          icon={<ChatCircleDots className="size-8" />}
-          title={t('sessions.none')}
-          description={t('sessions.noneDesc')}
+          icon={tab === 'project' ? <FolderOpen className="size-8" /> : <ChatCircleDots className="size-8" />}
+          title={tab === 'project' ? t('sessions.noneProject') : t('sessions.none')}
+          description={tab === 'project' ? t('sessions.noneProjectDesc') : t('sessions.noneDesc')}
           action={
             <Button size="sm" onClick={() => navigate('/')}>
               {t('sessions.startChat')}
@@ -175,12 +200,26 @@ export default function SessionsPage() {
         />
       ) : (
         <div className="space-y-2">
-          {paged.map((s) => (
+          {paged.map((s) => {
+            const projectName = s.meta?.project_dir
+              ? s.meta.project_dir.split('/').filter(Boolean).pop()
+              : ''
+            return (
             <Card key={s.id} className="group flex items-center gap-3 p-3.5 transition-colors hover:border-primary/40">
               <Link to={`/c/${s.id}`} className="min-w-0 flex-1">
                 <p className="truncate text-sm font-medium">{s.title || t('sessions.untitled')}</p>
                 <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-muted-foreground">
-                  <Badge variant="outline">{s.platform}</Badge>
+                  {projectName ? (
+                    <span
+                      className="inline-flex items-center gap-1 rounded-full border border-primary/40 bg-primary/5 px-1.5 py-0.5 text-primary"
+                      title={s.meta?.project_dir}
+                    >
+                      <FolderOpen className="size-3" />
+                      {projectName}
+                    </span>
+                  ) : (
+                    <Badge variant="outline">{s.platform}</Badge>
+                  )}
                   <span>{t('sessions.messages', { n: s.message_count })}</span>
                   <span>·</span>
                   <span>{t('sessions.tokens', { n: formatCount(s.tokens_in + s.tokens_out) })}</span>
@@ -199,7 +238,8 @@ export default function SessionsPage() {
                 <Trash className="size-4" />
               </Button>
             </Card>
-          ))}
+            )
+          })}
         </div>
       )}
     </PageLayout>
