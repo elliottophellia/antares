@@ -245,7 +245,10 @@ func (s *Store) Remove(sessionID, id string) (bool, error) {
 func (s *Store) Clear(sessionID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return os.Remove(s.path(sessionID))
+	if err := os.Remove(s.path(sessionID)); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return nil
 }
 
 func (s *Store) load(sessionID string) ([]Finding, error) {

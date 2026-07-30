@@ -99,6 +99,31 @@ func (s *Server) handleEngagementSessions(w http.ResponseWriter, r *http.Request
 	writeJSON(w, http.StatusOK, map[string]any{"sessions": out})
 }
 
+// handleEngagementDelete clears a session's engagement state — its findings and
+// recorded intel. With both gone the session drops out of the engagement list
+// (which only shows sessions that have some). The chat session itself is left
+// alone; delete that from the Sessions page.
+func (s *Server) handleEngagementDelete(w http.ResponseWriter, r *http.Request) {
+	sessionID := strings.TrimSpace(r.PathValue("session"))
+	if sessionID == "" {
+		writeError(w, http.StatusBadRequest, errors.New("session is required"))
+		return
+	}
+	if s.agent.Findings() != nil {
+		if err := s.agent.Findings().Clear(sessionID); err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+	}
+	if s.agent.Intel() != nil {
+		if err := s.agent.Intel().Clear(sessionID); err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
 // handleEngagement aggregates the methodology, coverage, chains, findings, and
 // intel for one session.
 func (s *Server) handleEngagement(w http.ResponseWriter, r *http.Request) {

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
-import { Check, Copy, DownloadSimple, ShieldCheck, Warning } from '@phosphor-icons/react'
-import { downloadFile, get } from '@/lib/api'
+import { Check, Copy, DownloadSimple, ShieldCheck, Trash, Warning } from '@phosphor-icons/react'
+import { del, downloadFile, get } from '@/lib/api'
 import { copyText } from '@/lib/clipboard'
 import { useApi } from '@/lib/hooks'
 import { useI18n } from '@/lib/i18n'
@@ -18,6 +18,8 @@ import {
   TabsTrigger,
 } from '@/components/ui/primitives'
 import { Skeleton, SkeletonList } from '@/components/ui/skeleton'
+import { SearchSelect } from '@/components/ui/SearchSelect'
+import { ConfirmDialog } from '@/components/ui/ConfirmDialog'
 import { Markdown } from '@/components/chat/Markdown'
 
 interface Phase {
@@ -89,11 +91,26 @@ const SEV_ORDER: Record<string, number> = { critical: 0, high: 1, medium: 2, low
 
 export default function EngagementPage() {
   const { t } = useI18n()
-  const { data: sessData, loading } = useApi<{ sessions: SessionRow[] }>('/engagement/sessions')
+  const { data: sessData, loading, reload } = useApi<{ sessions: SessionRow[] }>('/engagement/sessions')
   const sessions = sessData?.sessions ?? []
   const [sessionID, setSessionID] = useState('')
   const active = sessionID || sessions[0]?.id || ''
   const [tab, setTab] = useState<'overview' | 'raw'>('overview')
+  const [toDelete, setToDelete] = useState<SessionRow | null>(null)
+  const [deleting, setDeleting] = useState(false)
+
+  const removeEngagement = async () => {
+    if (!toDelete) return
+    setDeleting(true)
+    try {
+      await del(`/engagement/${encodeURIComponent(toDelete.id)}`)
+      if (sessionID === toDelete.id) setSessionID('')
+      reload()
+    } finally {
+      setDeleting(false)
+      setToDelete(null)
+    }
+  }
 
   const [eng, setEng] = useState<Engagement | null>(null)
   useEffect(() => {
@@ -136,30 +153,38 @@ export default function EngagementPage() {
       `report-${active}.md`,
     ).catch(() => {})
 
+  const activeRow = sessions.find((s) => s.id === active)
   const header = (
     <div className="space-y-3">
       <div className="flex flex-wrap items-center gap-2">
         <label className="text-xs text-muted-foreground">{t('engagement.pickSession')}</label>
-        <select
-          value={active}
-          onChange={(e) => setSessionID(e.target.value)}
-          className="h-8 min-w-0 flex-1 rounded-[var(--radius-sm)] border border-border bg-card px-2 text-sm sm:flex-none"
-        >
-          {sessions.map((s) => (
-            <option key={s.id} value={s.id}>
-              {s.title || s.id} ({s.findings}✚ / {s.intel}◆)
-            </option>
-          ))}
-        </select>
+        <div className="min-w-0 flex-1 sm:min-w-[18rem] sm:flex-none">
+          <SearchSelect
+            value={active}
+            onChange={setSessionID}
+            options={sessions.map((s) => ({
+              value: s.id,
+              label: s.title || s.id,
+              hint: `${s.findings}✚ / ${s.intel}◆`,
+            }))}
+            placeholder={t('engagement.pickSession')}
+            searchPlaceholder={t('engagement.searchSession')}
+          />
+        </div>
+        <Button variant="outline" size="sm" disabled={!active} onClick={download} className="gap-1.5">
+          <DownloadSimple className="size-3.5" />
+          <span className="hidden sm:inline">{t('engagement.downloadReport')}</span>
+        </Button>
         <Button
           variant="outline"
           size="sm"
-          disabled={!active}
-          onClick={download}
-          className="gap-1.5"
+          disabled={!activeRow}
+          onClick={() => activeRow && setToDelete(activeRow)}
+          aria-label={t('engagement.deleteSession')}
+          className="gap-1.5 text-muted-foreground hover:text-destructive"
         >
-          <DownloadSimple className="size-3.5" />
-          <span className="hidden sm:inline">{t('engagement.downloadReport')}</span>
+          <Trash className="size-3.5" />
+          <span className="hidden sm:inline">{t('common.delete')}</span>
         </Button>
       </div>
       <Tabs value={tab} onValueChange={(v) => setTab(v as 'overview' | 'raw')}>
@@ -173,6 +198,15 @@ export default function EngagementPage() {
 
   return (
     <PageLayout header={header}>
+      <ConfirmDialog
+        open={!!toDelete}
+        onOpenChange={(o) => !o && setToDelete(null)}
+        title={t('engagement.deleteTitle')}
+        description={t('engagement.deleteDesc', { title: toDelete?.title || toDelete?.id || '' })}
+        confirmLabel={t('common.delete')}
+        loading={deleting}
+        onConfirm={() => void removeEngagement()}
+      />
       {tab === 'raw' ? (
         <RawReport session={active} title={activeTitle} />
       ) : (
