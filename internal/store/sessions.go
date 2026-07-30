@@ -56,11 +56,15 @@ func (s *sqlStore) GetSession(ctx context.Context, id string) (*Session, error) 
 func (s *sqlStore) UpdateSession(ctx context.Context, sess *Session) error {
 	sess.UpdatedAt = time.Now()
 	meta, _ := sess.Meta.Value()
+	// message_count / tokens_in / tokens_out are a running tally owned solely by
+	// AppendMessage (it increments them per message). They are deliberately NOT
+	// written here: callers pass a Session struct loaded before the turn's
+	// messages were appended, so including them would clobber the real counts
+	// back to the stale in-memory value — the "0 messages / 0 tokens" bug.
 	_, err := s.exec(ctx, `UPDATE sessions SET title=?,platform=?,channel_id=?,user_id=?,model=?,provider=?,workspace=?,
-		message_count=?,tokens_in=?,tokens_out=?,cost=?,archived=?,pinned=?,updated_at=?,meta=? WHERE id=?`,
+		cost=?,archived=?,pinned=?,updated_at=?,meta=? WHERE id=?`,
 		sess.Title, sess.Platform, sess.ChannelID, sess.UserID, sess.Model, sess.Provider, sess.Workspace,
-		sess.MessageCount, sess.TokensIn, sess.TokensOut, sess.Cost, sess.Archived, sess.Pinned,
-		ms(sess.UpdatedAt), meta, sess.ID)
+		sess.Cost, sess.Archived, sess.Pinned, ms(sess.UpdatedAt), meta, sess.ID)
 	return err
 }
 

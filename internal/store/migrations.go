@@ -156,6 +156,16 @@ var sqliteFTS = []string{
 	`CREATE TRIGGER IF NOT EXISTS memories_fts_del AFTER DELETE ON memories BEGIN
 		DELETE FROM memories_fts WHERE memory_id = old.id;
 	END`,
+
+	// Repair session tallies that a stale UpdateSession clobbered to 0 (the
+	// "0 messages / 0 tokens" bug). Recompute message_count / tokens_in /
+	// tokens_out from the messages table for any session whose stored count
+	// disagrees. Idempotent: on a healthy DB the WHERE matches nothing.
+	`UPDATE sessions SET
+		message_count = (SELECT COUNT(*) FROM messages m WHERE m.session_id = sessions.id),
+		tokens_in     = (SELECT COALESCE(SUM(tokens_in), 0) FROM messages m WHERE m.session_id = sessions.id),
+		tokens_out    = (SELECT COALESCE(SUM(tokens_out), 0) FROM messages m WHERE m.session_id = sessions.id)
+	WHERE message_count <> (SELECT COUNT(*) FROM messages m WHERE m.session_id = sessions.id)`,
 }
 
 // postgresFTS adds GIN indexes for tsvector search.
