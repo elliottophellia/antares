@@ -30,6 +30,7 @@ import { Button } from '@/components/ui/button'
 import { usePageActions } from '@/components/layout/PageChrome'
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog'
 import { Spoiler } from '@/components/ui/Spoiler'
+import { SensitiveGate, useDashboardLocked } from '@/components/ui/SensitiveGate'
 
 interface VPSHost {
   id: string
@@ -74,13 +75,17 @@ export default function VPSPage() {
   const [adding, setAdding] = useState(false)
   const [toRemove, setToRemove] = useState<VPSHost | null>(null)
   const [removing, setRemoving] = useState(false)
+  const locked = useDashboardLocked()
 
   usePageActions(
-    <Button size="sm" onClick={() => setAdding(true)} className="gap-1.5">
-      <Plus className="size-4" />
-      {t('vps.add')}
-    </Button>,
-    [t],
+    // Hide "Add" until a dashboard password protects these credentials.
+    locked === false ? null : (
+      <Button size="sm" onClick={() => setAdding(true)} className="gap-1.5">
+        <Plus className="size-4" />
+        {t('vps.add')}
+      </Button>
+    ),
+    [t, locked],
   )
 
   const confirmRemove = async () => {
@@ -101,42 +106,44 @@ export default function VPSPage() {
 
   return (
     <PageLayout>
-      <VPSDialog open={adding} onOpenChange={setAdding} onSaved={reload} />
-      <VPSDialog
-        open={!!editing}
-        host={editing ?? undefined}
-        onOpenChange={(o) => !o && setEditing(null)}
-        onSaved={reload}
-      />
-      <ConfirmDialog
-        open={!!toRemove}
-        onOpenChange={(o) => !o && setToRemove(null)}
-        title={t('vps.removeTitle')}
-        description={t('vps.removeDesc', { label: toRemove?.label ?? '' })}
-        confirmLabel={t('common.remove')}
-        loading={removing}
-        onConfirm={() => void confirmRemove()}
-      />
-
-      {hosts.length === 0 ? (
-        <EmptyState
-          icon={<HardDrives className="size-6" />}
-          title={t('vps.none')}
-          description={t('vps.noneDesc')}
-          action={
-            <Button size="sm" onClick={() => setAdding(true)} className="gap-1.5">
-              <Plus className="size-4" />
-              {t('vps.add')}
-            </Button>
-          }
+      <SensitiveGate>
+        <VPSDialog open={adding} onOpenChange={setAdding} onSaved={reload} />
+        <VPSDialog
+          open={!!editing}
+          host={editing ?? undefined}
+          onOpenChange={(o) => !o && setEditing(null)}
+          onSaved={reload}
         />
-      ) : (
-        <div className="grid gap-4 lg:grid-cols-2">
-          {hosts.map((h) => (
-            <VPSCard key={h.id} host={h} onEdit={() => setEditing(h)} onRemove={() => setToRemove(h)} />
-          ))}
-        </div>
-      )}
+        <ConfirmDialog
+          open={!!toRemove}
+          onOpenChange={(o) => !o && setToRemove(null)}
+          title={t('vps.removeTitle')}
+          description={t('vps.removeDesc', { label: toRemove?.label ?? '' })}
+          confirmLabel={t('common.remove')}
+          loading={removing}
+          onConfirm={() => void confirmRemove()}
+        />
+
+        {hosts.length === 0 ? (
+          <EmptyState
+            icon={<HardDrives className="size-6" />}
+            title={t('vps.none')}
+            description={t('vps.noneDesc')}
+            action={
+              <Button size="sm" onClick={() => setAdding(true)} className="gap-1.5">
+                <Plus className="size-4" />
+                {t('vps.add')}
+              </Button>
+            }
+          />
+        ) : (
+          <div className="grid gap-4 lg:grid-cols-2">
+            {hosts.map((h) => (
+              <VPSCard key={h.id} host={h} onEdit={() => setEditing(h)} onRemove={() => setToRemove(h)} />
+            ))}
+          </div>
+        )}
+      </SensitiveGate>
     </PageLayout>
   )
 }

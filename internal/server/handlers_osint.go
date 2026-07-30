@@ -12,6 +12,9 @@ import (
 // cookie is a live session and reports every account it is signed into, so the
 // Settings page can show them and let the user pick which one lookups use.
 func (s *Server) handleGoogleVerify(w http.ResponseWriter, r *http.Request) {
+	if s.requireDashboardPassword(w, r) {
+		return
+	}
 	var body struct {
 		Cookie string `json:"cookie"`
 	}
@@ -37,6 +40,9 @@ func (s *Server) handleGoogleVerify(w http.ResponseWriter, r *http.Request) {
 // handleGoogleSelect persists which account (the /u/<N>/ index) the Google
 // lookups act as, chosen from the verified list.
 func (s *Server) handleGoogleSelect(w http.ResponseWriter, r *http.Request) {
+	if s.requireDashboardPassword(w, r) {
+		return
+	}
 	var body struct {
 		AuthUser int `json:"authuser"`
 	}

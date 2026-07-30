@@ -83,6 +83,9 @@ type vpsBody struct {
 // handleSaveVPS creates or updates a host. On update, a blank password/key
 // keeps the stored one (the client never receives the secret to echo back).
 func (s *Server) handleSaveVPS(w http.ResponseWriter, r *http.Request) {
+	if s.requireDashboardPassword(w, r) {
+		return
+	}
 	var body vpsBody
 	if err := decodeBody(r, &body); err != nil {
 		writeError(w, http.StatusBadRequest, err)
@@ -156,6 +159,9 @@ func (s *Server) handleDeleteVPS(w http.ResponseWriter, r *http.Request) {
 // handleTestVPS dials a saved host (by id) or an ad-hoc one from the body and
 // reports whether it connected, plus the remote user@hostname it reached.
 func (s *Server) handleTestVPS(w http.ResponseWriter, r *http.Request) {
+	if s.requireDashboardPassword(w, r) {
+		return
+	}
 	var body vpsBody
 	_ = decodeBody(r, &body)
 

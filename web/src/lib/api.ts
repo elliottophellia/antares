@@ -1,5 +1,10 @@
 /** Typed client for the Antares HTTP API. */
 
+/** True when an error is the "set a dashboard password first" 428 gate. */
+export function isDashboardPasswordRequired(e: unknown): boolean {
+  return e instanceof ApiError && e.status === 428
+}
+
 export class ApiError extends Error {
   status: number
   body?: unknown

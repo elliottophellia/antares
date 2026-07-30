@@ -59,6 +59,34 @@ func (s *Server) withDashboardAuth(next http.Handler) http.Handler {
 	})
 }
 
+// requireDashboardPassword refuses an operation when no dashboard password is
+// set, returning 428 Precondition Required with a machine-readable code the
+// dashboard turns into a "set a password first" prompt. It gates features that
+// store or use sensitive credentials (SSH keys, proxy passwords, session
+// cookies): those must not live on a box whose web UI has no password at all.
+// It returns true when the caller should stop (already responded).
+//
+// A configured bearer auth_token counts as protection too — a scripted/CLI
+// caller presenting it is trusted, so the gate only bites the unprotected web.
+func (s *Server) requireDashboardPassword(w http.ResponseWriter, r *http.Request) bool {
+	cfg := s.config()
+	if cfg.Server.DashboardLocked() {
+		return false
+	}
+	if tok := strings.TrimSpace(cfg.Server.AuthToken); tok != "" {
+		if h := r.Header.Get("Authorization"); strings.HasPrefix(h, "Bearer ") &&
+			strings.TrimSpace(strings.TrimPrefix(h, "Bearer ")) == tok {
+			return false
+		}
+	}
+	writeJSON(w, http.StatusPreconditionRequired, map[string]any{
+		"error": "dashboard_password_required",
+		"message": "Set a dashboard password first — this stores or uses sensitive " +
+			"credentials and must not be left on an unprotected dashboard.",
+	})
+	return true
+}
+
 // dashSessionValid reports whether the request carries a live dashboard session
 // cookie, pruning it if expired.
 func (s *Server) dashSessionValid(r *http.Request) bool {

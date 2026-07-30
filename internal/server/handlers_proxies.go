@@ -74,6 +74,9 @@ func redactProxyURL(e config.ProxyEntry) string {
 // is updated in place (a blank password keeps the stored one); otherwise a new
 // entry is appended with a fresh id.
 func (s *Server) handleAddProxy(w http.ResponseWriter, r *http.Request) {
+	if s.requireDashboardPassword(w, r) {
+		return
+	}
 	var body struct {
 		ID       string `json:"id"`
 		Label    string `json:"label"`
@@ -152,6 +155,9 @@ func (s *Server) handleAddProxy(w http.ResponseWriter, r *http.Request) {
 // how many were added and which lines failed, so a bad line never silently
 // vanishes.
 func (s *Server) handleBatchAddProxy(w http.ResponseWriter, r *http.Request) {
+	if s.requireDashboardPassword(w, r) {
+		return
+	}
 	var body struct {
 		Text string `json:"text"`
 	}
@@ -243,6 +249,9 @@ func (s *Server) handleDeleteProxy(w http.ResponseWriter, r *http.Request) {
 // and reports the egress IP, so the user can confirm a proxy actually works
 // before relying on it.
 func (s *Server) handleTestProxy(w http.ResponseWriter, r *http.Request) {
+	if s.requireDashboardPassword(w, r) {
+		return
+	}
 	var body struct {
 		ID       string `json:"id"`
 		Scheme   string `json:"scheme"`

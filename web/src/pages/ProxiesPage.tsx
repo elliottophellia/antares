@@ -18,6 +18,7 @@ import { SkeletonList } from '@/components/ui/skeleton'
 import { Button } from '@/components/ui/button'
 import { usePageActions } from '@/components/layout/PageChrome'
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog'
+import { SensitiveGate, useDashboardLocked } from '@/components/ui/SensitiveGate'
 
 interface ProxyEntry {
   id: string
@@ -42,13 +43,16 @@ export default function ProxiesPage() {
   const [removing, setRemoving] = useState(false)
   const [busyId, setBusyId] = useState<string | null>(null)
   const [testResult, setTestResult] = useState<Record<string, { ok: boolean; ip?: string; error?: string }>>({})
+  const locked = useDashboardLocked()
 
   usePageActions(
-    <Button size="sm" onClick={() => setAdding(true)} className="gap-1.5">
-      <Plus className="size-4" />
-      {t('proxies.add')}
-    </Button>,
-    [t],
+    locked === false ? null : (
+      <Button size="sm" onClick={() => setAdding(true)} className="gap-1.5">
+        <Plus className="size-4" />
+        {t('proxies.add')}
+      </Button>
+    ),
+    [t, locked],
   )
 
   const test = async (e: ProxyEntry) => {
@@ -82,6 +86,7 @@ export default function ProxiesPage() {
 
   return (
     <PageLayout>
+      <SensitiveGate>
       <AddProxiesDialog open={adding} onOpenChange={setAdding} onSaved={reload} />
       <ConfirmDialog
         open={!!toRemove}
@@ -185,6 +190,7 @@ export default function ProxiesPage() {
           </div>
         </Card>
       )}
+      </SensitiveGate>
     </PageLayout>
   )
 }
