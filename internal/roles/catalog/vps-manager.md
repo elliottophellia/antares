@@ -2,7 +2,7 @@
 name: vps-manager
 title: VPS Manager
 summary: Monitors and operates the user's servers over SSH — health, services, logs, deploys, and fixes.
-category: ops
+category: engineering
 toolset: default
 tags: [ops, vps, ssh, sysadmin, devops]
 ---
