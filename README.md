@@ -1,5 +1,5 @@
 <p align="center">
-  <img src=".github/antares.png" alt="Antares" width="180">
+  <img src=".github/antares.webp" alt="Antares" width="180">
 </p>
 
 <h1 align="center">Antares</h1>
@@ -32,16 +32,16 @@ Runs on **Linux**, **macOS**, and **Windows**.
 ## A look at it
 
 <p align="center">
-  <img src="docs/screenshots/chat.png" alt="Antares chat" width="880">
+  <img src="docs/screenshots/chat.webp" alt="Antares chat" width="880">
 </p>
 
 <table>
   <tr>
-    <td width="50%"><img src="docs/screenshots/memory-rag.png" alt="Memory & RAG"><br><sub><b>Memory & native RAG</b> — durable facts the agent learns, plus an in-process retrieval index (hybrid search + rerank) wired into every turn.</sub></td>
-    <td width="50%"><img src="docs/screenshots/vps.png" alt="VPS monitoring"><br><sub><b>VPS over SSH</b> — live CPU/RAM/disk, process lists, and agent-driven management, credentials encrypted at rest.</sub></td>
+    <td width="50%"><img src="docs/screenshots/memory-rag.webp" alt="Memory & RAG"><br><sub><b>Memory & native RAG</b> — durable facts the agent learns, plus an in-process retrieval index (hybrid search + rerank) wired into every turn.</sub></td>
+    <td width="50%"><img src="docs/screenshots/vps.webp" alt="VPS monitoring"><br><sub><b>VPS over SSH</b> — live CPU/RAM/disk, process lists, and agent-driven management, credentials encrypted at rest.</sub></td>
   </tr>
   <tr>
-    <td colspan="2"><img src="docs/screenshots/soul.png" alt="Soul / identity"><br><sub><b>Soul</b> — give the agent a name and personality (SOUL.md), set once in a friendly first-run interview and applied everywhere: web, terminal, and every gateway.</sub></td>
+    <td colspan="2"><img src="docs/screenshots/soul.webp" alt="Soul / identity"><br><sub><b>Soul</b> — give the agent a name and personality (SOUL.md), set once in a friendly first-run interview and applied everywhere: web, terminal, and every gateway.</sub></td>
   </tr>
 </table>
 
