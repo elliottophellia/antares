@@ -3,6 +3,7 @@ package httpshim
 import (
 	"encoding/base64"
 	"fmt"
+	"io"
 	"os"
 	"sort"
 	"strings"
@@ -183,6 +184,8 @@ func runCurl(args []string) int {
 		fmt.Fprintf(os.Stderr, "curl: (7) %v\n", err)
 		return 7
 	}
+	defer resp.Body.Close()
+	respBody, _ := io.ReadAll(resp.Body)
 
 	if failFast && resp.StatusCode >= 400 {
 		fmt.Fprintf(os.Stderr, "curl: (22) The requested URL returned error: %d\n", resp.StatusCode)
@@ -198,12 +201,12 @@ func runCurl(args []string) int {
 		}
 		sort.Strings(keys)
 		for _, k := range keys {
-			out.WriteString(k + ": " + resp.Headers[k] + "\n")
+			out.WriteString(k + ": " + strings.Join(resp.Headers[k], ", ") + "\n")
 		}
 		out.WriteString("\n")
 	}
 	if !headOnly {
-		out.Write(resp.Body)
+		out.Write(respBody)
 	}
 
 	dest := output

@@ -1,9 +1,11 @@
 package tools
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"sort"
 	"strings"
 	"sync"
@@ -160,23 +162,38 @@ func (httpRequestTool) Execute(ctx context.Context, in Input) Result {
 
 	in.Emit(Progress{Tool: "http_request", Message: method + " " + target})
 
+	// httpcloak v1.6+ takes multi-value headers and an io.Reader body.
+	hdr := make(map[string][]string, len(headers))
+	for k, v := range headers {
+		hdr[k] = []string{v}
+	}
+	var bodyReader io.Reader
+	if len(body) > 0 {
+		bodyReader = bytes.NewReader(body)
+	}
+
 	resp, err := client.Do(ctx, &httpcloak.Request{
 		Method:  method,
 		URL:     target,
-		Headers: headers,
-		Body:    body,
+		Headers: hdr,
+		Body:    bodyReader,
 		Timeout: timeout,
 	})
 	if err != nil {
 		return Errorf("request failed: %v", err)
 	}
+	defer resp.Body.Close()
 
-	return httpResult(resp, method, preset, args.MaxChars)
+	// resp.Body is an io.ReadCloser in httpcloak v1.6+; read it here (while the
+	// connection is still open) so httpResult works on the bytes.
+	respBody, _ := io.ReadAll(resp.Body)
+
+	return httpResult(resp, respBody, method, preset, args.MaxChars)
 }
 
 // httpResult formats a response for the model: a status line, the protocol and
 // fingerprint used, the response headers, then the (truncated) body.
-func httpResult(resp *httpcloak.Response, method, preset string, maxChars int) Result {
+func httpResult(resp *httpcloak.Response, body []byte, method, preset string, maxChars int) Result {
 	var b strings.Builder
 	fmt.Fprintf(&b, "%s → HTTP %d (%s, fingerprint %s)\n", method, resp.StatusCode, orUnknown(resp.Protocol), preset)
 	if resp.FinalURL != "" {
@@ -191,12 +208,12 @@ func httpResult(resp *httpcloak.Response, method, preset string, maxChars int) R
 		sort.Strings(keys)
 		b.WriteString("\nResponse headers:\n")
 		for _, k := range keys {
-			fmt.Fprintf(&b, "  %s: %s\n", k, resp.Headers[k])
+			fmt.Fprintf(&b, "  %s: %s\n", k, strings.Join(resp.Headers[k], ", "))
 		}
 	}
 
 	b.WriteString("\nBody:\n")
-	b.WriteString(truncateText(string(resp.Body), maxChars))
+	b.WriteString(truncateText(string(body), maxChars))
 
 	return Result{
 		Content: b.String(),

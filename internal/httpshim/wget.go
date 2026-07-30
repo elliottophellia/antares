@@ -2,6 +2,7 @@ package httpshim
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"strings"
 	"time"
@@ -145,24 +146,26 @@ func runWget(args []string) int {
 		fmt.Fprintf(os.Stderr, "wget: %v\n", err)
 		return 4
 	}
+	defer resp.Body.Close()
 	if resp.StatusCode >= 400 {
 		fmt.Fprintf(os.Stderr, "wget: server returned error: HTTP %d\n", resp.StatusCode)
 		return 8
 	}
+	respBody, _ := io.ReadAll(resp.Body)
 
 	// -O- (or a bare "-") streams to stdout; otherwise wget saves to a file.
 	if haveOut && (output == "-" || output == "") {
-		os.Stdout.Write(resp.Body)
+		os.Stdout.Write(respBody)
 		return 0
 	}
 	dest := output
 	if dest == "" {
 		dest = basename(url, "index.html")
 	}
-	if err := os.WriteFile(dest, resp.Body, 0o644); err != nil {
+	if err := os.WriteFile(dest, respBody, 0o644); err != nil {
 		fmt.Fprintf(os.Stderr, "wget: cannot write %s: %v\n", dest, err)
 		return 3
 	}
-	fmt.Fprintf(os.Stderr, "saved %d bytes to %s\n", len(resp.Body), dest)
+	fmt.Fprintf(os.Stderr, "saved %d bytes to %s\n", len(respBody), dest)
 	return 0
 }

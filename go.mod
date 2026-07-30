@@ -1,6 +1,6 @@
 module github.com/enowdev/antares
 
-go 1.25.5
+go 1.26.0
 
 require (
 	github.com/charmbracelet/bubbles v1.0.0
@@ -10,7 +10,7 @@ require (
 	github.com/jackc/pgx/v5 v5.10.0
 	github.com/ledongthuc/pdf v0.0.0-20250511090121-5959a4027728
 	github.com/muesli/termenv v0.16.0
-	github.com/sardanioss/httpcloak v1.1.4
+	github.com/sardanioss/httpcloak v1.6.8
 	golang.org/x/crypto v0.54.0
 	golang.org/x/net v0.56.0
 	golang.org/x/term v0.45.0
@@ -56,10 +56,11 @@ require (
 	github.com/rivo/uniseg v0.4.7 // indirect
 	github.com/rogpeppe/go-internal v1.15.0 // indirect
 	github.com/sardanioss/http v1.2.0 // indirect
-	github.com/sardanioss/net v1.1.0 // indirect
-	github.com/sardanioss/qpack v0.6.2 // indirect
-	github.com/sardanioss/quic-go v1.2.13 // indirect
-	github.com/sardanioss/utls v1.9.5 // indirect
+	github.com/sardanioss/net v1.2.6 // indirect
+	github.com/sardanioss/qpack v0.6.3 // indirect
+	github.com/sardanioss/quic-go v1.2.25 // indirect
+	github.com/sardanioss/udpbara v1.1.0 // indirect
+	github.com/sardanioss/utls v1.10.3 // indirect
 	github.com/xo/terminfo v0.0.0-20220910002029-abceb7e1c41e // indirect
 	github.com/yuin/goldmark v1.7.13 // indirect
 	github.com/yuin/goldmark-emoji v1.0.6 // indirect

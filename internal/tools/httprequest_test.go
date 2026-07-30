@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"io"
 	"os"
 	"strings"
 	"testing"
@@ -65,7 +66,9 @@ func TestHTTPRequestLive(t *testing.T) {
 	if resp.StatusCode != 200 {
 		t.Fatalf("expected 200, got %d", resp.StatusCode)
 	}
-	body := strings.ToLower(string(resp.Body))
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(resp.Body)
+	body := strings.ToLower(string(raw))
 	// Cloudflare's trace echoes the connection it saw: uag= reports the Chrome
 	// user-agent and http= the negotiated protocol, proving the fingerprinted
 	// stack completed a real handshake through Cloudflare's edge.

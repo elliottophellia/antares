@@ -11,8 +11,10 @@
 package httpshim
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -135,11 +137,20 @@ func doRequest(method, url string, headers map[string]string, body []byte, timeo
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	// httpcloak v1.6+ takes multi-value headers and an io.Reader body.
+	hdr := make(map[string][]string, len(headers))
+	for k, v := range headers {
+		hdr[k] = []string{v}
+	}
+	var bodyReader io.Reader
+	if len(body) > 0 {
+		bodyReader = bytes.NewReader(body)
+	}
 	return client.Do(ctx, &httpcloak.Request{
 		Method:  method,
 		URL:     url,
-		Headers: headers,
-		Body:    body,
+		Headers: hdr,
+		Body:    bodyReader,
 		Timeout: timeout,
 	})
 }
