@@ -24,6 +24,7 @@ import { Card, EmptyState } from '@/components/ui/primitives'
 import { Skeleton, SkeletonList } from '@/components/ui/skeleton'
 import { useI18n, useTimeAgo, type TFunc } from '@/lib/i18n'
 import { usePageActions } from '@/components/layout/PageChrome'
+import { SensitiveGate } from '@/components/ui/SensitiveGate'
 import { cn } from '@/lib/utils'
 import { Markdown } from '@/components/chat/Markdown'
 
@@ -196,6 +197,7 @@ export default function FilesPage() {
         ) : undefined
       }
     >
+      <SensitiveGate>
       <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)]">
         {/* file list */}
         <div className="min-w-0">
@@ -255,6 +257,7 @@ export default function FilesPage() {
           )}
         </div>
       </div>
+      </SensitiveGate>
     </PageLayout>
   )
 }

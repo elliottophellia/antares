@@ -320,6 +320,9 @@ func (s *Server) handleLogStream(w http.ResponseWriter, r *http.Request) {
 // ---- files ------------------------------------------------------------------
 
 func (s *Server) handleListFiles(w http.ResponseWriter, r *http.Request) {
+	if s.requireDashboardPassword(w, r) {
+		return
+	}
 	cfg := s.config()
 	target := r.URL.Query().Get("path")
 	if target == "" {
@@ -372,6 +375,9 @@ func (s *Server) handleListFiles(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleReadFile(w http.ResponseWriter, r *http.Request) {
+	if s.requireDashboardPassword(w, r) {
+		return
+	}
 	cfg := s.config()
 	abs, err := safeJoin(cfg.Agent.Workspace, r.URL.Query().Get("path"))
 	if err != nil {
@@ -423,6 +429,9 @@ func isBinary(b []byte) bool {
 // accepts a ?token= query param — needed because <img src> and download links
 // cannot set an Authorization header.
 func (s *Server) handleRawFile(w http.ResponseWriter, r *http.Request) {
+	if s.requireDashboardPassword(w, r) {
+		return
+	}
 	cfg := s.config()
 	abs, err := safeJoin(cfg.Agent.Workspace, r.URL.Query().Get("path"))
 	if err != nil {
