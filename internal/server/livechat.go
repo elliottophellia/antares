@@ -12,9 +12,17 @@ import (
 // that started it: the run is driven on a background context and publishes here,
 // so a client that navigates away and comes back can reattach and keep watching
 // instead of losing the turn.
+// maxLiveEvents bounds how many of a turn's most recent events are retained for
+// replay. A long-horizon turn can emit tens of thousands of tiny events (text
+// deltas, tool progress); keeping them all pins memory and lengthens every
+// reconnect replay. We keep a trailing window instead — a reconnecting client
+// still has the persisted history for anything older, so it loses nothing.
+const maxLiveEvents = 4000
+
 type liveRun struct {
 	mu      sync.Mutex
 	events  []agent.Event
+	base    int  // absolute index of events[0] (count of events already trimmed)
 	done    bool
 	updated chan struct{} // closed on every change; replaced under the lock
 }
@@ -30,6 +38,12 @@ func (lr *liveRun) signal() {
 func (lr *liveRun) publish(e agent.Event) {
 	lr.mu.Lock()
 	lr.events = append(lr.events, e)
+	// Trim the oldest events once the window is exceeded, tracking how many were
+	// dropped in base so follow()'s absolute cursor keeps mapping correctly.
+	if over := len(lr.events) - maxLiveEvents; over > 0 {
+		lr.events = append(lr.events[:0], lr.events[over:]...)
+		lr.base += over
+	}
 	lr.signal()
 	lr.mu.Unlock()
 }
@@ -48,11 +62,16 @@ func (lr *liveRun) finish() {
 // finishes or ctx is cancelled (the client disconnected). send stops the follow
 // early by returning an error.
 func (lr *liveRun) follow(ctx context.Context, cursor int, send func(agent.Event) error) error {
-	i := cursor
+	i := cursor // absolute event index
 	for {
 		lr.mu.Lock()
-		for i < len(lr.events) {
-			e := lr.events[i]
+		// If the cursor points at events already trimmed, fast-forward to the
+		// oldest retained event rather than reading a negative slice index.
+		if i < lr.base {
+			i = lr.base
+		}
+		for i-lr.base < len(lr.events) {
+			e := lr.events[i-lr.base]
 			i++
 			lr.mu.Unlock()
 			if err := send(e); err != nil {

@@ -78,12 +78,17 @@ type Event struct {
 	// turn
 	Turn int `json:"turn,omitempty"`
 
-	// usage
-	InputTokens  int     `json:"input_tokens,omitempty"`
-	OutputTokens int     `json:"output_tokens,omitempty"`
-	Cost         float64 `json:"cost,omitempty"`
+	// usage — InputTokens/OutputTokens are the run's cumulative totals (for the
+	// cost/token readout). ContextTokens is the latest turn's input alone, i.e.
+	// what actually occupies the window right now, and is what the fill gauge
+	// must plot — the cumulative total climbs past the window on long runs and
+	// would peg the gauge at 100% even when the real context is nearly empty.
+	InputTokens   int     `json:"input_tokens,omitempty"`
+	OutputTokens  int     `json:"output_tokens,omitempty"`
+	ContextTokens int     `json:"context_tokens,omitempty"`
+	Cost          float64 `json:"cost,omitempty"`
 	// ContextWindow is the active model's token budget, so the UI can show how
-	// full the context is (input tokens / window).
+	// full the context is (context tokens / window).
 	ContextWindow int `json:"context_window,omitempty"`
 
 	// error
@@ -445,6 +450,9 @@ func (a *Agent) Run(ctx context.Context, req Request, emit Emit) (*Result, error
 		if resp.Usage.InputTokens > 0 || resp.Usage.OutputTokens > 0 {
 			_ = emit(Event{
 				Type: EventUsage, InputTokens: total.InputTokens, OutputTokens: total.OutputTokens,
+				// This turn's input (plus cached tokens, which still occupy the
+				// window) is the live context size the fill gauge plots.
+				ContextTokens: resp.Usage.InputTokens + resp.Usage.CacheReadTokens,
 				ContextWindow: a.contextWindowFor(modelName),
 			})
 			if !req.Quiet {

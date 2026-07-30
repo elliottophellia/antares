@@ -4,9 +4,11 @@ import (
 	"context"
 	"encoding/base64"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"runtime"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"time"
@@ -191,6 +193,16 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 
 	go func() {
 		defer func() {
+			// A panic inside a tool or the agent loop must not take down the
+			// whole server: recover, surface it to the UI as an error event,
+			// and let the deferred finish/remove below run so the liveRun is
+			// not leaked in the hub.
+			if r := recover(); r != nil {
+				slog.Error("chat turn panicked", "session", sessionKey, "panic", r,
+					"stack", string(debug.Stack()))
+				lr.publish(agent.Event{Type: agent.EventError, Err: fmt.Sprintf("internal error: %v", r)})
+				lr.publish(agent.Event{Type: agent.EventDone})
+			}
 			lr.finish()
 			s.hub.remove(sessionKey, lr)
 			// A sub-agent that finished while this turn streamed queued its

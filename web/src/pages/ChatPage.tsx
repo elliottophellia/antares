@@ -365,6 +365,46 @@ export default function ChatPage() {
   const virtuosoRef = useRef<VirtuosoHandle>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
 
+  // A streaming turn emits hundreds of tiny events (text deltas, tool
+  // progress). Applying each one with its own setMessages triggers a full
+  // O(n) array map per event and saturates the main thread on long tasks —
+  // the dashboard visibly freezes (issue #5). Instead we queue the per-event
+  // patches and drain them once per animation frame, so a burst of N events
+  // costs a single render that folds all N patches into the assistant message.
+  const patchQueue = useRef<{ id: string; fn: (m: ChatMessage) => ChatMessage }[]>([])
+  const flushHandle = useRef<number | null>(null)
+  const flushPatches = useCallback(() => {
+    flushHandle.current = null
+    const queued = patchQueue.current
+    if (queued.length === 0) return
+    patchQueue.current = []
+    setMessages((prev) =>
+      prev.map((m) => {
+        let next = m
+        for (const p of queued) if (p.id === m.id) next = p.fn(next)
+        return next
+      }),
+    )
+  }, [])
+  const enqueuePatch = useCallback(
+    (id: string, fn: (m: ChatMessage) => ChatMessage) => {
+      patchQueue.current.push({ id, fn })
+      if (flushHandle.current == null) {
+        flushHandle.current = requestAnimationFrame(flushPatches)
+      }
+    },
+    [flushPatches],
+  )
+  // Flush any tail synchronously and cancel a pending frame — used at end of
+  // turn and on unmount so the last delta never lingers unrendered.
+  const drainPatches = useCallback(() => {
+    if (flushHandle.current != null) {
+      cancelAnimationFrame(flushHandle.current)
+      flushHandle.current = null
+    }
+    flushPatches()
+  }, [flushPatches])
+
   // Landing on a bare "/" resumes the last conversation, so switching back to
   // Chat continues where you were rather than starting over. The New button
   // arrives with state.fresh set, which skips the resume and forgets it.
@@ -387,7 +427,13 @@ export default function ChatPage() {
 
   // Leaving the page closes our stream connection, but the turn runs detached on
   // the server, so it keeps going and we reattach to it on return.
-  useEffect(() => () => abortRef.current?.(), [])
+  useEffect(
+    () => () => {
+      abortRef.current?.()
+      if (flushHandle.current != null) cancelAnimationFrame(flushHandle.current)
+    },
+    [],
+  )
 
   // Grow the composer with its content, up to ~8 rows.
   useEffect(() => {
@@ -413,7 +459,7 @@ export default function ChatPage() {
       onSession?: (id: string, title?: string) => void,
     ) => {
       const patchAssistant = (fn: (m: ChatMessage) => ChatMessage) =>
-        setMessages((prev) => prev.map((m) => (m.id === assistantId ? fn(m) : m)))
+        enqueuePatch(assistantId, fn)
       switch (event.type) {
         case 'session':
           onSession?.(
@@ -476,10 +522,12 @@ export default function ChatPage() {
             tokensOut: Number(event.output_tokens ?? m.tokensOut ?? 0),
           }))
           {
-            // The input tokens of the latest turn ≈ everything currently in
-            // context, so input/window is the context-fill gauge.
+            // context_tokens is the latest turn's input alone — what actually
+            // occupies the window right now — so context/window is the fill
+            // gauge. (input_tokens above is the run's cumulative total, which
+            // climbs past the window on long runs and must NOT feed the gauge.)
             const win = Number(event.context_window ?? 0)
-            const used = Number(event.input_tokens ?? 0)
+            const used = Number(event.context_tokens ?? 0)
             if (used > 0) setCtxUsed(used)
             if (win > 0) setCtxWindow(win)
           }
@@ -504,7 +552,7 @@ export default function ChatPage() {
           break
       }
     },
-    [t],
+    [t, enqueuePatch],
   )
 
   // Reconnect to a turn still running for this session (after navigating away
@@ -555,6 +603,7 @@ export default function ChatPage() {
           `/chat/attach?session_id=${encodeURIComponent(sid)}&cursor=0`,
           (event) => {
             if (event.type === 'done') {
+              drainPatches()
               setStreaming(false)
               close?.() // stop EventSource from auto-reconnecting
               // Swap whatever we have for the canonical persisted turn.
@@ -589,7 +638,7 @@ export default function ChatPage() {
         close?.()
       }
     },
-    [applyEvent, t],
+    [applyEvent, drainPatches, t],
   )
 
   useEffect(() => {
@@ -793,6 +842,7 @@ export default function ChatPage() {
         // final event, which otherwise left the indicator and the task bar
         // "running" forever.
         if (event.type === 'done') {
+          drainPatches() // render the final buffered deltas before we stop
           setStreaming(false)
           setAskId(undefined)
           setLive((s) => ({ ...s, waiting: false }))
@@ -822,6 +872,7 @@ export default function ChatPage() {
         })
       },
       (err) => {
+        drainPatches()
         setError(err.message)
         setStreaming(false)
         abortRef.current = null
@@ -829,13 +880,14 @@ export default function ChatPage() {
         localSessionRef.current = null
       },
       () => {
+        drainPatches()
         setStreaming(false)
         abortRef.current = null
         localSessionRef.current = null
       },
     )
     },
-    [role, projectDir, streaming, sessionId, navigate, runCommand, applyEvent, t],
+    [role, projectDir, streaming, sessionId, navigate, runCommand, applyEvent, drainPatches, t],
   )
 
   const send = useCallback(() => {
