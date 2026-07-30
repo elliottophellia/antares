@@ -2,6 +2,18 @@
 // YAML overrides from the profile config, then environment variables.
 package config
 
+import (
+	"context"
+	"fmt"
+	"net"
+	"net/http"
+	"net/url"
+	"strings"
+	"time"
+
+	xproxy "golang.org/x/net/proxy"
+)
+
 // Config is the complete runtime configuration tree.
 type Config struct {
 	Model         Model               `yaml:"model" json:"model"`
@@ -32,6 +44,7 @@ type Config struct {
 	Display       Display             `yaml:"display" json:"display"`
 	Logging       Logging             `yaml:"logging" json:"logging"`
 	MCP           MCP                 `yaml:"mcp" json:"mcp"`
+	Proxies       Proxies             `yaml:"proxies" json:"proxies"`
 
 	MaxConcurrentSessions int  `yaml:"max_concurrent_sessions" json:"max_concurrent_sessions"`
 	GroupSessionsPerUser  bool `yaml:"group_sessions_per_user" json:"group_sessions_per_user"`
@@ -330,6 +343,228 @@ type OSINT struct {
 	// profile (GHunt-style). Optional and ToS-sensitive: supplying your own
 	// session cookie is your decision. Empty disables the tool with a hint.
 	GoogleCookie string `yaml:"google_cookie" json:"google_cookie"`
+	// GoogleAuthUser selects which account in a multi-account cookie session the
+	// Google lookups act as — the /u/<N>/ index. 0 is the default account.
+	GoogleAuthUser int `yaml:"google_authuser" json:"google_authuser"`
+}
+
+// Proxies is a global store of named proxy endpoints — nothing more. It does
+// not decide when a proxy is used; a tool or the agent chooses an entry by id
+// (or label) when it wants one. Think of it as shared proxy storage the app
+// draws from on demand.
+type Proxies struct {
+	// Entries are the saved proxies, each with a stable ID.
+	Entries []ProxyEntry `yaml:"entries" json:"entries"`
+}
+
+// Find returns the dial URL of the entry matching ref (an id or a label,
+// case-insensitive), or "" when nothing matches. This is how a tool resolves an
+// agent-supplied proxy choice to something dial-ready.
+func (p Proxies) Find(ref string) string {
+	ref = strings.TrimSpace(ref)
+	if ref == "" {
+		return ""
+	}
+	for _, e := range p.Entries {
+		if e.ID == ref || strings.EqualFold(e.Label, ref) {
+			return e.ProxyURL()
+		}
+	}
+	return ""
+}
+
+// ProxyEntry is one saved proxy. URL is the full endpoint; the convenience
+// fields (Scheme/Host/Port/Username/Password) let the dashboard edit parts
+// without re-typing the whole URL, and ProxyURL() composes them when URL is
+// empty.
+type ProxyEntry struct {
+	ID       string `yaml:"id" json:"id"`
+	Label    string `yaml:"label" json:"label"`
+	URL      string `yaml:"url" json:"url"`
+	Scheme   string `yaml:"scheme" json:"scheme"` // http|https|socks5 (default http)
+	Host     string `yaml:"host" json:"host"`
+	Port     int    `yaml:"port" json:"port"`
+	Username string `yaml:"username" json:"username"`
+	Password string `yaml:"password" json:"password"`
+}
+
+// ProxyURL returns the entry as a dial-ready URL, e.g.
+// "http://user:pass@host:port". It prefers an explicit URL, else composes one
+// from the parts. Empty if the entry has neither.
+func (p ProxyEntry) ProxyURL() string {
+	if u := strings.TrimSpace(p.URL); u != "" {
+		if !strings.Contains(u, "://") {
+			u = "http://" + u
+		}
+		return u
+	}
+	host := strings.TrimSpace(p.Host)
+	if host == "" {
+		return ""
+	}
+	scheme := strings.TrimSpace(p.Scheme)
+	if scheme == "" {
+		scheme = "http"
+	}
+	auth := ""
+	if p.Username != "" {
+		auth = url.QueryEscape(p.Username)
+		if p.Password != "" {
+			auth += ":" + url.QueryEscape(p.Password)
+		}
+		auth += "@"
+	}
+	hostport := host
+	if p.Port > 0 {
+		hostport = fmt.Sprintf("%s:%d", host, p.Port)
+	}
+	return fmt.Sprintf("%s://%s%s", scheme, auth, hostport)
+}
+
+// ParseProxyLine reads one proxy in any of the common shapes and returns a
+// populated entry (Scheme/Host/Port/Username/Password). Supported forms:
+//
+//	scheme://user:pass@host:port      scheme://host:port
+//	user:pass@host:port               host:port
+//	host:port:user:pass               host:port:user
+//	label = <any of the above>        (an optional "name = …" prefix)
+//
+// The default scheme is http. It errors only when it cannot find a host:port.
+func ParseProxyLine(line string) (ProxyEntry, error) {
+	raw := strings.TrimSpace(line)
+	var label string
+	// Optional "Label = value" or "Label: scheme://…" prefix. Only split on the
+	// first " = " / ": " that is clearly a label, i.e. before any "://".
+	if i := strings.Index(raw, "="); i > 0 && (strings.Index(raw, "://") == -1 || i < strings.Index(raw, "://")) {
+		label = strings.TrimSpace(raw[:i])
+		raw = strings.TrimSpace(raw[i+1:])
+	}
+	if raw == "" {
+		return ProxyEntry{}, fmt.Errorf("empty proxy line")
+	}
+
+	scheme := "http"
+	if i := strings.Index(raw, "://"); i >= 0 {
+		scheme = strings.ToLower(raw[:i])
+		raw = raw[i+3:]
+	}
+
+	var user, pass, host string
+	var port int
+
+	if strings.Contains(raw, "@") {
+		// [user[:pass]]@host:port
+		at := strings.LastIndex(raw, "@")
+		cred := raw[:at]
+		hp := raw[at+1:]
+		user, pass = splitFirst(cred, ":")
+		var perr error
+		host, port, perr = splitHostPort(hp)
+		if perr != nil {
+			return ProxyEntry{}, perr
+		}
+	} else {
+		parts := strings.Split(raw, ":")
+		switch len(parts) {
+		case 2: // host:port
+			host = parts[0]
+			port = atoiSafe(parts[1])
+		case 3: // host:port:user
+			host, port = parts[0], atoiSafe(parts[1])
+			user = parts[2]
+		case 4: // host:port:user:pass
+			host, port = parts[0], atoiSafe(parts[1])
+			user, pass = parts[2], parts[3]
+		default:
+			return ProxyEntry{}, fmt.Errorf("unrecognised proxy format: %q", line)
+		}
+	}
+
+	host = strings.TrimSpace(host)
+	if host == "" || port <= 0 {
+		return ProxyEntry{}, fmt.Errorf("proxy needs host:port: %q", line)
+	}
+	if label == "" {
+		label = fmt.Sprintf("%s:%d", host, port)
+	}
+	return ProxyEntry{
+		Label: label, Scheme: scheme, Host: host, Port: port,
+		Username: strings.TrimSpace(user), Password: pass,
+	}, nil
+}
+
+func splitFirst(s, sep string) (a, b string) {
+	if i := strings.Index(s, sep); i >= 0 {
+		return s[:i], s[i+len(sep):]
+	}
+	return s, ""
+}
+
+func splitHostPort(hp string) (string, int, error) {
+	host, portStr := splitFirst(hp, ":")
+	port := atoiSafe(portStr)
+	if strings.TrimSpace(host) == "" || port <= 0 {
+		return "", 0, fmt.Errorf("expected host:port, got %q", hp)
+	}
+	return host, port, nil
+}
+
+func atoiSafe(s string) int {
+	n := 0
+	for _, r := range strings.TrimSpace(s) {
+		if r < '0' || r > '9' {
+			return 0
+		}
+		n = n*10 + int(r-'0')
+	}
+	return n
+}
+
+// ProxyHTTPClient builds an *http.Client that dials through the given proxy URL.
+// http/https proxies use the standard transport proxy; socks5/socks5h use a
+// x/net SOCKS dialer. It is the one place that turns a proxy URL into a client,
+// shared by the tools and the server's proxy-test endpoint. An empty proxyURL
+// yields a plain client with the given timeout.
+func ProxyHTTPClient(proxyURL string, timeout time.Duration) (*http.Client, error) {
+	proxyURL = strings.TrimSpace(proxyURL)
+	if proxyURL == "" {
+		return &http.Client{Timeout: timeout}, nil
+	}
+	u, err := url.Parse(proxyURL)
+	if err != nil {
+		return nil, err
+	}
+	switch strings.ToLower(u.Scheme) {
+	case "http", "https", "":
+		if u.Scheme == "" {
+			u.Scheme = "http"
+		}
+		return &http.Client{
+			Timeout:   timeout,
+			Transport: &http.Transport{Proxy: http.ProxyURL(u)},
+		}, nil
+	case "socks5", "socks5h":
+		var auth *xproxy.Auth
+		if u.User != nil {
+			pw, _ := u.User.Password()
+			auth = &xproxy.Auth{User: u.User.Username(), Password: pw}
+		}
+		d, err := xproxy.SOCKS5("tcp", u.Host, auth, xproxy.Direct)
+		if err != nil {
+			return nil, err
+		}
+		tr := &http.Transport{}
+		if dc, ok := d.(xproxy.ContextDialer); ok {
+			tr.DialContext = dc.DialContext
+		} else {
+			tr.DialContext = func(_ context.Context, network, addr string) (net.Conn, error) {
+				return d.Dial(network, addr)
+			}
+		}
+		return &http.Client{Timeout: timeout, Transport: tr}, nil
+	default:
+		return nil, fmt.Errorf("unsupported proxy scheme %q", u.Scheme)
+	}
 }
 
 // Roles configures the specialist agent roles.

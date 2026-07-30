@@ -343,7 +343,13 @@ export default function ChatPage() {
           patchAssistant((m) =>
             updateToolSeg(m, String(event.id ?? ''), (c) => ({
               ...c,
-              progress: (c.progress ?? '') + String(event.chunk ?? event.message ?? ''),
+              // A chunk streams (append); a message is a status line (replace),
+              // so "attempt 1/3" → "attempt 2/3" swaps in place instead of
+              // concatenating.
+              progress:
+                event.chunk != null
+                  ? (c.progress ?? '') + String(event.chunk)
+                  : String(event.message ?? c.progress ?? ''),
             })),
           )
           break

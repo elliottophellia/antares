@@ -537,8 +537,13 @@ func (osintGoogleTool) Execute(ctx context.Context, in Input) Result {
 	// the same scheme browser XHRs use. Endpoints/gating change often; treat
 	// failure as "unknown".
 	const origin = "https://myaccount.google.com"
-	endpoint := "https://people-pa.clients6.google.com/v2/people/lookup?id=" + url.QueryEscape(email) +
-		"&type=EMAIL&matchType=EXACT&extensionSet.extensionNames=HANGOUTS_ADDITIONAL_DATA"
+	authUser := 0
+	if in.Deps != nil && in.Deps.Config != nil {
+		authUser = in.Deps.Config.OSINT.GoogleAuthUser
+	}
+	endpoint := fmt.Sprintf("https://people-pa.clients6.google.com/v2/people/lookup?id=%s"+
+		"&type=EMAIL&matchType=EXACT&extensionSet.extensionNames=HANGOUTS_ADDITIONAL_DATA&authuser=%d",
+		url.QueryEscape(email), authUser)
 	req, err := http.NewRequestWithContext(ctx, "GET", endpoint, nil)
 	if err != nil {
 		return Errorf("%v", err)
@@ -629,4 +634,104 @@ func sapisidHash(sapisid, origin string) string {
 	ts := time.Now().Unix()
 	sum := sha1.Sum([]byte(fmt.Sprintf("%d %s %s", ts, sapisid, origin)))
 	return fmt.Sprintf("SAPISIDHASH %d_%s", ts, hex.EncodeToString(sum[:]))
+}
+
+// GoogleAccount is a logged-in Google account resolved from a session cookie.
+// AuthUser is the /u/<N>/ index that selects it in a multi-account session.
+type GoogleAccount struct {
+	AuthUser int    `json:"authuser"`
+	Email    string `json:"email"`
+	Name     string `json:"name"`
+}
+
+// googleAccountAt loads myaccount.google.com/u/<n>/ and returns the email shown
+// there (the most-referenced address in the bootstrap data). Empty when the
+// slot has no distinct account.
+func googleAccountAt(ctx context.Context, cookie string, n int) (email string) {
+	tctx, cancel := context.WithTimeout(ctx, 12*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(tctx, "GET",
+		fmt.Sprintf("https://myaccount.google.com/u/%d/", n), nil)
+	if err != nil {
+		return ""
+	}
+	req.Header.Set("Cookie", cookie)
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0 Safari/537.36")
+	resp, err := webClient.Do(req)
+	if err != nil || resp.StatusCode != 200 {
+		if resp != nil {
+			resp.Body.Close()
+		}
+		return ""
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 3<<20))
+	// The active account's email dominates the page; take the most frequent.
+	counts := map[string]int{}
+	for _, m := range reGoogleEmail.FindAllStringSubmatch(string(body), -1) {
+		counts[m[1]]++
+	}
+	best, bestN := "", 0
+	for e, c := range counts {
+		if c > bestN {
+			best, bestN = e, c
+		}
+	}
+	return best
+}
+
+// VerifyGoogleCookie checks whether a stored Google cookie is a live session
+// and returns the account(s) it belongs to. It accepts the same input the
+// osint_google tool does (Cookie-Editor JSON or a raw header). The
+// accounts.google.com/ListAccounts endpoint answers to the cookie alone, so it
+// doubles as a "is this cookie still valid?" probe.
+func VerifyGoogleCookie(ctx context.Context, raw string) (accounts []GoogleAccount, err error) {
+	cookie, sapisid := googleCookieHeader(raw)
+	if strings.TrimSpace(cookie) == "" {
+		return nil, fmt.Errorf("no cookie configured")
+	}
+	if sapisid == "" {
+		return nil, fmt.Errorf("cookie is missing SAPISID — re-export the full cookie set with Cookie-Editor")
+	}
+	_ = sapisid
+
+	// A session can hold several accounts, selected by the /u/<N>/ path. Walk the
+	// slots and collect distinct emails; Google wraps an out-of-range index back
+	// to the default account, so stop once an email repeats one already seen or a
+	// slot yields nothing. This lists every account the cookie is signed into so
+	// the user can pick the right one.
+	seen := map[string]bool{}
+	for n := 0; n < 8; n++ {
+		email := googleAccountAt(ctx, cookie, n)
+		if email == "" {
+			// The first slot must resolve; a blank slot 0 means the cookie is dead.
+			if n == 0 {
+				continue
+			}
+			break
+		}
+		if seen[email] {
+			break // wrapped back to an earlier account — no more distinct slots
+		}
+		seen[email] = true
+		accounts = append(accounts, GoogleAccount{AuthUser: n, Email: email})
+	}
+	if len(accounts) == 0 {
+		return nil, fmt.Errorf("cookie did not authenticate — Google served a signed-out page; re-export the cookie")
+	}
+	return accounts, nil
+}
+
+var (
+	// The account email is embedded in myaccount.google.com bootstrap JSON.
+	reGoogleEmail = regexp.MustCompile(`"([a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,})"`)
+	// A display name often rides alongside as ["Full Name", ...].
+	reGoogleName = regexp.MustCompile(`"name":\s*"([^"]{1,80})"`)
+)
+
+func firstMatch(re *regexp.Regexp, s string) string {
+	if m := re.FindStringSubmatch(s); len(m) > 1 {
+		return m[1]
+	}
+	return ""
 }

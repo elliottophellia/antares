@@ -1,12 +1,16 @@
 SHELL := /bin/bash
 
-# Toolchain: PATH first, then common install locations, then bare name.
-# Override on the command line, e.g. `make GO=/usr/local/go/bin/go build`.
-GO  ?= $(shell command -v go 2>/dev/null || { [ -x '$(HOME)/.local/sdk/go/bin/go' ] && echo '$(HOME)/.local/sdk/go/bin/go'; } || echo go)
-BUN ?= $(shell command -v bun 2>/dev/null || { [ -x '$(HOME)/.bun/bin/bun' ] && echo '$(HOME)/.bun/bin/bun'; } || echo bun)
-# air is installed by `make install` into $(go env GOPATH)/bin
-GOPATH_BIN := $(shell '$(GO)' env GOPATH 2>/dev/null)/bin
-AIR ?= $(shell command -v air 2>/dev/null || { [ -x '$(GOPATH_BIN)/air' ] && echo '$(GOPATH_BIN)/air'; } || { [ -x '$(HOME)/go/bin/air' ] && echo '$(HOME)/go/bin/air'; } || echo air)
+# Resolve each tool from $PATH first, then fall back to its common install
+# location. Override any of them explicitly, e.g. `make GO=/opt/go/bin/go build`.
+# `tool <name> <fallback>` = the binary on PATH if present, else the fallback.
+tool = $(shell command -v $(1) 2>/dev/null || echo $(2))
+
+GO     ?= $(call tool,go,$(HOME)/.local/sdk/go/bin/go)
+BUN    ?= $(call tool,bun,$(HOME)/.bun/bin/bun)
+# air lives in GOPATH/bin after `make install`; if GOPATH can't be read, use the
+# conventional ~/go.
+GOPATH ?= $(shell $(GO) env GOPATH 2>/dev/null || echo $(HOME)/go)
+AIR    ?= $(call tool,air,$(GOPATH)/bin/air)
 PREFIX ?= $(HOME)/.local
 
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo 0.1.0-dev)
