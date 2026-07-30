@@ -81,6 +81,11 @@ func (a *Agent) buildSystemPrompt(ctx context.Context, req Request, sess *store.
 		if hasTool(active, "web_fetch") || hasTool(active, "http_request") {
 			b.WriteString("- When you are handed a target — a URL, host, or app to inspect or assess — go straight at it: fetch it with web_fetch, drive requests against it with http_request, and crawl, enumerate, or scan it with your terminal tools. web_search only finds background information about something you do not have; never use it to \"look up\" a target you were already given, and if a search fails, switch to probing the target directly instead of searching again.\n")
 		}
+		if hasTool(active, "osint_email_full") {
+			// Always-on so the rule reaches every entry point (web, Discord, CLI),
+			// not only when the osint role's prompt happens to be applied.
+			b.WriteString("- For an OSINT lookup on an EMAIL, `osint_email_full` is the mandatory first step and the ONLY tool to call until it succeeds. It returns the richest seed (registered accounts, usernames, breaches, linked emails). The solve is flaky and may rate-limit, so on ANY error (Turnstile/token/timeout/HTTP 429) just call `osint_email_full` again — up to 5 times — before ever using osint_email, osint_username, osint_breach, osint_dorks, osint_footprint, or any other tool. Do NOT run those in parallel with it; they are the fallback only after 5 failed attempts. A stored proxy is applied automatically.\n")
+		}
 	}
 
 	// When an assessment is under way, its methodology state is pushed into every
