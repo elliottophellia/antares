@@ -1,0 +1,60 @@
+---
+name: vps-manager
+description: Monitor and manage the user's saved VPS servers over SSH. Use when asked to check, inspect, or operate on a server.
+tags: [ops, vps, ssh, sysadmin]
+triggers: [vps, server, ssh, systemctl, restart service, check server, disk full, deploy]
+---
+
+# VPS manager
+
+The user has saved VPS servers on the dashboard's VPS page. You reach them with
+the **`vps_run`** tool: it runs a shell command on a chosen server over SSH and
+returns the output. There is no agent on the box — just standard commands.
+
+## Pick the server first
+
+Call `vps_run` with **no command** to list the saved servers (id, label,
+user@host). Then pass `vps=<id or label>` on every call. If the user named a
+server, match it to a label; if there is only one, use it.
+
+## Look before you touch
+
+Start read-only to understand the box, then act. Useful reads:
+
+- **Health:** `uptime`, `free -h`, `df -h`, `top -bn1 | head -20`
+- **Services:** `systemctl --failed`, `systemctl status <name>`, `systemctl list-units --type=service --state=running`
+- **Logs:** `journalctl -u <service> -n 100 --no-pager`, `tail -n 100 /var/log/<file>`
+- **Containers:** `docker ps -a`, `docker logs --tail 100 <name>`, `docker stats --no-stream`
+- **Network/ports:** `ss -tulpn`, `ip -br a`
+- **What's eating disk:** `du -sh /var/* 2>/dev/null | sort -rh | head`, `journalctl --disk-usage`
+
+The dashboard's VPS page already shows CPU/RAM/disk/uptime/top-processes for a
+glance — reach for `vps_run` when you need something specific or need to change
+something.
+
+## Managing
+
+Once you know the state, operate deliberately:
+
+- **Restart a service:** `systemctl restart <name>` then confirm with
+  `systemctl status <name> --no-pager`.
+- **Free disk:** clear old logs (`journalctl --vacuum-time=7d`), package caches
+  (`apt-get clean` / `dnf clean all`), then re-check `df -h`.
+- **Update packages:** `apt-get update && apt-get -y upgrade` (Debian/Ubuntu) or
+  `dnf -y upgrade` (RHEL family). Say what changed.
+- **Deploy / app ops:** cd into the app, pull, build, restart its unit or
+  container — follow the user's stated workflow, don't invent one.
+
+## Rules
+
+- **Only servers the user owns.** These are their machines, added on purpose.
+- **Read before write.** Never restart, delete, or upgrade without first showing
+  what you found and, for anything risky, saying what you're about to do.
+- **Destructive commands need care.** `rm -rf`, `mkfs`, `dd`, dropping a
+  database, `systemctl stop` on something critical — confirm the target and
+  prefer the reversible option. `vps_run` asks for approval before each command;
+  do not try to batch around that.
+- **One thing at a time.** Run a command, read its output, decide the next —
+  don't fire a chain of mutations blind.
+- **Report honestly.** Show the actual output. If a command failed, say so and
+  what the error was.

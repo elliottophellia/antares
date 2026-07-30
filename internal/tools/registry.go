@@ -209,7 +209,7 @@ var Toolsets = map[string][]string{
 		"read_file", "write_file", "list_files", "glob", "grep", "terminal",
 		"web_search", "web_fetch", "http_request", "browser", "todo", "skill",
 		"report_finding", "triage_finding", "add_intel", "methodology_status",
-		"delegate_task", "task", "list_roles", "diagnostics", "ask_user",
+		"delegate_task", "task", "list_roles", "diagnostics", "ask_user", "vps_run",
 		"osint_dns", "osint_dorks", "osint_whois", "osint_ip", "osint_username", "osint_github", "osint_email", "osint_email_full", "list_proxies", "osint_breach", "osint_shodan", "osint_reputation", "osint_crypto", "osint_domain", "osint_phone", "osint_scrape", "osint_paste", "osint_footprint", "osint_pivot", "osint_google", "osint_dorks_live", "check_dependencies", "re_info", "re_strings", "re_analyze", "re_decompile", "solve_captcha", "intercept",
 		"attack_script", "awshook", "azurehook", "kubehook", "winhook", "machook", "cipipe", "ebpf",
 		"hackbrowser",
@@ -233,7 +233,7 @@ var Toolsets = map[string][]string{
 	},
 	"default": {
 		"read_file", "read_document", "write_file", "edit_file", "list_files", "glob", "grep",
-		"terminal", "web_search", "web_fetch", "http_request", "browser", "todo", "board", "memory", "list_proxies",
+		"terminal", "web_search", "web_fetch", "http_request", "browser", "todo", "board", "memory", "list_proxies", "vps_run",
 		"session_search", "rag_search", "rag_index", "skill", "delegate_task", "task", "list_roles", "image_generate", "view_image", "speak", "transcribe", "computer", "diagnostics", "ask_user", "schedule",
 		"osint_dns", "osint_dorks", "osint_whois", "osint_ip", "osint_username", "osint_github", "osint_email", "osint_email_full", "osint_breach", "osint_shodan", "osint_reputation", "osint_crypto", "osint_domain", "osint_phone", "osint_scrape", "osint_paste", "osint_footprint", "osint_pivot", "osint_google", "osint_dorks_live", "check_dependencies", "re_info", "re_strings", "re_analyze", "re_decompile", "solve_captcha", "intercept",
 	},

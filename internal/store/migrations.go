@@ -74,6 +74,20 @@ var migrations = []string{
 	)`,
 	`CREATE INDEX IF NOT EXISTS idx_chunks_collection ON rag_chunks(collection)`,
 
+	`CREATE TABLE IF NOT EXISTS vps_hosts (
+		id           TEXT PRIMARY KEY,
+		label        TEXT NOT NULL DEFAULT '',
+		host         TEXT NOT NULL,
+		port         INTEGER NOT NULL DEFAULT 22,
+		username     TEXT NOT NULL DEFAULT 'root',
+		auth_method  TEXT NOT NULL DEFAULT 'password',
+		password     TEXT NOT NULL DEFAULT '',
+		private_key  TEXT NOT NULL DEFAULT '',
+		passphrase   TEXT NOT NULL DEFAULT '',
+		created_at   BIGINT NOT NULL,
+		updated_at   BIGINT NOT NULL
+	)`,
+
 	`CREATE TABLE IF NOT EXISTS cron_jobs (
 		id         TEXT PRIMARY KEY,
 		name       TEXT NOT NULL,

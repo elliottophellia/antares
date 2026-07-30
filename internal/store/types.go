@@ -5,6 +5,7 @@ package store
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"time"
 )
 
@@ -105,6 +106,33 @@ type Memory struct {
 	Pinned    bool      `json:"pinned"`
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
+}
+
+// VPSHost is a saved server the user can monitor and manage over SSH. The
+// secret fields (Password, PrivateKey, Passphrase) are stored encrypted at
+// rest; the store encrypts on Put and decrypts on read, so callers see plain
+// values but the DB never holds them in the clear.
+type VPSHost struct {
+	ID         string    `json:"id"`
+	Label      string    `json:"label"`
+	Host       string    `json:"host"`
+	Port       int       `json:"port"`
+	Username   string    `json:"username"`
+	AuthMethod string    `json:"auth_method"` // password|key
+	Password   string    `json:"password,omitempty"`
+	PrivateKey string    `json:"private_key,omitempty"`
+	Passphrase string    `json:"passphrase,omitempty"`
+	CreatedAt  time.Time `json:"created_at"`
+	UpdatedAt  time.Time `json:"updated_at"`
+}
+
+// Addr is the host:port to dial.
+func (v VPSHost) Addr() string {
+	p := v.Port
+	if p == 0 {
+		p = 22
+	}
+	return fmt.Sprintf("%s:%d", v.Host, p)
 }
 
 // Chunk is one embedded text span in the builtin RAG index.
@@ -264,6 +292,11 @@ type Store interface {
 	SearchChunks(ctx context.Context, collection string, embedding []float32, text string, topK int, hybrid bool) ([]Chunk, []float64, error)
 	DeleteCollection(ctx context.Context, collection string) (int64, error)
 	ListCollections(ctx context.Context) ([]string, error)
+
+	PutVPSHost(ctx context.Context, v *VPSHost) error
+	GetVPSHost(ctx context.Context, id string) (*VPSHost, error)
+	ListVPSHosts(ctx context.Context) ([]VPSHost, error)
+	DeleteVPSHost(ctx context.Context, id string) error
 
 	PutCronJob(ctx context.Context, j *CronJob) error
 	GetCronJob(ctx context.Context, id string) (*CronJob, error)

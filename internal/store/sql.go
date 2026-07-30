@@ -11,7 +11,10 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
+
+	"github.com/enowdev/antares/internal/secret"
 
 	_ "github.com/jackc/pgx/v5/stdlib" // postgres driver
 	_ "modernc.org/sqlite"             // pure-Go sqlite driver
@@ -24,6 +27,12 @@ type sqlStore struct {
 	db      *sql.DB
 	dialect string // sqlite|postgres
 	dsn     string
+
+	// box encrypts VPS credentials at rest; obtained lazily from secret.Default
+	// on the first VPS operation so opening the store never depends on the key.
+	boxOnce sync.Once
+	box     *secret.Box
+	boxErr  error
 }
 
 // Open connects to the configured backend and applies migrations.

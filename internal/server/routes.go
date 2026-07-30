@@ -139,6 +139,13 @@ func (s *Server) routes() {
 	m.HandleFunc("POST /api/proxies/test", s.handleTestProxy)
 	m.HandleFunc("DELETE /api/proxies/{id}", s.handleDeleteProxy)
 
+	// VPS — connect, monitor, and manage servers over SSH
+	m.HandleFunc("GET /api/vps", s.handleListVPS)
+	m.HandleFunc("POST /api/vps", s.handleSaveVPS)
+	m.HandleFunc("POST /api/vps/test", s.handleTestVPS)
+	m.HandleFunc("GET /api/vps/{id}/metrics", s.handleVPSMetrics)
+	m.HandleFunc("DELETE /api/vps/{id}", s.handleDeleteVPS)
+
 	// MCP
 	m.HandleFunc("GET /api/mcp", s.handleMCPStatus)
 	m.HandleFunc("POST /api/mcp/servers", s.handleAddMCPServer)
