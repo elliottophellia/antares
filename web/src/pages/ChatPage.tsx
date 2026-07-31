@@ -31,6 +31,7 @@ import { ApprovalCard, type ApprovalView } from '@/components/chat/ApprovalCard'
 import { AskUserCard } from '@/components/chat/AskUserCard'
 import { RolePicker } from '@/components/chat/RolePicker'
 import { ModelPicker } from '@/components/chat/ModelPicker'
+import { ReasoningPicker } from '@/components/chat/ReasoningPicker'
 import { ProjectPicker } from '@/components/chat/ProjectPicker'
 import { ProjectSidebar } from '@/components/chat/ProjectSidebar'
 import { AnalyzeProjectDialog } from '@/components/chat/AnalyzeProjectDialog'
@@ -245,6 +246,17 @@ export default function ChatPage() {
     setRole(r)
     if (r) localStorage.setItem('antares:last-role', r)
     else localStorage.removeItem('antares:last-role')
+  }, [])
+  // Per-turn reasoning effort picked in the composer. Empty means "use the
+  // configured default" (agent.reasoning_effort, then model). Persisted so the
+  // choice survives a reload, mirroring the role picker.
+  const [reasoning, setReasoning] = useState(
+    () => localStorage.getItem('antares:reasoning') ?? '',
+  )
+  const pickReasoning = useCallback((r: string) => {
+    setReasoning(r)
+    if (r) localStorage.setItem('antares:reasoning', r)
+    else localStorage.removeItem('antares:reasoning')
   }, [])
   // Project session: the folder this chat is bound to. Chosen on a NEW chat and
   // sent with the first message; once the session exists it is fixed (locked).
@@ -829,6 +841,9 @@ export default function ChatPage() {
         message,
         images: attached,
         role,
+        // Per-turn reasoning override; omitted when unset so the server falls
+        // back to the configured default.
+        ...(reasoning ? { reasoning_effort: reasoning } : {}),
         // Only meaningful when starting a new session; the server ignores it once
         // the session exists. Read from the ref so an auto-analyze turn fired
         // right after binding still carries the project.
@@ -851,6 +866,19 @@ export default function ChatPage() {
           localSessionRef.current = null
           // The turn may have written project_info — refresh the sidebar.
           setSidebarRefresh((n) => n + 1)
+          // Re-hydrate from the persisted turn so the optimistic you_/local_
+          // message ids become their real DB ids. Without this the edit/revert
+          // affordance never appears until a manual reload, since it is hidden
+          // for optimistic ids (see MessageBubble). Mirrors the attach path.
+          const sid = sessionIdRef.current
+          if (sid) {
+            get<SessionDetail>(`/sessions/${sid}`)
+              .then((d) => {
+                setMessages(hydrate(d))
+                setTitle(d.session.title || t('chat.conversation'))
+              })
+              .catch(() => {})
+          }
           return
         }
         applyEvent(assistantId, event, (id, evtTitle) => {
@@ -887,7 +915,7 @@ export default function ChatPage() {
       },
     )
     },
-    [role, projectDir, streaming, sessionId, navigate, runCommand, applyEvent, drainPatches, t],
+    [role, reasoning, projectDir, streaming, sessionId, navigate, runCommand, applyEvent, drainPatches, t],
   )
 
   const send = useCallback(() => {
@@ -1093,6 +1121,7 @@ export default function ChatPage() {
           <div className="flex min-w-0 items-center gap-1.5">
             <RolePicker value={role} onChange={pickRole} compact />
             <ModelPicker />
+            <ReasoningPicker value={reasoning} onChange={pickReasoning} compact />
             <ProjectPicker
               value={projectDir}
               onChange={(dir) => {

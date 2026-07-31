@@ -98,7 +98,10 @@ type chatRequest struct {
 	Role      string   `json:"role"`   // run this turn as a specialist
 	Model     string   `json:"model"`
 	Toolset   string   `json:"toolset"`
-	UserID    string   `json:"user_id"`
+	// ReasoningEffort overrides the configured effort for this turn (none|low|
+	// medium|high). Empty falls back to agent, then model config.
+	ReasoningEffort string `json:"reasoning_effort"`
+	UserID          string `json:"user_id"`
 	// ProjectDir turns a NEW session into a project session bound to this folder.
 	// Only read on the session's first turn; ignored once the session exists.
 	ProjectDir string `json:"project_dir"`
@@ -162,10 +165,11 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		Role:      req.Role,
 		Platform:  "web",
 		UserID:    req.UserID,
-		Model:      req.Model,
-		Toolset:    req.Toolset,
-		ProjectDir: req.ProjectDir,
-		IndexRAG:   req.IndexRAG,
+		Model:           req.Model,
+		Toolset:         req.Toolset,
+		ReasoningEffort: req.ReasoningEffort,
+		ProjectDir:      req.ProjectDir,
+		IndexRAG:        req.IndexRAG,
 	}
 
 	// The turn is driven on a background context so it survives this request:
