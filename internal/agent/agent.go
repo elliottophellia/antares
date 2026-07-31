@@ -29,7 +29,6 @@ import (
 	"github.com/enowdev/antares/internal/skills"
 	"github.com/enowdev/antares/internal/store"
 	"github.com/enowdev/antares/internal/tools"
-	"github.com/enowdev/antares/internal/worktree"
 )
 
 // EventType enumerates what the agent streams to callers.
@@ -886,31 +885,7 @@ func (a *Agent) subAgentFor(parent Request) tools.SubAgent {
 			return a.runSubprocess(ctx, sub)
 		}
 
-		// Isolation gives the sub-agent its own worktree so parallel workers on
-		// the same repository do not conflict. When it cannot be set up, the
-		// sub-agent shares the workspace rather than failing.
-		workspace := sub.Workspace
-		// A sub-agent of a project session inherits the project: it works in the
-		// project folder and its writes stay confined there (plus the antares
-		// workspace), same as the parent. An isolated worktree opts out — it gets
-		// its own tree below.
-		projectDir := ""
-		if !sub.Isolate && strings.TrimSpace(parent.ProjectDir) != "" {
-			projectDir = parent.ProjectDir
-			if workspace == "" {
-				workspace = parent.ProjectDir
-			}
-		}
-		var wt *worktree.Worktree
-		if sub.Isolate {
-			base := firstNonEmpty(sub.Workspace, a.cfg.Agent.Workspace)
-			if w, err := worktree.Create(ctx, config.Expand(base), firstNonEmpty(sub.Role, "sub")); err == nil {
-				wt = w
-				workspace = w.Path
-			} else {
-				slog.Debug("worktree isolation unavailable", "error", err)
-			}
-		}
+		workspace, projectDir, wt := a.prepareSubAgentWorkspace(ctx, parent, sub)
 
 		subID, untrack := trackSubAgent(sub.Role, sub.Prompt, parent.SessionID)
 		defer untrack()

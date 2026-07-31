@@ -97,7 +97,7 @@ func (a *Agent) startBackground(parent Request, req tools.SubAgentRequest) strin
 		if maxTurns <= 0 {
 			maxTurns = 20
 		}
-		workspace := firstNonEmpty(req.Workspace, a.cfg.Agent.Workspace)
+		workspace, projectDir, wt := a.prepareSubAgentWorkspace(ctx, parent, req)
 
 		// Not Quiet: the sub-agent keeps a real session, so the task can be
 		// continued later with the task tool's send action. Every event is
@@ -109,11 +109,15 @@ func (a *Agent) startBackground(parent Request, req tools.SubAgentRequest) strin
 			Model:       req.Model,
 			Role:        req.Role,
 			Workspace:   workspace,
+			ProjectDir:  projectDir,
 			MaxTurns:    maxTurns,
 			Platform:    "background",
 			UserID:      parent.UserID,
 			Depth:       depth,
 		}, subEmit(subID, nil))
+		if wt != nil {
+			wt.Cleanup(ctx)
+		}
 
 		a.bg.finish(id, res, err, ctx.Err())
 		// Signal the delegating session that this worker is done, so the main
