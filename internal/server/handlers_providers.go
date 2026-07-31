@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/enowdev/antares/internal/config"
+	"github.com/enowdev/antares/internal/providers"
 )
 
 // handleProviderModelInfo tries to discover a model's context window from the
@@ -45,17 +46,23 @@ func (s *Server) handleProviderModelInfo(w http.ResponseWriter, r *http.Request)
 // then a sane default.
 func (s *Server) handleContextWindow(w http.ResponseWriter, r *http.Request) {
 	cfg := s.config()
+	model := cfg.Model.Default
+	// Same precedence as the agent's contextWindowFor: per-model meta override,
+	// then the provider catalogue (real windows for known models like glm-5.2's
+	// 1M), then the configured window, then a sane default.
 	window := 128000
-	if cfg.Model.ContextWindow > 0 {
+	if w := providers.ContextWindow(model); w > 0 {
+		window = w
+	} else if cfg.Model.ContextWindow > 0 {
 		window = cfg.Model.ContextWindow
 	}
 	for _, p := range cfg.Providers {
-		if m, ok := p.ModelMeta[cfg.Model.Default]; ok && m.ContextWindow > 0 {
+		if m, ok := p.ModelMeta[model]; ok && m.ContextWindow > 0 {
 			window = m.ContextWindow
 			break
 		}
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"context_window": window, "model": cfg.Model.Default})
+	writeJSON(w, http.StatusOK, map[string]any{"context_window": window, "model": model})
 }
 
 // handleAddProviderModel adds a model id to providers.<id>.models, with an

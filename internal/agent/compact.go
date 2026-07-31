@@ -8,12 +8,15 @@ import (
 	"strings"
 
 	"github.com/enowdev/antares/internal/llm"
+	"github.com/enowdev/antares/internal/providers"
 )
 
-// contextWindowFor returns the active model's token budget for the usage event,
-// preferring a per-model override from the provider config and falling back to
-// the configured window (then a sane default). It mirrors the window
-// maybeCompact governs, so the UI's "context full" bar agrees with compaction.
+// contextWindowFor returns the active model's token budget for the usage event.
+// Precedence: an explicit per-model model_meta override, then the provider
+// catalogue's known window for the model (so e.g. glm-5.2 reads its real 1M
+// window instead of the generic default), then the configured window, then a
+// sane fallback. It mirrors the window maybeCompact governs, so the UI's
+// "context full" bar agrees with compaction.
 func (a *Agent) contextWindowFor(model string) int {
 	if a.cfg != nil {
 		for _, p := range a.cfg.Providers {
@@ -21,9 +24,12 @@ func (a *Agent) contextWindowFor(model string) int {
 				return m.ContextWindow
 			}
 		}
-		if a.cfg.Model.ContextWindow > 0 {
-			return a.cfg.Model.ContextWindow
-		}
+	}
+	if w := providers.ContextWindow(model); w > 0 {
+		return w
+	}
+	if a.cfg != nil && a.cfg.Model.ContextWindow > 0 {
+		return a.cfg.Model.ContextWindow
 	}
 	return 128000
 }
@@ -35,7 +41,12 @@ func (a *Agent) maybeCompact(ctx context.Context, history []llm.Message, system,
 	if !cfg.Enabled || len(history) < 8 {
 		return history
 	}
+	// Use the same window the usage gauge reports (per-model meta, catalogue,
+	// then config) so "context full" and compaction agree.
 	window := a.contextWindowFor(model)
+	if window <= 0 {
+		window = 128000
+	}
 	threshold := cfg.Threshold
 	if threshold <= 0 || threshold >= 1 {
 		threshold = 0.8
