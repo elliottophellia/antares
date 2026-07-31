@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -29,21 +30,18 @@ func (a *Agent) contextWindowFor(model string) int {
 
 // maybeCompact summarises older turns once the conversation approaches the
 // model's context window, keeping recent turns verbatim.
-func (a *Agent) maybeCompact(ctx context.Context, history []llm.Message, system string, emit Emit) []llm.Message {
+func (a *Agent) maybeCompact(ctx context.Context, history []llm.Message, system, model string, tools []llm.Tool, emit Emit) []llm.Message {
 	cfg := a.cfg.Compression
 	if !cfg.Enabled || len(history) < 8 {
 		return history
 	}
-	window := a.cfg.Model.ContextWindow
-	if window <= 0 {
-		window = 128000
-	}
+	window := a.contextWindowFor(model)
 	threshold := cfg.Threshold
 	if threshold <= 0 || threshold >= 1 {
 		threshold = 0.8
 	}
 
-	used := estimateTokens(history, system)
+	used := estimateRequestTokens(history, system, tools)
 	if float64(used) < float64(window)*threshold {
 		// Even below the threshold, prune oversized tool results that are no
 		// longer near the tail — they dominate context growth.
@@ -89,6 +87,21 @@ func (a *Agent) maybeCompact(ctx context.Context, history []llm.Message, system 
 
 	slog.Info("context compacted", "before", len(history), "after", len(compacted), "tokens_before", used)
 	return compacted
+}
+
+// estimateRequestTokens includes tool schemas as well as system/history. Large
+// agent tool packs are sent on every call and can consume a material part of the
+// context window; omitting them delays compaction until the provider rejects the
+// request even though the history-only estimate still looks safe.
+func estimateRequestTokens(history []llm.Message, system string, tools []llm.Tool) int {
+	total := estimateTokens(history, system)
+	for _, tool := range tools {
+		total += len(tool.Name)/4 + len(tool.Description)/4 + 8
+		if schema, err := json.Marshal(tool.Parameters); err == nil {
+			total += len(schema) / 4
+		}
+	}
+	return total
 }
 
 // rebalanceToolBoundary moves messages between middle and tail so that no tool

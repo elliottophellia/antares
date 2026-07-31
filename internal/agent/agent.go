@@ -403,7 +403,7 @@ func (a *Agent) Run(ctx context.Context, req Request, emit Emit) (*Result, error
 			}
 		}
 
-		history = a.maybeCompact(runCtx, history, systemPrompt, emit)
+		history = a.maybeCompact(runCtx, history, systemPrompt, modelName, toolSpecs, emit)
 
 		llmReq := llm.Request{
 			Model:             modelName,
