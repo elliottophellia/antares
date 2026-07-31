@@ -267,6 +267,8 @@ func (c *anthropicClient) fromResponse(raw *antResponse) (*Response, error) {
 		resp.Usage = Usage{
 			InputTokens: raw.Usage.InputTokens, OutputTokens: raw.Usage.OutputTokens,
 			CacheReadTokens: raw.Usage.CacheReadInputTokens, CacheWriteTokens: raw.Usage.CacheCreationInputTokens,
+			// Anthropic reports cache reads/creation alongside uncached input.
+			ContextTokens: raw.Usage.InputTokens + raw.Usage.CacheReadInputTokens + raw.Usage.CacheCreationInputTokens,
 		}
 	}
 	return resp, nil
@@ -340,6 +342,7 @@ func (c *anthropicClient) Stream(ctx context.Context, req Request, emit func(Eve
 					usage.InputTokens = u.InputTokens
 					usage.CacheReadTokens = u.CacheReadInputTokens
 					usage.CacheWriteTokens = u.CacheCreationInputTokens
+					usage.ContextTokens = usage.InputTokens + usage.CacheReadTokens + usage.CacheWriteTokens
 				}
 			}
 		case "content_block_start":
@@ -381,6 +384,7 @@ func (c *anthropicClient) Stream(ctx context.Context, req Request, emit func(Eve
 				if ev.Usage.CacheReadInputTokens > 0 {
 					usage.CacheReadTokens = ev.Usage.CacheReadInputTokens
 				}
+				usage.ContextTokens = usage.InputTokens + usage.CacheReadTokens + usage.CacheWriteTokens
 				u := usage
 				return emit(Event{Type: EventUsage, Usage: &u})
 			}

@@ -74,13 +74,31 @@ type Request struct {
 }
 
 // Usage reports token accounting for one call.
+//
+// ContextTokens is the provider-normalised size of the prompt that occupied the
+// model context for this call. It is deliberately separate from cache billing
+// fields: OpenAI-compatible and Gemini APIs report cached tokens as a subset of
+// InputTokens, while Anthropic reports them alongside InputTokens. Consumers
+// must not infer context size by blindly adding cache fields.
 type Usage struct {
 	InputTokens      int     `json:"input_tokens"`
 	OutputTokens     int     `json:"output_tokens"`
 	CacheReadTokens  int     `json:"cache_read_tokens"`
 	CacheWriteTokens int     `json:"cache_write_tokens"`
 	ReasoningTokens  int     `json:"reasoning_tokens"`
+	ContextTokens    int     `json:"context_tokens"`
 	Cost             float64 `json:"cost"`
+}
+
+// ContextSize returns the provider-normalised prompt size for context-window
+// accounting. Adapters with cache counters whose semantics differ set
+// ContextTokens explicitly. The conservative fallback treats InputTokens as the
+// complete prompt so an unknown adapter cannot double-count a cache subset.
+func (u Usage) ContextSize() int {
+	if u.ContextTokens > 0 {
+		return u.ContextTokens
+	}
+	return u.InputTokens
 }
 
 // Response is the final result of a completion.

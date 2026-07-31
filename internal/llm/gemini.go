@@ -297,6 +297,8 @@ func (c *geminiClient) Chat(ctx context.Context, req Request) (*Response, error)
 		resp.Usage = Usage{
 			InputTokens: u.PromptTokenCount, OutputTokens: u.CandidatesTokenCount,
 			CacheReadTokens: u.CachedContentTokenCount, ReasoningTokens: u.ThoughtsTokenCount,
+			// Gemini promptTokenCount includes cachedContentTokenCount.
+			ContextTokens: u.PromptTokenCount,
 		}
 	}
 	return resp, nil
@@ -331,6 +333,8 @@ func (c *geminiClient) Stream(ctx context.Context, req Request, emit func(Event)
 			usage = Usage{
 				InputTokens: u.PromptTokenCount, OutputTokens: u.CandidatesTokenCount,
 				CacheReadTokens: u.CachedContentTokenCount, ReasoningTokens: u.ThoughtsTokenCount,
+				// Gemini promptTokenCount includes cachedContentTokenCount.
+				ContextTokens: u.PromptTokenCount,
 			}
 			cp := usage
 			if err := emit(Event{Type: EventUsage, Usage: &cp}); err != nil {

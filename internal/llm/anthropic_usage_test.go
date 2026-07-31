@@ -43,6 +43,9 @@ func TestAnthropicStreamUsageFromMessageDelta(t *testing.T) {
 	if resp.Usage.CacheReadTokens != 2 {
 		t.Errorf("cache read tokens = %d, want 2", resp.Usage.CacheReadTokens)
 	}
+	if got, want := resp.Usage.ContextSize(), 15; got != want {
+		t.Errorf("context size = %d, want %d", got, want)
+	}
 }
 
 // TestAnthropicStreamUsageFromMessageStart guards the real-Anthropic path:
@@ -75,5 +78,8 @@ func TestAnthropicStreamUsageFromMessageStart(t *testing.T) {
 	}
 	if resp.Usage.CacheReadTokens != 5 {
 		t.Errorf("cache read tokens = %d, want 5", resp.Usage.CacheReadTokens)
+	}
+	if got, want := resp.Usage.ContextSize(), 105; got != want {
+		t.Errorf("context size = %d, want %d", got, want)
 	}
 }

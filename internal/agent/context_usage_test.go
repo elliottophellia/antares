@@ -52,7 +52,7 @@ func TestUsageEventKeepsCumulativeAndLatestContextSeparate(t *testing.T) {
 	e := Event{
 		Type:          EventUsage,
 		InputTokens:   333000,
-		ContextTokens: 111000,
+		ContextTokens: llm.Usage{InputTokens: 145878, CacheReadTokens: 145408, ContextTokens: 145878}.ContextSize(),
 		ContextWindow: 256000,
 	}
 	b, err := json.Marshal(e)
@@ -66,7 +66,7 @@ func TestUsageEventKeepsCumulativeAndLatestContextSeparate(t *testing.T) {
 	if got["input_tokens"] != float64(333000) {
 		t.Fatalf("input_tokens = %v", got["input_tokens"])
 	}
-	if got["context_tokens"] != float64(111000) {
-		t.Fatalf("context_tokens = %v", got["context_tokens"])
+	if got["context_tokens"] != float64(145878) {
+		t.Fatalf("context_tokens = %v; cached tokens were counted twice", got["context_tokens"])
 	}
 }

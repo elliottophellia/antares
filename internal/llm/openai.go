@@ -238,7 +238,12 @@ func (u *oaUsage) normalise() Usage {
 	if u == nil {
 		return Usage{}
 	}
-	out := Usage{InputTokens: u.PromptTokens, OutputTokens: u.CompletionTokens}
+	out := Usage{
+		InputTokens: u.PromptTokens, OutputTokens: u.CompletionTokens,
+		// OpenAI prompt_tokens already includes cached tokens; the details field
+		// is a subset used for billing, not additional context.
+		ContextTokens: u.PromptTokens,
+	}
 	if u.PromptDetails != nil {
 		out.CacheReadTokens = u.PromptDetails.CachedTokens
 	}

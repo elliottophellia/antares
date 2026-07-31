@@ -178,7 +178,10 @@ func (r *responsesReply) toResponse() (*Response, error) {
 	}
 	resp.Content, resp.Reasoning = text.String(), reasoning.String()
 	if r.Usage != nil {
-		resp.Usage = Usage{InputTokens: r.Usage.InputTokens, OutputTokens: r.Usage.OutputTokens}
+		resp.Usage = Usage{
+			InputTokens: r.Usage.InputTokens, OutputTokens: r.Usage.OutputTokens,
+			ContextTokens: r.Usage.InputTokens,
+		}
 	}
 	return resp, nil
 }

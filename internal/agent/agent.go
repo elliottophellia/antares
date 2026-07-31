@@ -449,9 +449,9 @@ func (a *Agent) Run(ctx context.Context, req Request, emit Emit) (*Result, error
 		if resp.Usage.InputTokens > 0 || resp.Usage.OutputTokens > 0 {
 			_ = emit(Event{
 				Type: EventUsage, InputTokens: total.InputTokens, OutputTokens: total.OutputTokens,
-				// This turn's input (plus cached tokens, which still occupy the
-				// window) is the live context size the fill gauge plots.
-				ContextTokens: resp.Usage.InputTokens + resp.Usage.CacheReadTokens,
+				// Context size is provider-normalised: cache counters are billing
+				// breakdowns whose inclusion in InputTokens differs by API.
+				ContextTokens: resp.Usage.ContextSize(),
 				ContextWindow: a.contextWindowFor(modelName),
 			})
 			if !req.Quiet {
