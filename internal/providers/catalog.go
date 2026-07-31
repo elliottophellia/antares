@@ -20,6 +20,21 @@ type Info struct {
 	Models   []string
 }
 
+// contextWindows records the true context window (in tokens) for models whose
+// provider API does not report one, keyed by model id. The agent consults this
+// when a config has no explicit model_meta, so the context gauge and compaction
+// use the real window instead of the 200k default. Source: provider docs.
+var contextWindows = map[string]int{
+	// Z.ai GLM — https://docs.z.ai/guides/llm
+	"glm-5.2": 1_000_000, // 1M context
+	"glm-4.7": 200_000,
+	"glm-4.6": 200_000,
+}
+
+// ContextWindow returns the known context window for a model id, or 0 if none
+// is catalogued.
+func ContextWindow(model string) int { return contextWindows[model] }
+
 var catalog = []Info{
 	{"anthropic", "Anthropic", "anthropic", "ANTHROPIC_API_KEY", "", true,
 		[]string{"claude-opus-5", "claude-sonnet-5", "claude-haiku-4-5"}},
@@ -100,6 +115,19 @@ func Activate(cfg *config.Config, id, key string) {
 		}
 		if len(p.Models) == 0 {
 			p.Models = info.Models
+		}
+		// Record known context windows so the gauge/compaction use the real
+		// value (e.g. glm-5.2's 1M) rather than the generic default, and so it
+		// is persisted to config for models the provider API cannot report.
+		for _, m := range info.Models {
+			if w := ContextWindow(m); w > 0 {
+				if p.ModelMeta == nil {
+					p.ModelMeta = map[string]config.ModelMeta{}
+				}
+				if p.ModelMeta[m].ContextWindow == 0 {
+					p.ModelMeta[m] = config.ModelMeta{ContextWindow: w}
+				}
+			}
 		}
 	}
 	if key != "" {
