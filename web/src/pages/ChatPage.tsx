@@ -447,7 +447,13 @@ export default function ChatPage() {
     abortRef.current?.()
     abortRef.current = null
     setStreaming(false)
-  }, [])
+    if (sessionId) {
+      void post<{ interrupted: boolean }>('/chat/interrupt', { session_id: sessionId }).catch(() => {
+        // The stream is already closed locally. A failed interrupt will surface
+        // when the user reattaches instead of leaving the stop button stuck.
+      })
+    }
+  }, [sessionId])
 
   // Apply one stream event to the named assistant message. Shared by a fresh
   // send and a reattach, so both render a turn identically. Session handling
@@ -1652,10 +1658,11 @@ export function StreamingIndicator({
   const { t } = useI18n()
   const [secs, setSecs] = useState(0)
   useEffect(() => {
+    setSecs(0)
     const start = Date.now()
     const id = setInterval(() => setSecs(Math.round((Date.now() - start) / 1000)), 1000)
     return () => clearInterval(id)
-  }, [])
+  }, [turn, tool, waiting])
   // Paused on a question: no timer, no pulsing "working" — the run is idle by
   // design, waiting on the person. Otherwise show the running tool / step.
   if (waiting) {

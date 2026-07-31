@@ -119,7 +119,11 @@ func defaultShell(configured string) (string, []string) {
 	if runtime.GOOS == "windows" {
 		return "powershell.exe", []string{"-NoLogo", "-NoProfile", "-Command", "-"}
 	}
-	for _, sh := range []string{os.Getenv("SHELL"), "/bin/bash", "/bin/sh"} {
+	// The persistent-shell protocol below emits POSIX syntax (`$?`, `printf`).
+	// Do not inherit an arbitrary interactive shell such as fish: fish parses
+	// `$?` as an error, never prints the completion sentinel, and leaves every
+	// terminal call waiting until its timeout even though the command finished.
+	for _, sh := range []string{"/bin/bash", "/bin/sh"} {
 		if sh == "" {
 			continue
 		}
