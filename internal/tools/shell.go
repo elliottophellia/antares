@@ -22,6 +22,7 @@ import (
 type ShellManager struct {
 	mu       sync.Mutex
 	sessions map[string]*shellSession
+	jobs     map[string]*backgroundProcess
 	cfg      config.Terminal
 	// sandboxOnce keeps a confinement warning from repeating on every shell.
 	sandboxOnce sync.Once
@@ -39,7 +40,7 @@ type httpShimEnv struct {
 
 // NewShellManager builds a manager for the given terminal config.
 func NewShellManager(cfg config.Terminal) *ShellManager {
-	return &ShellManager{sessions: map[string]*shellSession{}, cfg: cfg}
+	return &ShellManager{sessions: map[string]*shellSession{}, jobs: map[string]*backgroundProcess{}, cfg: cfg}
 }
 
 // EnableHTTPShim makes new shells route curl/wget through the fingerprinted
@@ -218,10 +219,18 @@ func (m *ShellManager) Close(id string) {
 	m.mu.Lock()
 	s, ok := m.sessions[id]
 	delete(m.sessions, id)
+	var jobs []*backgroundProcess
+	for jobID, job := range m.jobs {
+		if job.sessionID == id {
+			jobs = append(jobs, job)
+			delete(m.jobs, jobID)
+		}
+	}
 	m.mu.Unlock()
 	if ok {
 		s.terminate()
 	}
+	stopProcesses(jobs, processCancelled)
 }
 
 // CloseAll terminates every live shell.
@@ -232,10 +241,16 @@ func (m *ShellManager) CloseAll() {
 		all = append(all, s)
 	}
 	m.sessions = map[string]*shellSession{}
+	jobs := make([]*backgroundProcess, 0, len(m.jobs))
+	for _, job := range m.jobs {
+		jobs = append(jobs, job)
+	}
+	m.jobs = map[string]*backgroundProcess{}
 	m.mu.Unlock()
 	for _, s := range all {
 		s.terminate()
 	}
+	stopProcesses(jobs, processCancelled)
 }
 
 // Active reports how many shells are currently running.
@@ -349,20 +364,22 @@ type terminalTool struct{}
 
 func (terminalTool) Name() string { return "terminal" }
 func (terminalTool) Description() string {
-	return "Run a shell command in a persistent session. Working directory, environment variables, and shell state persist across calls."
+	return "Run a shell command. Foreground commands use a persistent shell; set background=true for work of unknown duration and monitor the returned process_id with the process tool instead of shell sleep."
 }
 func (terminalTool) RequiresApproval() bool { return true }
 func (terminalTool) Schema() map[string]any {
 	return schema(map[string]any{
-		"command": prop("string", "Shell command to execute."),
-		"timeout": propDefault("integer", "Seconds before the command is aborted.", 300),
+		"command":    prop("string", "Shell command to execute."),
+		"timeout":    propDefault("integer", "Foreground: seconds before aborting. Background: optional total runtime limit; zero means no runtime limit.", 0),
+		"background": propDefault("boolean", "Start as a managed background process and return immediately with a process_id. Use for builds, analysis, imports, servers, and other commands whose duration is unknown.", false),
 	}, "command")
 }
 
 func (terminalTool) Execute(ctx context.Context, in Input) Result {
 	var args struct {
-		Command string `json:"command"`
-		Timeout int    `json:"timeout"`
+		Command    string `json:"command"`
+		Timeout    int    `json:"timeout"`
+		Background bool   `json:"background"`
 	}
 	if err := in.Bind(&args); err != nil {
 		return Errorf("%v", err)
@@ -379,6 +396,16 @@ func (terminalTool) Execute(ctx context.Context, in Input) Result {
 		if blocked != "" && strings.Contains(cmdText, blocked) {
 			return Errorf("command blocked by policy (matched %q). Adjust terminal.blocked_commands to allow it.", blocked)
 		}
+	}
+	if args.Background {
+		if args.Timeout < 0 {
+			return Errorf("timeout must be non-negative")
+		}
+		job, err := in.Deps.Shell.startBackground(in.SessionID, in.Workspace, cmdText, time.Duration(args.Timeout)*time.Second)
+		if err != nil {
+			return Errorf("cannot start background process: %v", err)
+		}
+		return processJSON(job.view(0, false))
 	}
 
 	timeout := time.Duration(args.Timeout) * time.Second

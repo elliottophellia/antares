@@ -176,6 +176,12 @@ func (r *Registry) Resolve(toolset string, enabled, disabled []string) []Tool {
 		}
 		delete(want, n)
 	}
+	// process is terminal's job-control companion. Custom roles that explicitly
+	// enable terminal should not silently lose the only safe way to observe or
+	// cancel an unknown-duration command. An explicit process disable still wins.
+	if want["terminal"] && !contains(disabled, "process") {
+		want["process"] = true
+	}
 
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -203,7 +209,7 @@ var Toolsets = map[string][]string{
 	"minimal": {"read_file", "list_files", "grep", "todo"},
 	"coding": {
 		"read_file", "read_document", "write_file", "edit_file", "list_files", "glob", "grep",
-		"terminal", "todo", "board", "project_info", "set_soul", "skill", "delegate_task", "task", "list_roles", "diagnostics", "http_request", "ask_user", "schedule",
+		"terminal", "process", "todo", "board", "project_info", "set_soul", "skill", "delegate_task", "task", "list_roles", "diagnostics", "http_request", "ask_user", "schedule",
 	},
 	"research": {
 		"read_file", "read_document", "web_search", "web_fetch", "http_request", "browser", "grep", "todo", "memory",
@@ -212,7 +218,7 @@ var Toolsets = map[string][]string{
 	},
 	"browser": {"browser", "web_search", "web_fetch", "http_request", "read_file", "write_file", "todo", "report_finding", "add_intel", "methodology_status"},
 	"security": {
-		"read_file", "write_file", "list_files", "glob", "grep", "terminal",
+		"read_file", "write_file", "list_files", "glob", "grep", "terminal", "process",
 		"web_search", "web_fetch", "http_request", "browser", "todo", "skill",
 		"report_finding", "triage_finding", "add_intel", "methodology_status",
 		"delegate_task", "task", "list_roles", "diagnostics", "ask_user", "vps_run",
@@ -226,10 +232,10 @@ var Toolsets = map[string][]string{
 	},
 	"reverse": {
 		"re_info", "re_strings", "re_analyze", "re_decompile", "check_dependencies",
-		"read_file", "list_files", "glob", "grep", "terminal", "todo", "report_finding",
+		"read_file", "list_files", "glob", "grep", "terminal", "process", "todo", "report_finding",
 	},
 	"vibecoder": {
-		"web_fetch", "http_request", "browser", "web_search", "terminal",
+		"web_fetch", "http_request", "browser", "web_search", "terminal", "process",
 		"read_file", "write_file", "list_files", "glob", "grep", "check_dependencies",
 		"todo", "report_finding", "add_intel", "methodology_status", "skill", "rag_search",
 	},
@@ -239,7 +245,7 @@ var Toolsets = map[string][]string{
 	},
 	"default": {
 		"read_file", "read_document", "write_file", "edit_file", "list_files", "glob", "grep",
-		"terminal", "web_search", "web_fetch", "http_request", "browser", "todo", "board", "project_info", "set_soul", "memory", "list_proxies", "vps_run",
+		"terminal", "process", "web_search", "web_fetch", "http_request", "browser", "todo", "board", "project_info", "set_soul", "memory", "list_proxies", "vps_run",
 		"session_search", "rag_search", "rag_index", "skill", "delegate_task", "task", "list_roles", "image_generate", "view_image", "speak", "transcribe", "computer", "diagnostics", "ask_user", "schedule",
 		"osint_dns", "osint_dorks", "osint_whois", "osint_ip", "osint_username", "osint_github", "osint_email", "osint_email_full", "osint_breach", "osint_shodan", "osint_reputation", "osint_crypto", "osint_domain", "osint_phone", "osint_scrape", "osint_paste", "osint_footprint", "osint_pivot", "osint_google", "osint_dorks_live", "check_dependencies", "re_info", "re_strings", "re_analyze", "re_decompile", "solve_captcha", "intercept",
 	},
