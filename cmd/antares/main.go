@@ -62,8 +62,9 @@ func run() error {
 	// Bare `antares` opens the TUI when there is a terminal to draw on, and
 	// falls back to serving when there is not (systemd, Docker, cron).
 	command := "tui"
-	if !term.IsTerminal(int(os.Stdin.Fd())) {
+	if len(args) == 0 && !term.IsTerminal(int(os.Stdin.Fd())) {
 		command = "serve"
+		args = []string{"--foreground"}
 	}
 	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
 		command, args = args[0], args[1:]
@@ -71,7 +72,13 @@ func run() error {
 
 	switch command {
 	case "serve", "start":
-		return cmdServe()
+		return cmdServe(args)
+	case "stop":
+		return cmdStop(args)
+	case "status":
+		return cmdStatus(args)
+	case "_serve_foreground":
+		return cmdServeForeground()
 	case "tui", "chat-ui":
 		return cmdTUI()
 	case "chat", "repl", "cli":
@@ -118,7 +125,10 @@ func printUsage() {
 
 Usage:
   antares                  Open the terminal UI (serves the API when headless)
-  antares serve            Run the API server and dashboard
+  antares serve            Start the API server in the background
+  antares serve --foreground  Run attached to this terminal (debug/systemd)
+  antares stop             Stop the background API server
+  antares status           Show background server status
   antares tui              Open the terminal UI explicitly
   antares setup            Configure Antares (web or terminal wizard)
   antares chat <message>   Send one message and print the reply
@@ -557,7 +567,7 @@ func (rt *runtimeServices) close() {
 	_ = rt.db.Close()
 }
 
-func cmdServe() error {
+func cmdServeForeground() error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
