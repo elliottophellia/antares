@@ -18,6 +18,12 @@ import {
   X,
 } from '@phosphor-icons/react'
 import { ApiError, get, post, streamGet, streamPost, type StreamEvent } from '@/lib/api'
+import {
+  groupStreamPatches,
+  queueStreamDelta,
+  shouldRefreshAfterAttach,
+  type QueuedStreamPatch,
+} from '@/lib/chatStreamQueue'
 import { copyText } from '@/lib/clipboard'
 import { useI18n, useTimeAgo, type MessageKey } from '@/lib/i18n'
 import { cn } from '@/lib/utils'
@@ -377,30 +383,47 @@ export default function ChatPage() {
   const virtuosoRef = useRef<VirtuosoHandle>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
 
-  // A streaming turn emits hundreds of tiny events (text deltas, tool
-  // progress). Applying each one with its own setMessages triggers a full
-  // O(n) array map per event and saturates the main thread on long tasks —
-  // the dashboard visibly freezes (issue #5). Instead we queue the per-event
-  // patches and drain them once per animation frame, so a burst of N events
-  // costs a single render that folds all N patches into the assistant message.
-  const patchQueue = useRef<{ id: string; fn: (m: ChatMessage) => ChatMessage }[]>([])
+  // A streaming turn emits hundreds of tiny events. Queue them for one render,
+  // grouping by message first so flushing is O(messages + patches), not
+  // O(messages * patches). Consecutive text/reasoning deltas are coalesced too:
+  // replaying a long live-run must not create thousands of closures and perform
+  // thousands of ever-growing string concatenations on the browser main thread.
+  const patchQueue = useRef<QueuedStreamPatch<ChatMessage>[]>([])
   const flushHandle = useRef<number | null>(null)
   const flushPatches = useCallback(() => {
     flushHandle.current = null
     const queued = patchQueue.current
     if (queued.length === 0) return
     patchQueue.current = []
+    const byMessage = groupStreamPatches(queued)
     setMessages((prev) =>
-      prev.map((m) => {
-        let next = m
-        for (const p of queued) if (p.id === m.id) next = p.fn(next)
+      prev.map((message) => {
+        const patches = byMessage.get(message.id)
+        if (!patches) return message
+        let next = message
+        for (const patch of patches) {
+          next =
+            patch.kind === 'delta'
+              ? appendSeg(next, patch.segment, patch.delta)
+              : patch.fn(next)
+        }
         return next
       }),
     )
   }, [])
   const enqueuePatch = useCallback(
     (id: string, fn: (m: ChatMessage) => ChatMessage) => {
-      patchQueue.current.push({ id, fn })
+      patchQueue.current.push({ id, kind: 'apply', fn })
+      if (flushHandle.current == null) {
+        flushHandle.current = requestAnimationFrame(flushPatches)
+      }
+    },
+    [flushPatches],
+  )
+  const enqueueDelta = useCallback(
+    (id: string, segment: 'text' | 'reasoning', delta: string) => {
+      if (!delta) return
+      queueStreamDelta(patchQueue.current, id, segment, delta)
       if (flushHandle.current == null) {
         flushHandle.current = requestAnimationFrame(flushPatches)
       }
@@ -486,10 +509,10 @@ export default function ChatPage() {
           )
           break
         case 'text':
-          patchAssistant((m) => appendSeg(m, 'text', String(event.delta ?? '')))
+          enqueueDelta(assistantId, 'text', String(event.delta ?? ''))
           break
         case 'reasoning':
-          patchAssistant((m) => appendSeg(m, 'reasoning', String(event.delta ?? '')))
+          enqueueDelta(assistantId, 'reasoning', String(event.delta ?? ''))
           break
         case 'tool_call':
           setLive((s) => ({ turn: s.turn + 1, tool: String(event.name ?? '') }))
@@ -570,7 +593,7 @@ export default function ChatPage() {
           break
       }
     },
-    [t, enqueuePatch],
+    [t, enqueuePatch, enqueueDelta],
   )
 
   // Reconnect to a turn still running for this session (after navigating away
@@ -595,6 +618,11 @@ export default function ChatPage() {
       let alive = true
       let close: (() => void) | undefined
       let assistantId: string | null = null
+      let cursor = 0
+      // The initial hydrate can race a turn finishing just before attach. Refresh
+      // once after the first idle `done` to close that race, then stop downloading
+      // and rebuilding the entire transcript on every 1.5-second idle poll.
+      let idleRefreshDone = false
 
       const connect = () => {
         if (!alive) return
@@ -605,7 +633,6 @@ export default function ChatPage() {
           window.setTimeout(connect, 1500)
           return
         }
-        assistantId = null
         const ensure = () => {
           if (assistantId) return assistantId
           assistantId = `live_${Date.now()}_a`
@@ -618,24 +645,34 @@ export default function ChatPage() {
           return assistantId
         }
         close = streamGet(
-          `/chat/attach?session_id=${encodeURIComponent(sid)}&cursor=0`,
+          `/chat/attach?session_id=${encodeURIComponent(sid)}&cursor=${cursor}`,
           (event) => {
+            const eventCursor = Number(event.cursor ?? cursor)
+            if (Number.isFinite(eventCursor) && eventCursor >= cursor) cursor = eventCursor
             if (event.type === 'done') {
               drainPatches()
               setStreaming(false)
               close?.() // stop EventSource from auto-reconnecting
-              // Swap whatever we have for the canonical persisted turn.
-              get<SessionDetail>(`/sessions/${sid}`)
-                .then((d) => {
-                  setMessages(hydrate(d))
-                  setTitle(d.session.title || t('chat.conversation'))
-                })
-                .catch(() => {})
-              // Reconnect shortly so a server-initiated wake turn is not missed.
-              // The attach returns 'done' at once when nothing is live, so this
-              // is a light poll of "is a new turn streaming?" — one open SSE, not
-              // a request loop.
-              if (alive) window.setTimeout(connect, 1500)
+              const shouldRefresh = shouldRefreshAfterAttach(assistantId !== null, idleRefreshDone)
+              assistantId = null
+              idleRefreshDone = true
+              // A later server-initiated turn is a new liveRun with its own
+              // zero-based cursor. Reset only after the current run is done.
+              cursor = 0
+              const refresh = shouldRefresh
+                ? get<SessionDetail>(`/sessions/${sid}`)
+                    .then((d) => {
+                      if (!alive) return
+                      setMessages(hydrate(d))
+                      setTitle(d.session.title || t('chat.conversation'))
+                    })
+                    .catch(() => {})
+                : Promise.resolve()
+              // Do not overlap canonical hydration with the next attachment: a
+              // stale response could otherwise overwrite fresh live deltas.
+              void refresh.finally(() => {
+                if (alive) window.setTimeout(connect, 1500)
+              })
               return
             }
             applyEvent(ensure(), event, (_id, evtTitle) => {

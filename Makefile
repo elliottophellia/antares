@@ -94,6 +94,10 @@ vet: ## Run go vet
 typecheck: ## Typecheck the frontend
 	@cd web && $(BUN) x tsc -b --noEmit
 
+.PHONY: web-test
+web-test: ## Run frontend regression tests
+	@cd web && $(BUN) test
+
 .PHONY: smoke
 smoke: build ## Build, serve, and load every dashboard route in a real browser
 	@ANTARES_PORT=8799 ANTARES_HOME=$$(mktemp -d) ./bin/antares serve >/tmp/antares-smoke.log 2>&1 & \
@@ -103,7 +107,7 @@ smoke: build ## Build, serve, and load every dashboard route in a real browser
 	 SMOKE_BASE=http://127.0.0.1:8799 $(BUN) scripts/smoke.mjs
 
 .PHONY: check
-check: vet test typecheck ## Run every check (add `make smoke` for the browser pass)
+check: vet test typecheck web-test ## Run every check (add `make smoke` for the browser pass)
 
 .PHONY: fmt
 fmt: ## Format Go sources
