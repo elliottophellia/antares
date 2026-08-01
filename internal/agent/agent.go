@@ -232,7 +232,11 @@ func (a *Agent) Interrupt(sessionID string) bool {
 	if ok {
 		cancel()
 	}
-	return ok
+	stopped := 0
+	if a.shell != nil {
+		stopped = a.shell.CancelRunning(sessionID)
+	}
+	return ok || stopped > 0
 }
 
 // ActiveCount reports how many turns are running.
@@ -861,6 +865,10 @@ func (a *Agent) toolTimeout(name string) time.Duration {
 	switch name {
 	case "terminal":
 		return time.Duration(maxInt(a.cfg.Terminal.Timeout, 60)) * time.Second
+	case "process":
+		// process(wait) intentionally blocks for at most 30 seconds. Leave margin
+		// for scheduling and JSON serialization so the tool can return its state.
+		return 45 * time.Second
 	case "delegate_task":
 		return 30 * time.Minute
 	default:

@@ -12,7 +12,7 @@ func init() {
 		readFileTool{}, writeFileTool{}, editFileTool{}, listFilesTool{},
 		readDocumentTool{},
 		globTool{}, grepTool{},
-		terminalTool{},
+		terminalTool{}, processTool{},
 		webFetchTool{}, webSearchTool{}, httpRequestTool{},
 		memoryTool{}, sessionSearchTool{}, todoTool{}, skillTool{},
 		ragSearchTool{}, ragIndexTool{},

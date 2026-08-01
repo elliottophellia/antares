@@ -63,6 +63,30 @@ func TestRepeatTrackerExceeded(t *testing.T) {
 	}
 }
 
+func TestRepeatTrackerAllowsManagedProcessPolling(t *testing.T) {
+	r := newRepeatTracker(2)
+	call := llm.ToolCall{Name: "process", Arguments: `{"action":"wait","process_id":"proc_123","timeout":30}`}
+	for i := 0; i < 20; i++ {
+		if got := r.record([]llm.ToolCall{call}); len(got) != 0 {
+			t.Fatalf("managed process wait was treated as a loop after %d calls: %v", i+1, got)
+		}
+	}
+	if r.exceeded() {
+		t.Fatal("managed process polling tripped the repeat guard")
+	}
+}
+
+func TestRepeatTrackerStillTracksProcessKill(t *testing.T) {
+	r := newRepeatTracker(2)
+	call := llm.ToolCall{Name: "process", Arguments: `{"action":"kill","process_id":"proc_123"}`}
+	if got := r.record([]llm.ToolCall{call}); len(got) != 0 {
+		t.Fatal(got)
+	}
+	if got := r.record([]llm.ToolCall{call}); len(got) != 1 || got[0] != "process" {
+		t.Fatalf("repeated process kill was not tracked: %v", got)
+	}
+}
+
 func TestSteeringRequiresARunningSession(t *testing.T) {
 	a := &Agent{active: map[string]context.CancelFunc{}}
 	if a.Steer("nope", "do this instead") {

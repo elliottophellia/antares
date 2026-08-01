@@ -95,6 +95,12 @@ func newRepeatTracker(limit int) *repeatTracker {
 func (r *repeatTracker) record(calls []llm.ToolCall) []string {
 	var tripped []string
 	for _, c := range calls {
+		if processObservation(c) {
+			// Polling a managed process is an observation of changing external
+			// state, not a stuck model repeating an idempotent call. The process
+			// tool bounds every wait and terminal jobs have explicit cancellation.
+			continue
+		}
 		sum := sha256.Sum256([]byte(c.Name + "\x00" + normaliseArgs(c.Arguments)))
 		key := hex.EncodeToString(sum[:8])
 		r.seen[key]++
@@ -103,6 +109,24 @@ func (r *repeatTracker) record(calls []llm.ToolCall) []string {
 		}
 	}
 	return tripped
+}
+
+func processObservation(c llm.ToolCall) bool {
+	if c.Name != "process" {
+		return false
+	}
+	var args struct {
+		Action string `json:"action"`
+	}
+	if json.Unmarshal([]byte(c.Arguments), &args) != nil {
+		return false
+	}
+	switch args.Action {
+	case "poll", "wait", "log", "list":
+		return true
+	default:
+		return false
+	}
 }
 
 // exceeded reports a call repeated far past the limit, where nudging has
