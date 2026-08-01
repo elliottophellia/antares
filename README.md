@@ -14,7 +14,9 @@ on your own machine.
 
 ```
 antares            # terminal UI
-antares serve      # API + dashboard on :8787
+antares serve      # start API + dashboard in the background on :8787
+antares status     # show the background server status
+antares stop       # stop the background server
 antares setup      # configure it, in the browser or the terminal
 ```
 
@@ -118,8 +120,12 @@ Production build:
 
 ```bash
 make build            # → bin/antares, dashboard embedded
-./bin/antares serve
+./bin/antares serve   # starts in the background
 ```
+
+Use `antares serve --foreground` when running under systemd, Docker, or while
+debugging and you want the server attached to the current terminal. Daemon logs
+are written to `~/.antares/logs/daemon.log`.
 
 ### Accessing it from another machine
 
