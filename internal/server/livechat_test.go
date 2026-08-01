@@ -16,19 +16,16 @@ func TestLiveRun_ReplayThenFollow(t *testing.T) {
 	// A follower joining late must first replay the backlog, then see new events.
 	got := make(chan string, 8)
 	go func() {
-		_ = lr.follow(context.Background(), 0, func(e agent.Event) error {
+		_ = lr.follow(context.Background(), 0, func(e agent.Event, _ int) error {
 			got <- e.Delta
 			return nil
 		})
 		close(got)
 	}()
 
-	// Backlog.
-	if v := <-got; v != "a" {
-		t.Fatalf("want a, got %q", v)
-	}
-	if v := <-got; v != "b" {
-		t.Fatalf("want b, got %q", v)
+	// Adjacent backlog deltas are coalesced into one frame.
+	if v := <-got; v != "ab" {
+		t.Fatalf("want ab, got %q", v)
 	}
 	// Live.
 	lr.publish(agent.Event{Type: agent.EventText, Delta: "c"})
@@ -48,6 +45,46 @@ func TestLiveRun_ReplayThenFollow(t *testing.T) {
 	}
 }
 
+func TestLiveRun_CoalescesBacklogAndReportsAbsoluteCursor(t *testing.T) {
+	lr := newLiveRun()
+	for i := 0; i < 4000; i++ {
+		lr.publish(agent.Event{Type: agent.EventReasoning, Delta: "x"})
+	}
+	lr.publish(agent.Event{Type: agent.EventUsage, InputTokens: 10})
+	lr.finish()
+
+	var frames []agent.Event
+	var cursors []int
+	if err := lr.follow(context.Background(), 0, func(e agent.Event, cursor int) error {
+		frames = append(frames, e)
+		cursors = append(cursors, cursor)
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(frames) != 2 {
+		t.Fatalf("4001 backlog events produced %d frames, want 2", len(frames))
+	}
+	if got := len(frames[0].Delta); got != 3999 {
+		t.Fatalf("coalesced retained reasoning length = %d, want 3999", got)
+	}
+	if cursors[0] != 4000 || cursors[1] != 4001 {
+		t.Fatalf("absolute cursors = %v, want [4000 4001]", cursors)
+	}
+
+	// Reattaching at the reported cursor must not replay the reasoning backlog.
+	var replayed []agent.Event
+	if err := lr.follow(context.Background(), cursors[0], func(e agent.Event, _ int) error {
+		replayed = append(replayed, e)
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(replayed) != 1 || replayed[0].Type != agent.EventUsage {
+		t.Fatalf("cursor replay = %#v, want only usage event", replayed)
+	}
+}
+
 func TestLiveRun_FollowFromCursor(t *testing.T) {
 	lr := newLiveRun()
 	lr.publish(agent.Event{Type: agent.EventText, Delta: "x"})
@@ -55,7 +92,7 @@ func TestLiveRun_FollowFromCursor(t *testing.T) {
 	lr.finish()
 
 	var seen []string
-	_ = lr.follow(context.Background(), 1, func(e agent.Event) error {
+	_ = lr.follow(context.Background(), 1, func(e agent.Event, _ int) error {
 		seen = append(seen, e.Delta)
 		return nil
 	})
@@ -69,7 +106,7 @@ func TestLiveRun_FollowStopsOnContextCancel(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() {
-		done <- lr.follow(ctx, 0, func(agent.Event) error { return nil })
+		done <- lr.follow(ctx, 0, func(agent.Event, int) error { return nil })
 	}()
 	cancel()
 	select {

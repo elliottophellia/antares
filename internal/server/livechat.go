@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"strings"
 	"sync"
 
 	"github.com/enowdev/antares/internal/agent"
@@ -22,7 +23,7 @@ const maxLiveEvents = 4000
 type liveRun struct {
 	mu      sync.Mutex
 	events  []agent.Event
-	base    int  // absolute index of events[0] (count of events already trimmed)
+	base    int // absolute index of events[0] (count of events already trimmed)
 	done    bool
 	updated chan struct{} // closed on every change; replaced under the lock
 }
@@ -61,7 +62,7 @@ func (lr *liveRun) finish() {
 // follow replays events from cursor, then blocks for new ones until the run
 // finishes or ctx is cancelled (the client disconnected). send stops the follow
 // early by returning an error.
-func (lr *liveRun) follow(ctx context.Context, cursor int, send func(agent.Event) error) error {
+func (lr *liveRun) follow(ctx context.Context, cursor int, send func(agent.Event, int) error) error {
 	i := cursor // absolute event index
 	for {
 		lr.mu.Lock()
@@ -73,8 +74,29 @@ func (lr *liveRun) follow(ctx context.Context, cursor int, send func(agent.Event
 		for i-lr.base < len(lr.events) {
 			e := lr.events[i-lr.base]
 			i++
+			// A reconnect may have thousands of token-sized deltas waiting. Collapse
+			// adjacent text/reasoning events while the backlog is already available;
+			// the returned cursor still advances past every original event.
+			if e.Type == agent.EventText || e.Type == agent.EventReasoning {
+				var merged strings.Builder
+				for i-lr.base < len(lr.events) {
+					next := lr.events[i-lr.base]
+					if next.Type != e.Type {
+						break
+					}
+					if merged.Len() == 0 {
+						merged.Grow(len(e.Delta) + len(next.Delta))
+						merged.WriteString(e.Delta)
+					}
+					merged.WriteString(next.Delta)
+					i++
+				}
+				if merged.Len() > 0 {
+					e.Delta = merged.String()
+				}
+			}
 			lr.mu.Unlock()
-			if err := send(e); err != nil {
+			if err := send(e, i); err != nil {
 				return err
 			}
 			lr.mu.Lock()

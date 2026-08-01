@@ -159,12 +159,12 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	}()
 
 	agentReq := agent.Request{
-		SessionID: req.SessionID,
-		Message:   req.Message,
-		Images:    decodeImages(req.Images),
-		Role:      req.Role,
-		Platform:  "web",
-		UserID:    req.UserID,
+		SessionID:       req.SessionID,
+		Message:         req.Message,
+		Images:          decodeImages(req.Images),
+		Role:            req.Role,
+		Platform:        "web",
+		UserID:          req.UserID,
 		Model:           req.Model,
 		Toolset:         req.Toolset,
 		ReasoningEffort: req.ReasoningEffort,
@@ -219,7 +219,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	}()
 
 	// Follow the run until it finishes or this client disconnects.
-	_ = lr.follow(ctx, 0, func(e agent.Event) error { return sse.send(e) })
+	_ = lr.follow(ctx, 0, func(e agent.Event, _ int) error { return sse.send(e) })
 }
 
 // handleChatAttach reconnects a client to a turn already in flight for a session
@@ -260,7 +260,12 @@ func (s *Server) handleChatAttach(w http.ResponseWriter, r *http.Request) {
 		}
 	}()
 
-	_ = lr.follow(ctx, cursor, func(e agent.Event) error { return sse.send(e) })
+	_ = lr.follow(ctx, cursor, func(e agent.Event, nextCursor int) error {
+		return sse.send(struct {
+			agent.Event
+			Cursor int `json:"cursor"`
+		}{Event: e, Cursor: nextCursor})
+	})
 }
 
 // decodeImages accepts data URLs and bare base64 payloads.
