@@ -7,18 +7,19 @@ import { PageLayout } from '@/components/layout/PageLayout'
 import { Badge, EmptyState, Input, Switch } from '@/components/ui/primitives'
 import { SkeletonList } from '@/components/ui/skeleton'
 import { useI18n } from '@/lib/i18n'
+import { toolsetsOrEmpty } from '@/lib/toolPayload'
 
 interface ToolInfo {
   name: string
   description: string
   enabled: boolean
   requires_approval: boolean
-  toolsets: string[]
+  toolsets: string[] | null
 }
 
 interface ToolsResponse {
   toolset: string
-  toolsets: string[]
+  toolsets: string[] | null
   tools: ToolInfo[]
 }
 
@@ -71,7 +72,7 @@ export default function ToolsPage() {
           {t('tools.activeToolset')}
         </p>
         <div className="flex flex-wrap gap-1.5">
-          {data.toolsets.map((preset) => (
+          {toolsetsOrEmpty(data.toolsets).map((preset) => (
             <button
               key={preset}
               disabled={!!busy}
@@ -158,13 +159,13 @@ export default function ToolsPage() {
                     {t('tools.mutates')}
                   </Badge>
                 ) : null}
-                {item.toolsets.slice(0, 4).map((ts) => (
+                {toolsetsOrEmpty(item.toolsets).slice(0, 4).map((ts) => (
                   <Badge key={ts} variant="outline">
                     {ts}
                   </Badge>
                 ))}
-                {item.toolsets.length > 4 ? (
-                  <Badge variant="outline">+{item.toolsets.length - 4}</Badge>
+                {toolsetsOrEmpty(item.toolsets).length > 4 ? (
+                  <Badge variant="outline">+{toolsetsOrEmpty(item.toolsets).length - 4}</Badge>
                 ) : null}
               </div>
             </div>

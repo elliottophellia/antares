@@ -75,7 +75,9 @@ func init() {
 
 // ToolsetsFor reports which named toolsets include a tool.
 func ToolsetsFor(name string) []string {
-	var out []string
+	// Keep this non-nil so JSON clients receive [] rather than null for dynamic
+	// tools (for example MCP tools) that are not members of a named preset.
+	out := []string{}
 	for set, members := range Toolsets {
 		if set == "all" {
 			continue
