@@ -1,5 +1,5 @@
 import { useCallback, useState } from 'react'
-import { Download, EnvelopeSimple, Globe, Play, Stop, Trash, X } from '@phosphor-icons/react'
+import { Download, EnvelopeSimple, Globe, Info, Play, Stop, Trash, X } from '@phosphor-icons/react'
 import { PageLayout } from '@/components/layout/PageLayout'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle, Badge, Input, Label, Switch, EmptyState } from '@/components/ui/primitives'
 import { Button } from '@/components/ui/button'
@@ -217,7 +217,20 @@ function IMAPForm({ defaults, onDone, onCancel }: { defaults: SocialStatus | nul
         <div className="space-y-1"><Label>{t('social.gmail.port')}</Label><Input value={port} onChange={(e) => setPort(e.target.value)} inputMode="numeric" /></div>
       </div>
       <div className="space-y-1"><Label>{t('social.gmail.username')}</Label><Input value={username} onChange={(e) => setUsername(e.target.value)} placeholder="user@gmail.com" /></div>
-      <div className="space-y-1"><Label>{t('social.gmail.password')}</Label><Input type="password" value={password} onChange={(e) => setPassword(e.target.value)} /></div>
+      <div className="space-y-1"><Label>{t('social.gmail.password')}</Label><Input type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="App Password" /></div>
+      <details className="rounded-[var(--radius-sm)] border border-border bg-muted/50 p-3 text-xs">
+        <summary className="flex cursor-pointer items-center gap-1.5 font-medium text-muted-foreground">
+          <Info className="size-3.5" />
+          {t('social.gmail.appPasswordTutorial')}
+        </summary>
+        <ol className="mt-2 list-decimal space-y-1 pl-4 text-muted-foreground">
+          <li>{t('social.gmail.tutorialStep1')}</li>
+          <li>{t('social.gmail.tutorialStep2')}</li>
+          <li>{t('social.gmail.tutorialStep3')}</li>
+          <li>{t('social.gmail.tutorialStep4')}</li>
+          <li>{t('social.gmail.tutorialStep5')}</li>
+        </ol>
+      </details>
       {result && <p className="text-xs text-muted-foreground">{result}</p>}
       <div className="flex gap-2">
         <Button size="sm" variant="outline" loading={testing} onClick={test} disabled={!username || !password}>{t('social.gmail.test')}</Button>
