@@ -22,7 +22,8 @@ func queryTokenAllowed(path string) bool {
 		"/api/logs/stream",
 		"/api/swarm/stream",
 		"/api/board/stream",
-		"/api/files/raw":
+		"/api/files/raw",
+		"/api/social/image":
 		return true
 	default:
 		return strings.HasPrefix(path, "/api/subagent/") && strings.HasSuffix(path, "/attach")

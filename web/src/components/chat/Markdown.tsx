@@ -3,6 +3,7 @@ import { Check, Copy, Image as ImageIcon } from '@phosphor-icons/react'
 import { cn } from '@/lib/utils'
 import { copyText } from '@/lib/clipboard'
 import { useI18n } from '@/lib/i18n'
+import { getToken } from '@/lib/api'
 
 /**
  * A small, dependency-free Markdown renderer covering what agent replies
@@ -143,7 +144,16 @@ function resolveImageUrl(url: string): string {
   // Data URIs are already valid.
   // Absolute URLs are already correct.
   // Bare file paths get prefixed with /api/.
-  if (url.startsWith('http') || url.startsWith('data:') || url.startsWith('/api/') || url.startsWith('blob:')) {
+  if (url.startsWith('http') || url.startsWith('data:') || url.startsWith('blob:')) {
+    return url
+  }
+  if (url.startsWith('/api/')) {
+    // Append auth token for API image endpoints (files/raw, social/image).
+    const token = getToken()
+    if (token) {
+      const sep = url.includes('?') ? '&' : '?'
+      return url + sep + 'token=' + encodeURIComponent(token)
+    }
     return url
   }
   if (url.startsWith('/')) return url

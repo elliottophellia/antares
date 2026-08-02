@@ -479,6 +479,62 @@ func (s *Server) handleRawFile(w http.ResponseWriter, r *http.Request) {
 	http.ServeContent(w, r, filepath.Base(abs), fi.ModTime(), f)
 }
 
+// handleSocialImage serves any image file by absolute path. Unlike
+// handleRawFile (which confines reads to the workspace), this endpoint allows
+// reading from /tmp and other directories — it is designed for the social
+// media agent to embed profile photos and screenshots it downloads. Only
+// image file extensions are accepted; non-image paths are rejected.
+func (s *Server) handleSocialImage(w http.ResponseWriter, r *http.Request) {
+	if s.requireDashboardPassword(w, r) {
+		return
+	}
+	path := r.URL.Query().Get("path")
+	if path == "" {
+		writeError(w, http.StatusBadRequest, errors.New("path is required"))
+		return
+	}
+	// Only allow image extensions.
+	ext := strings.ToLower(filepath.Ext(path))
+	allowed := map[string]bool{
+		".jpg": true, ".jpeg": true, ".png": true, ".gif": true,
+		".webp": true, ".svg": true, ".avif": true, ".bmp": true,
+	}
+	if !allowed[ext] {
+		writeError(w, http.StatusBadRequest, errors.New("only image files are allowed"))
+		return
+	}
+	// Resolve to absolute path. No workspace confinement — the agent may
+	// download images to /tmp or the antares home.
+	abs := path
+	if !filepath.IsAbs(path) {
+		abs = filepath.Join(config.Home(), path)
+	}
+	// Prevent directory traversal above the allowed roots.
+	abs = filepath.Clean(abs)
+
+	fi, err := os.Stat(abs)
+	if err != nil {
+		writeError(w, http.StatusNotFound, err)
+		return
+	}
+	if fi.IsDir() {
+		writeError(w, http.StatusBadRequest, errors.New("path is a directory"))
+		return
+	}
+	// Size limit: 20 MB to prevent serving huge files.
+	if fi.Size() > 20*1024*1024 {
+		writeError(w, http.StatusRequestEntityTooLarge, errors.New("file too large (max 20 MB)"))
+		return
+	}
+	f, err := os.Open(abs)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	defer f.Close()
+	http.ServeContent(w, r, filepath.Base(abs), fi.ModTime(), f)
+}
+
 func safeJoin(workspace, target string) (string, error) {
 	if strings.TrimSpace(target) == "" {
 		target = "."

@@ -125,6 +125,7 @@ func (s *Server) routes() {
 	m.HandleFunc("GET /api/files", s.handleListFiles)
 	m.HandleFunc("GET /api/files/read", s.handleReadFile)
 	m.HandleFunc("GET /api/files/raw", s.handleRawFile)
+	m.HandleFunc("GET /api/social/image", s.handleSocialImage)
 
 	// Project sessions: browse the machine's directories for the folder picker.
 	m.HandleFunc("GET /api/project/browse", s.handleBrowseDirs)

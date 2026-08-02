@@ -49,6 +49,36 @@ When filling forms, selecting options, or clicking buttons in the browser:
    - Use `element.dispatchEvent(new Event('change', {bubbles: true}))` after setting values.
    - For React-based sites, use `nativeInputValueSetter` to trigger React's onChange.
 
+## Embedding images in your replies
+
+When you find profile photos, screenshots, or any image you want to show the user:
+
+1. Download the image to a temp file using the terminal:
+   ```
+   curl -L -o /tmp/profile_photo.webp "https://example.com/photo.webp"
+   ```
+
+2. Embed it in your reply using markdown image syntax with the `/api/social/image` endpoint:
+   ```
+   ![Profile photo](/api/social/image?path=/tmp/profile_photo.webp)
+   ```
+
+3. After embedding, clean up the temp file:
+   ```
+   rm /tmp/profile_photo.webp
+   ```
+
+This works for any image format: .jpg, .png, .gif, .webp, .svg, .avif, .bmp.
+The image renders inline in your reply. Always delete temp files after embedding.
+
+You can also embed multiple images:
+```
+Here are the profile photos I found:
+
+![Photo 1](/api/social/image?path=/tmp/photo1.jpg)
+![Photo 2](/api/social/image?path=/tmp/photo2.jpg)
+```
+
 ## Account creation workflow
 
 1. Start the persistent browser: `social_browser` with action `start`.
