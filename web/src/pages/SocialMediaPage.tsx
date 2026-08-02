@@ -1,8 +1,31 @@
 import { useCallback, useState } from 'react'
-import { Download, EnvelopeSimple, Globe, Info, Play, Stop, Trash, X } from '@phosphor-icons/react'
+import {
+  ArrowSquareOut,
+  CheckCircle,
+  Download,
+  EnvelopeSimple,
+  Globe,
+  Info,
+  Key,
+  Play,
+  Robot,
+  ShieldCheck,
+  Stop,
+  Trash,
+  UserCircle,
+  X,
+} from '@phosphor-icons/react'
 import { PageLayout } from '@/components/layout/PageLayout'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle, Badge, Input, Label, Switch, EmptyState } from '@/components/ui/primitives'
 import { Button } from '@/components/ui/button'
+import {
+  Dialog,
+  DialogBody,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
 import { Skeleton } from '@/components/ui/skeleton'
 import { SensitiveGate } from '@/components/ui/SensitiveGate'
 import { useApi } from '@/lib/hooks'
@@ -100,23 +123,34 @@ export default function SocialMediaPage() {
       )}
 
       <SensitiveGate>
-        <div className="grid gap-4 sm:grid-cols-2">
+        <div className="grid gap-4 lg:grid-cols-2">
           {/* Gmail / IMAP */}
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2 text-sm">
-                <EnvelopeSimple className="size-4" />{t('social.gmail.title')}
+          <Card className="overflow-hidden bg-gradient-to-br from-card via-card to-primary/[0.025]">
+            <CardHeader className="pb-4">
+              <CardTitle className="flex items-center gap-3 text-sm">
+                <span className="grid size-9 shrink-0 place-items-center rounded-[var(--radius-md)] border border-border bg-background text-primary shadow-xs">
+                  <EnvelopeSimple className="size-[18px]" />
+                </span>
+                <span>{t('social.gmail.title')}</span>
                 {s?.imap_configured ? <Badge className="ml-auto">{t('social.gmail.configured')}</Badge> : <Badge variant="secondary" className="ml-auto">{t('social.gmail.notConfigured')}</Badge>}
               </CardTitle>
-              <CardDescription>{t('social.gmail.description')}</CardDescription>
+              <CardDescription className="pl-12">{t('social.gmail.description')}</CardDescription>
             </CardHeader>
-            <CardContent>
+            <CardContent className="min-h-24">
               {showImap ? <IMAPForm defaults={s} onDone={() => { setShowImap(false); reload() }} onCancel={() => setShowImap(false)} /> : (
-                <div className="space-y-2 text-sm">
+                <div className="space-y-4 text-sm">
                   {s?.imap_configured ? <>
-                    <div className="flex justify-between"><span className="text-muted-foreground">Host</span><span>{s.imap_host}:{s.imap_port}</span></div>
-                    <div className="flex justify-between"><span className="text-muted-foreground">Email</span><span className="truncate">{s.imap_username}</span></div>
-                    <Button size="sm" variant="outline" onClick={() => setShowImap(true)}>Edit</Button>
+                    <div className="grid gap-px overflow-hidden rounded-[var(--radius-md)] border border-border bg-border sm:grid-cols-2">
+                      <div className="min-w-0 bg-background/80 px-3 py-2.5">
+                        <p className="text-[10px] font-medium uppercase tracking-[0.12em] text-muted-foreground">Host</p>
+                        <p className="mt-1 truncate text-xs font-medium">{s.imap_host}:{s.imap_port}</p>
+                      </div>
+                      <div className="min-w-0 bg-background/80 px-3 py-2.5">
+                        <p className="text-[10px] font-medium uppercase tracking-[0.12em] text-muted-foreground">Email</p>
+                        <p className="mt-1 truncate text-xs font-medium">{s.imap_username}</p>
+                      </div>
+                    </div>
+                    <Button size="sm" variant="outline" onClick={() => setShowImap(true)}>Edit configuration</Button>
                   </> : <Button size="sm" onClick={() => setShowImap(true)}>{t('social.gmail.title')}</Button>}
                 </div>
               )}
@@ -124,16 +158,23 @@ export default function SocialMediaPage() {
           </Card>
 
           {/* Browser */}
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2 text-sm">
-                <Globe className="size-4" />{t('social.browser.title')}
+          <Card className="overflow-hidden bg-gradient-to-br from-card via-card to-primary/[0.025]">
+            <CardHeader className="pb-4">
+              <CardTitle className="flex items-center gap-3 text-sm">
+                <span className="grid size-9 shrink-0 place-items-center rounded-[var(--radius-md)] border border-border bg-background text-primary shadow-xs">
+                  <Globe className="size-[18px]" />
+                </span>
+                <span>{t('social.browser.title')}</span>
                 <BrowserBadge state={s?.browser?.state ?? 'disabled'} />
               </CardTitle>
-              <CardDescription>{t('social.browser.description')}</CardDescription>
+              <CardDescription className="pl-12">{t('social.browser.description')}</CardDescription>
             </CardHeader>
-            <CardContent>
-              <div className="flex flex-wrap gap-2">
+            <CardContent className="min-h-24">
+              <div className="flex flex-wrap items-center justify-between gap-3 rounded-[var(--radius-md)] border border-border bg-background/70 p-3">
+                <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                  <ShieldCheck className="size-4 text-primary" />
+                  Stable fingerprint and login sessions
+                </div>
                 {s?.browser?.state !== 'running' ? (
                   <Button size="sm" loading={busy === 'browser-start'} onClick={() => handleAction('browser-start', () => post('/social/browser/start', {}))} disabled={!s?.encryption_ready}>
                     <Play className="mr-1.5 size-4" />{t('social.browser.start')}
@@ -150,21 +191,31 @@ export default function SocialMediaPage() {
         </div>
 
         {/* Autopilot */}
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-sm">{t('social.autopilot.title')}</CardTitle>
-            <CardDescription>{t('social.autopilot.description')}</CardDescription>
-          </CardHeader>
-          <CardContent className="flex items-center justify-between">
-            <span className="text-sm text-muted-foreground">{t('social.autopilot.toggle')}</span>
-            <Switch checked={s?.autopilot_enabled ?? false} disabled={busy === 'autopilot'} onCheckedChange={(v) => handleAction('autopilot', () => post('/social/autopilot', { enabled: v }))} />
+        <Card className="overflow-hidden">
+          <CardContent className="flex flex-col gap-4 p-4 sm:flex-row sm:items-center sm:justify-between sm:p-5">
+            <div className="flex min-w-0 items-start gap-3">
+              <span className="grid size-10 shrink-0 place-items-center rounded-full border border-border bg-primary/10 text-primary">
+                <Robot className="size-5" />
+              </span>
+              <div>
+                <CardTitle className="text-sm">{t('social.autopilot.title')}</CardTitle>
+                <CardDescription className="mt-1 max-w-2xl">{t('social.autopilot.description')}</CardDescription>
+              </div>
+            </div>
+            <label className="flex shrink-0 cursor-pointer items-center justify-between gap-4 rounded-full border border-border bg-muted/40 px-3 py-2 text-xs font-medium text-muted-foreground">
+              {t('social.autopilot.toggle')}
+              <Switch checked={s?.autopilot_enabled ?? false} disabled={busy === 'autopilot'} onCheckedChange={(v) => handleAction('autopilot', () => post('/social/autopilot', { enabled: v }))} />
+            </label>
           </CardContent>
         </Card>
 
         {/* Accounts */}
         <div className="space-y-3">
-          <div className="flex items-center justify-between">
-            <h2 className="text-sm font-semibold">{t('social.accounts.title')}</h2>
+          <div className="flex items-end justify-between gap-3 border-b border-border pb-3">
+            <div>
+              <h2 className="text-sm font-semibold">{t('social.accounts.title')}</h2>
+              <p className="mt-0.5 text-xs text-muted-foreground">{s?.accounts?.length ?? 0} connected profile{(s?.accounts?.length ?? 0) === 1 ? '' : 's'}</p>
+            </div>
             <Button size="sm" variant="outline" onClick={() => setShowAdd(true)} disabled={!s?.encryption_ready}>{t('social.accounts.add')}</Button>
           </div>
           {s?.accounts && s.accounts.length > 0 ? (
@@ -174,7 +225,11 @@ export default function SocialMediaPage() {
           ) : <EmptyState title={t('social.accounts.empty')} description={t('social.accounts.emptyDesc')} />}
         </div>
 
-        {showAdd && <AddForm onDone={() => { setShowAdd(false); reload() }} onCancel={() => setShowAdd(false)} />}
+        <AddAccountDialog
+          open={showAdd}
+          onOpenChange={setShowAdd}
+          onDone={() => { setShowAdd(false); reload() }}
+        />
       </SensitiveGate>
     </PageLayout>
   )
@@ -245,62 +300,105 @@ function AccountCard({ acct, onRemoved }: { acct: SocialAccount; onRemoved: () =
   const { t } = useI18n()
   const [removing, setRemoving] = useState(false)
   const remove = async () => { setRemoving(true); try { await del(`/social/accounts/${acct.id}`); onRemoved() } catch { setRemoving(false) } }
+  const name = acct.display_name || acct.username
+  const initial = name.trim().charAt(0).toUpperCase() || '?'
+  const platform = acct.platform.trim().toLowerCase()
+  const connected = acct.status === 'connected'
   return (
-    <Card className="flex flex-col">
-      <CardContent className="flex-1 p-3.5">
-        <div className="flex items-start justify-between">
-          <div className="min-w-0">
-            <p className="truncate font-medium">{acct.display_name || acct.username}</p>
-            <p className="truncate text-xs text-muted-foreground">@{acct.username} · {acct.platform}</p>
+    <Card className="group relative flex min-h-56 flex-col overflow-hidden transition-colors hover:border-primary/35">
+      <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-primary/70 to-transparent opacity-0 transition-opacity group-hover:opacity-100" />
+      <CardContent className="flex flex-1 flex-col p-4 sm:p-4">
+        <div className="flex items-start gap-3">
+          <div className="relative grid size-11 shrink-0 place-items-center rounded-[var(--radius-md)] border border-primary/20 bg-primary/10 text-base font-semibold text-primary shadow-xs">
+            {initial}
+            <span className={`absolute -bottom-1 -right-1 size-3 rounded-full border-2 border-card ${connected ? 'bg-emerald-500' : 'bg-muted-foreground'}`} />
           </div>
-          <Badge variant={acct.status === 'connected' ? 'default' : 'secondary'}>{t(`social.accounts.status.${acct.status}` as never) ?? acct.status}</Badge>
+          <div className="min-w-0 flex-1 pt-0.5">
+            <div className="flex items-start gap-2">
+              <p className="min-w-0 flex-1 truncate font-semibold leading-5">{name}</p>
+              <Badge variant={connected ? 'default' : 'secondary'} className="shrink-0">
+                {t(`social.accounts.status.${acct.status}` as never) ?? acct.status}
+              </Badge>
+            </div>
+            <p className="mt-0.5 truncate text-xs text-muted-foreground">@{acct.username}</p>
+          </div>
         </div>
-        <div className="mt-2 flex flex-wrap gap-2 text-xs text-muted-foreground">
-          {acct.has_password && <span>{t('social.accounts.hasPassword')}</span>}
-          {acct.has_recovery && <span>· {t('social.accounts.hasRecovery')}</span>}
+
+        <div className="mt-4 flex flex-wrap gap-1.5">
+          <span className="rounded-full border border-border bg-muted/40 px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.1em] text-muted-foreground">{platform}</span>
+          {acct.has_password && <span className="inline-flex items-center gap-1 rounded-full border border-border bg-muted/40 px-2 py-1 text-[10px] text-muted-foreground"><Key className="size-3" />{t('social.accounts.hasPassword')}</span>}
+          {acct.has_recovery && <span className="inline-flex items-center gap-1 rounded-full border border-border bg-muted/40 px-2 py-1 text-[10px] text-muted-foreground"><ShieldCheck className="size-3" />{t('social.accounts.hasRecovery')}</span>}
         </div>
-        {acct.profile_url && <a href={acct.profile_url} target="_blank" rel="noopener noreferrer" className="mt-1 block truncate text-xs text-primary hover:underline">{acct.profile_url}</a>}
+
+        <div className="mt-auto pt-4">
+          {acct.profile_url ? (
+            <a
+              href={acct.profile_url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex items-center gap-2 rounded-[var(--radius-md)] border border-border bg-background/60 px-3 py-2 text-xs text-muted-foreground transition-colors hover:border-primary/40 hover:text-primary"
+              title={acct.profile_url}
+            >
+              <UserCircle className="size-4 shrink-0" />
+              <span className="min-w-0 flex-1 truncate">Open profile</span>
+              <ArrowSquareOut className="size-3.5 shrink-0" />
+            </a>
+          ) : (
+            <div className="flex items-center gap-2 rounded-[var(--radius-md)] border border-dashed border-border px-3 py-2 text-xs text-muted-foreground">
+              <UserCircle className="size-4" /> No profile URL
+            </div>
+          )}
+        </div>
       </CardContent>
-      <div className="flex border-t border-border p-3 pt-2">
-        <Button size="sm" variant="ghost" className="text-muted-foreground hover:text-destructive" loading={removing} onClick={remove}><Trash className="mr-1.5 size-4" />{t('social.accounts.remove')}</Button>
+      <div className="flex items-center justify-between border-t border-border bg-muted/15 px-3 py-2">
+        <span className="inline-flex items-center gap-1.5 text-[11px] text-muted-foreground">
+          <CheckCircle className={`size-3.5 ${connected ? 'text-emerald-500' : ''}`} />
+          Credentials encrypted
+        </span>
+        <Button size="sm" variant="ghost" className="h-8 px-2 text-muted-foreground hover:text-destructive" loading={removing} onClick={remove}><Trash className="mr-1.5 size-3.5" />{t('social.accounts.remove')}</Button>
       </div>
     </Card>
   )
 }
 
-function AddForm({ onDone, onCancel }: { onDone: () => void; onCancel: () => void }) {
+function AddAccountDialog({ open, onOpenChange, onDone }: { open: boolean; onOpenChange: (open: boolean) => void; onDone: () => void }) {
   const { t } = useI18n()
   const [platform, setPlatform] = useState('')
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
-  const [, setRecovery] = useState('')
+  const [recovery, setRecovery] = useState('')
   const [profileUrl, setProfileUrl] = useState('')
   const [saving, setSaving] = useState(false)
   const [err, setErr] = useState('')
 
   const save = async () => {
     setSaving(true); setErr('')
-    try { await post('/social/accounts', { platform, username, password, recovery_codes: '', profile_url: profileUrl, status: 'connected' }); onDone() }
+    try { await post('/social/accounts', { platform, username, password, recovery_codes: recovery, profile_url: profileUrl, status: 'connected' }); onDone() }
     catch (e) { setErr((e as Error).message) } finally { setSaving(false) }
   }
 
   return (
-    <Card>
-      <CardHeader><CardTitle className="text-sm">{t('social.accounts.add')}</CardTitle></CardHeader>
-      <CardContent className="space-y-2">
-        <div className="grid grid-cols-2 gap-2">
-          <div className="space-y-1"><Label>{t('social.accounts.platform')}</Label><Input value={platform} onChange={(e) => setPlatform(e.target.value)} placeholder="instagram" /></div>
-          <div className="space-y-1"><Label>{t('social.accounts.username')}</Label><Input value={username} onChange={(e) => setUsername(e.target.value)} /></div>
-        </div>
-        <div className="space-y-1"><Label>{t('social.accounts.password')}</Label><Input type="password" value={password} onChange={(e) => setPassword(e.target.value)} /></div>
-        <div className="space-y-1"><Label>{t('social.accounts.recovery')}</Label><Input onChange={(e) => setRecovery(e.target.value)} /></div>
-        <div className="space-y-1"><Label>{t('social.accounts.profileUrl')}</Label><Input value={profileUrl} onChange={(e) => setProfileUrl(e.target.value)} /></div>
-        {err && <p className="text-xs text-destructive">{err}</p>}
-        <div className="flex gap-2">
-          <Button size="sm" loading={saving} onClick={save} disabled={!platform || !username}>Save</Button>
-          <Button size="sm" variant="ghost" onClick={onCancel}>Cancel</Button>
-        </div>
-      </CardContent>
-    </Card>
+    <Dialog open={open} onOpenChange={(next) => { if (!saving) onOpenChange(next) }}>
+      <DialogContent className="sm:max-w-lg">
+        <DialogHeader>
+          <DialogTitle>{t('social.accounts.add')}</DialogTitle>
+          <p className="text-xs text-muted-foreground">Store an account for agents to manage. Credentials are encrypted locally.</p>
+        </DialogHeader>
+        <DialogBody className="space-y-4">
+          <div className="grid gap-4 sm:grid-cols-2">
+            <div className="space-y-1.5"><Label>{t('social.accounts.platform')}</Label><Input autoFocus value={platform} onChange={(e) => setPlatform(e.target.value)} placeholder="instagram" /></div>
+            <div className="space-y-1.5"><Label>{t('social.accounts.username')}</Label><Input value={username} onChange={(e) => setUsername(e.target.value)} placeholder="username" /></div>
+          </div>
+          <div className="space-y-1.5"><Label>{t('social.accounts.password')}</Label><Input type="password" value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="new-password" /></div>
+          <div className="space-y-1.5"><Label>{t('social.accounts.recovery')}</Label><Input value={recovery} onChange={(e) => setRecovery(e.target.value)} placeholder="Optional recovery codes" /></div>
+          <div className="space-y-1.5"><Label>{t('social.accounts.profileUrl')}</Label><Input type="url" value={profileUrl} onChange={(e) => setProfileUrl(e.target.value)} placeholder="https://..." /></div>
+          {err && <p role="alert" className="rounded-[var(--radius-sm)] border border-destructive/30 bg-destructive/5 p-2.5 text-xs text-destructive">{err}</p>}
+        </DialogBody>
+        <DialogFooter>
+          <Button variant="ghost" onClick={() => onOpenChange(false)} disabled={saving}>Cancel</Button>
+          <Button loading={saving} onClick={save} disabled={!platform.trim() || !username.trim()}>Save account</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   )
 }

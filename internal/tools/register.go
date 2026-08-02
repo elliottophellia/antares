@@ -55,6 +55,8 @@ func init() {
 		solveCaptchaTool{},
 		// Social Media: read IMAP inbox for verification emails and OTP.
 		emailReadTool{},
+		// Disposable generator.email inboxes for agent verification flows.
+		tempMailTool{},
 		// Social Media: check/control persistent social browser.
 		socialBrowserTool{},
 		// Social Media: save/list social accounts with encrypted credentials.
