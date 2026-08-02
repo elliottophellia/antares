@@ -53,6 +53,10 @@ func init() {
 		vpsRunTool{},
 		// Anti-detect CAPTCHA solver (reuses the stealth browser).
 		solveCaptchaTool{},
+		// Social Media: read IMAP inbox for verification emails and OTP.
+		emailReadTool{},
+		// Social Media: check/control persistent social browser.
+		socialBrowserTool{},
 		// Native MITM intercept proxy.
 		interceptTool{},
 		// Offensive-security script wrappers (CyberStrike port). Each spawns

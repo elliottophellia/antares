@@ -312,6 +312,15 @@ func bootstrap(ctx context.Context) (*runtimeServices, error) {
 		MaxConcurrent: cfg.Cron.MaxConcurrent,
 		HistoryLimit:  cfg.Cron.HistoryLimit,
 	})
+
+	// Sync social media autopilot cron job.
+	if cfg.Social.Enabled {
+		ap := socialbrowser.NewAutopilot(db, cfg)
+		if err := ap.Sync(ctx); err != nil {
+			slog.Warn("social autopilot sync failed", "error", err)
+		}
+	}
+
 	return rt, nil
 }
 

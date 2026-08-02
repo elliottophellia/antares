@@ -144,6 +144,15 @@ type Deps struct {
 	Findings FindingStore
 	// Intel is the engagement's fact ledger and methodology. It may be nil.
 	Intel IntelStore
+	// SocialBrowser is the persistent stealth Chromium for social media. Nil
+	// when the social feature is not configured.
+	SocialBrowser SocialBrowserManager
+}
+
+// SocialBrowserManager is the minimal interface the social_browser tool needs
+// from the socialbrowser.Manager.
+type SocialBrowserManager interface {
+	Status() (state string, errMsg string)
 }
 
 // RoleInfo is the subset of a role the tools need.
