@@ -33,6 +33,13 @@ type sqlStore struct {
 	boxOnce sync.Once
 	box     *secret.Box
 	boxErr  error
+
+	// socialBox encrypts social media credentials; obtained lazily from
+	// secret.SocialDefault. Opt-in: if the social master key is not configured,
+	// social credential storage returns an error rather than storing plaintext.
+	socialBoxOnce sync.Once
+	socialKeyBox  *secret.Box
+	socialKeyErr  error
 }
 
 // Open connects to the configured backend and applies migrations.

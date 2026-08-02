@@ -151,6 +151,24 @@ var migrations = []string{
 		kv_value   TEXT NOT NULL DEFAULT '',
 		updated_at BIGINT NOT NULL
 	)`,
+
+	// Social Media accounts: credentials encrypted with the social master key.
+	`CREATE TABLE IF NOT EXISTS social_accounts (
+		id                 TEXT PRIMARY KEY,
+		platform           TEXT NOT NULL,
+		display_name       TEXT NOT NULL DEFAULT '',
+		username           TEXT NOT NULL DEFAULT '',
+		encrypted_password TEXT NOT NULL DEFAULT '',
+		encrypted_recovery TEXT NOT NULL DEFAULT '',
+		profile_url        TEXT NOT NULL DEFAULT '',
+		status             TEXT NOT NULL DEFAULT 'not_created',
+		rag_namespace      TEXT NOT NULL DEFAULT '',
+		skill_name         TEXT NOT NULL DEFAULT '',
+		last_checked_at    BIGINT,
+		created_at         BIGINT NOT NULL,
+		updated_at         BIGINT NOT NULL
+	)`,
+	`CREATE INDEX IF NOT EXISTS idx_social_accounts_platform ON social_accounts(platform)`,
 }
 
 // sqliteFTS adds the FTS5 index and triggers that keep it in sync.

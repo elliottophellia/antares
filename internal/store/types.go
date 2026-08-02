@@ -113,15 +113,15 @@ type Memory struct {
 // rest; the store encrypts on Put and decrypts on read, so callers see plain
 // values but the DB never holds them in the clear.
 type VPSHost struct {
-	ID         string    `json:"id"`
-	Label      string    `json:"label"`
-	Host       string    `json:"host"`
-	Port       int       `json:"port"`
-	Username   string    `json:"username"`
-	AuthMethod string    `json:"auth_method"` // password|key
-	Password   string    `json:"password,omitempty"`
-	PrivateKey string    `json:"private_key,omitempty"`
-	Passphrase string    `json:"passphrase,omitempty"`
+	ID         string `json:"id"`
+	Label      string `json:"label"`
+	Host       string `json:"host"`
+	Port       int    `json:"port"`
+	Username   string `json:"username"`
+	AuthMethod string `json:"auth_method"` // password|key
+	Password   string `json:"password,omitempty"`
+	PrivateKey string `json:"private_key,omitempty"`
+	Passphrase string `json:"passphrase,omitempty"`
 	// HostKey is the server's SSH public key, pinned on first connect (TOFU).
 	// A later connection presenting a different key is refused. Not secret.
 	HostKey   string    `json:"host_key,omitempty"`
@@ -263,6 +263,24 @@ type ModelUsage struct {
 	Cost      float64 `json:"cost"`
 }
 
+// SocialAccount is one social media platform account. Password and recovery
+// codes are encrypted at rest; plaintext lives only at the Store boundary.
+type SocialAccount struct {
+	ID            string     `json:"id"`
+	Platform      string     `json:"platform"`
+	DisplayName   string     `json:"display_name"`
+	Username      string     `json:"username"`
+	Password      string     `json:"-"` // plaintext only at the boundary; encrypted in DB
+	RecoveryCodes string     `json:"-"` // plaintext only at the boundary; encrypted in DB
+	ProfileURL    string     `json:"profile_url"`
+	Status        string     `json:"status"` // not_created|pending|verification_required|connected|suspended|error
+	RAGNamespace  string     `json:"rag_namespace"`
+	SkillName     string     `json:"skill_name"`
+	LastCheckedAt *time.Time `json:"last_checked_at,omitempty"`
+	CreatedAt     time.Time  `json:"created_at"`
+	UpdatedAt     time.Time  `json:"updated_at"`
+}
+
 // Store is the persistence contract every driver implements.
 type Store interface {
 	Driver() string
@@ -331,4 +349,9 @@ type Store interface {
 	SetKV(ctx context.Context, key, value string) error
 	DeleteKV(ctx context.Context, key string) error
 	ListKV(ctx context.Context, prefix string) (map[string]string, error)
+
+	PutSocialAccount(ctx context.Context, a *SocialAccount) error
+	GetSocialAccount(ctx context.Context, id string) (*SocialAccount, error)
+	ListSocialAccounts(ctx context.Context) ([]SocialAccount, error)
+	DeleteSocialAccount(ctx context.Context, id string) error
 }
