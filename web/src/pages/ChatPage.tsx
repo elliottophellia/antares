@@ -219,6 +219,42 @@ const SUGGESTION_KEYS: MessageKey[] = [
   'chat.suggest4',
 ]
 
+/** Composer ↑/↓ recall — most recent first, de-duped consecutive, capped. */
+const INPUT_HISTORY_KEY = 'antares:composer-history'
+const INPUT_HISTORY_MAX = 50
+
+function loadInputHistory(): string[] {
+  try {
+    const raw = localStorage.getItem(INPUT_HISTORY_KEY)
+    if (!raw) return []
+    const parsed = JSON.parse(raw) as unknown
+    if (!Array.isArray(parsed)) return []
+    return parsed.filter((x): x is string => typeof x === 'string' && x.trim() !== '').slice(0, INPUT_HISTORY_MAX)
+  } catch {
+    return []
+  }
+}
+
+function pushInputHistory(entry: string, prev: string[]): string[] {
+  const text = entry.trim()
+  if (!text) return prev
+  // Drop consecutive duplicate of the most recent entry.
+  const next = prev[0] === text ? prev : [text, ...prev.filter((x) => x !== text)]
+  return next.slice(0, INPUT_HISTORY_MAX)
+}
+
+/** Caret is on the first visual line of a textarea (for shell-style history ↑). */
+function caretOnFirstLine(el: HTMLTextAreaElement): boolean {
+  const pos = el.selectionStart ?? 0
+  return !el.value.slice(0, pos).includes('\n')
+}
+
+/** Caret is on the last visual line (for history ↓). */
+function caretOnLastLine(el: HTMLTextAreaElement): boolean {
+  const pos = el.selectionStart ?? 0
+  return !el.value.slice(pos).includes('\n')
+}
+
 export default function ChatPage() {
   const { sessionId } = useParams<{ sessionId: string }>()
   const navigate = useNavigate()
@@ -238,6 +274,12 @@ export default function ChatPage() {
     notice?: string
   }>({ turn: 1 })
   const [input, setInput] = useState('')
+  // Recent composer prompts (shell-style ↑/↓). Persisted across reloads.
+  const [inputHistory, setInputHistory] = useState<string[]>(() => loadInputHistory())
+  // -1 = editing a live draft (not browsing history). ≥0 = index into inputHistory
+  // from the end (0 = most recent).
+  const [historyPos, setHistoryPos] = useState(-1)
+  const draftRef = useRef('') // draft saved when first leaving with ↑
   const [error, setError] = useState<string>()
   const [title, setTitle] = useState('')
   const [approvals, setApprovals] = useState<ApprovalView[]>([])
@@ -873,7 +915,18 @@ export default function ChatPage() {
       const text = raw.trim()
       if ((!text && attached.length === 0 && attachedDocs.length === 0) || streaming) return
       if (text.startsWith('/') && text.length > 1) {
+        // Still record slash commands so ↑ recalls them.
+        if (text) {
+          setInputHistory((prev) => {
+            const next = pushInputHistory(text, prev)
+            localStorage.setItem(INPUT_HISTORY_KEY, JSON.stringify(next))
+            return next
+          })
+        }
+        setHistoryPos(-1)
+        draftRef.current = ''
         void runCommand(text)
+        setInput('')
         return
       }
 
@@ -894,6 +947,16 @@ export default function ChatPage() {
     }
     const assistantId = `local_${Date.now()}_a`
     setMessages((prev) => [...prev, userMsg, { id: assistantId, role: 'assistant', content: '' }])
+    // Remember what was sent for ↑/↓ (composer history).
+    if (text) {
+      setInputHistory((prev) => {
+        const next = pushInputHistory(text, prev)
+        localStorage.setItem(INPUT_HISTORY_KEY, JSON.stringify(next))
+        return next
+      })
+    }
+    setHistoryPos(-1)
+    draftRef.current = ''
     setInput('')
     setImages([])
     setDocs([])
@@ -1138,11 +1201,48 @@ export default function ChatPage() {
         }
       }
     }
+    // Shell-style prompt history: ↑ older, ↓ newer. Only when the caret is on
+    // the first/last line so multi-line editing still moves the cursor normally.
+    if (e.key === 'ArrowUp' && !e.shiftKey && !e.altKey && !e.metaKey && !e.ctrlKey) {
+      const el = e.currentTarget
+      if (inputHistory.length > 0 && caretOnFirstLine(el)) {
+        e.preventDefault()
+        if (historyPos === -1) draftRef.current = input
+        const idx = historyPos === -1 ? 0 : Math.min(historyPos + 1, inputHistory.length - 1)
+        setHistoryPos(idx)
+        setInput(inputHistory[idx] ?? '')
+        return
+      }
+    }
+    if (e.key === 'ArrowDown' && !e.shiftKey && !e.altKey && !e.metaKey && !e.ctrlKey) {
+      const el = e.currentTarget
+      if (historyPos >= 0 && caretOnLastLine(el)) {
+        e.preventDefault()
+        if (historyPos <= 0) {
+          setHistoryPos(-1)
+          setInput(draftRef.current)
+        } else {
+          const idx = historyPos - 1
+          setHistoryPos(idx)
+          setInput(inputHistory[idx] ?? '')
+        }
+        return
+      }
+    }
     if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
       e.preventDefault()
       send()
     }
   }
+
+  // Typing while browsing history leaves history mode (treat as new draft).
+  const onInputChange = useCallback((value: string) => {
+    if (historyPos !== -1) {
+      setHistoryPos(-1)
+      draftRef.current = ''
+    }
+    setInput(value)
+  }, [historyPos])
 
   const newChat = () => {
     stop()
@@ -1175,7 +1275,7 @@ export default function ChatPage() {
         onRemoveImage={(i) => setImages((prev) => prev.filter((_, x) => x !== i))}
         onRemoveDoc={(i) => setDocs((prev) => prev.filter((_, x) => x !== i))}
         onPaste={onPaste}
-        onChange={setInput}
+        onChange={onInputChange}
         onKeyDown={onKeyDown}
         onSend={send}
         onStop={stop}
