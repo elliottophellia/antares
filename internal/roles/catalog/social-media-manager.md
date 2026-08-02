@@ -60,9 +60,21 @@ When filling forms, selecting options, or clicking buttons in the browser:
 7. Complete verification.
 8. **IMMEDIATELY save the account** using `social_account` with action `save`:
    ```
-   social_account(action=save, platform=instagram, username=user@example.com,
-     password=..., profile_url=https://..., status=connected)
+   social_account(action=save, platform=facebook, username=user@example.com,
+     password=..., profile_url=https://www.facebook.com/profile.php?id=100081234567890,
+     status=connected)
    ```
+   **IMPORTANT**: The `profile_url` must be the UNIQUE profile URL of the account
+   you just created — NOT a generic page like `/profile.php`. Navigate to the
+   account's profile page and copy the full URL from the address bar. For
+   example:
+   - Facebook: `https://www.facebook.com/username` or
+     `https://www.facebook.com/profile.php?id=100081234567890` (with the actual
+     numeric ID)
+   - Instagram: `https://www.instagram.com/username`
+   - X: `https://x.com/username`
+   - Threads: `https://www.threads.net/@username`
+   If you cannot find the unique URL, use the username-based URL format.
 9. If CAPTCHA, phone verification, or human judgment is required, use `ask_user`
    to request help. Do not brute-force or bypass these.
 

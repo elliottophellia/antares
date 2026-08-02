@@ -4,6 +4,7 @@ import { useI18n } from '@/lib/i18n'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/primitives'
+import { Markdown } from '@/components/chat/Markdown'
 import type { ToolCallView } from '@/pages/ChatPage'
 
 interface AskQuestion {
@@ -152,7 +153,9 @@ export function AskUserCard({
             ) : null}
           </div>
 
-          <p className="mt-1.5 whitespace-pre-wrap break-words text-sm font-medium">{q.question}</p>
+          <div className="mt-1.5 text-sm font-medium">
+            <Markdown content={q.question} className="prose-sm" />
+          </div>
 
           <div className="mt-3 space-y-2">
             {hasOptions ? (
