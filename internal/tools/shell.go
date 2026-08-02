@@ -11,6 +11,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/enowdev/antares/internal/config"
@@ -56,9 +57,10 @@ type shellSession struct {
 	cmd      *exec.Cmd
 	stdin    io.WriteCloser
 	out      *lockedBuffer
+	done     chan struct{}
 	lastUsed time.Time
 	cwd      string
-	dead     bool
+	dead     atomic.Bool
 }
 
 // lockedBuffer collects interleaved stdout/stderr safely.
@@ -139,7 +141,7 @@ func defaultShell(configured string) (string, []string) {
 func (m *ShellManager) session(id, workspace string) (*shellSession, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if s, ok := m.sessions[id]; ok && !s.dead && s.cmd.ProcessState == nil {
+	if s, ok := m.sessions[id]; ok && !s.dead.Load() {
 		s.lastUsed = time.Now()
 		return s, nil
 	}
@@ -203,12 +205,14 @@ func (m *ShellManager) session(id, workspace string) (*shellSession, error) {
 		return nil, fmt.Errorf("start shell: %w", err)
 	}
 
-	s := &shellSession{cmd: cmd, stdin: stdin, out: out, lastUsed: time.Now(), cwd: workspace}
+	s := &shellSession{
+		cmd: cmd, stdin: stdin, out: out, done: make(chan struct{}),
+		lastUsed: time.Now(), cwd: workspace,
+	}
 	go func() {
 		_ = cmd.Wait()
-		s.mu.Lock()
-		s.dead = true
-		s.mu.Unlock()
+		s.dead.Store(true)
+		close(s.done)
 	}()
 	m.sessions[id] = s
 	return s, nil
@@ -288,7 +292,7 @@ func (s *shellSession) terminate() {
 	}
 	_ = s.stdin.Close()
 	_ = s.cmd.Process.Kill()
-	s.dead = true
+	s.dead.Store(true)
 }
 
 // sentinel marks the end of one command's output and carries its exit code.
@@ -298,16 +302,19 @@ const sentinelPrefix = "__ANTARES_DONE_"
 func (s *shellSession) run(ctx context.Context, command string, timeout time.Duration, onChunk func(string)) (string, int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.dead {
+	if s.dead.Load() {
 		return "", -1, fmt.Errorf("shell has exited")
 	}
 	s.lastUsed = time.Now()
 	s.out.drain()
 
 	marker := fmt.Sprintf("%s%d__", sentinelPrefix, time.Now().UnixNano())
-	script := command + "\nprintf '\\n" + marker + "%s\\n' \"$?\"\n"
+	// A terminal call may enable errexit (`set -e`). Shell options persist just
+	// like cwd and exported variables, but errexit must not leak into the next
+	// call and kill the shell before its completion sentinel can run.
+	script := "set +e\n" + command + "\nprintf '\\n" + marker + "%s\\n' \"$?\"\n"
 	if _, err := io.WriteString(s.stdin, script); err != nil {
-		s.dead = true
+		s.dead.Store(true)
 		return "", -1, fmt.Errorf("write to shell: %w", err)
 	}
 
@@ -320,6 +327,11 @@ func (s *shellSession) run(ctx context.Context, command string, timeout time.Dur
 		select {
 		case <-ctx.Done():
 			return s.finish(marker), -1, ctx.Err()
+		case <-s.done:
+			// The shell can exit before printing the sentinel (for example when a
+			// command enables `set -e` and then fails). Do not wait out the full
+			// timeout for a marker that can no longer arrive.
+			return s.finish(marker), -1, fmt.Errorf("shell exited before command completed")
 		case <-ticker.C:
 			buf := s.out.snapshot()
 			if onChunk != nil && len(buf) > sent {
