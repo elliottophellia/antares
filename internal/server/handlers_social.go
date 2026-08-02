@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/enowdev/antares/internal/config"
 	"github.com/enowdev/antares/internal/secret"
 	"github.com/enowdev/antares/internal/socialimap"
 	"github.com/enowdev/antares/internal/store"
@@ -188,6 +189,12 @@ func (s *Server) handleSocialIMAPSave(w http.ResponseWriter, r *http.Request) {
 	_ = cfg.SetPath("social.imap_port", port)
 	_ = cfg.SetPath("social.imap_username", body.Username)
 
+	// Persist config to YAML so it survives restarts.
+	if err := config.Save(cfg); err != nil {
+		writeError(w, http.StatusInternalServerError, errors.New("cannot save config: "+err.Error()))
+		return
+	}
+
 	// KV stores the encrypted password.
 	ctx := r.Context()
 	_ = s.db.SetKV(ctx, "social:imap_password", encPass)
@@ -256,6 +263,10 @@ func (s *Server) handleSocialAutopilot(w http.ResponseWriter, r *http.Request) {
 	}
 	cfg := s.config()
 	_ = cfg.SetPath("social.autopilot_enabled", body.Enabled)
+	if err := config.Save(cfg); err != nil {
+		writeError(w, http.StatusInternalServerError, errors.New("cannot save config: "+err.Error()))
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "enabled": body.Enabled})
 }
 
