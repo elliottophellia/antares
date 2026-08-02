@@ -48,6 +48,7 @@ func (s *Server) routes() {
 	m.HandleFunc("GET /api/sessions/search", s.handleSearchSessions)
 	m.HandleFunc("GET /api/sessions/empty/count", s.handleEmptyCount)
 	m.HandleFunc("POST /api/sessions/empty/delete", s.handleDeleteEmpty)
+	m.HandleFunc("POST /api/sessions/delete-all", s.handleDeleteAllSessions)
 	m.HandleFunc("POST /api/sessions/prune", s.handlePruneSessions)
 	m.HandleFunc("GET /api/sessions/{id}", s.handleGetSession)
 	m.HandleFunc("GET /api/sessions/{id}/role", s.handleSessionRole)

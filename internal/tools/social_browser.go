@@ -12,7 +12,7 @@ type socialBrowserTool struct{}
 
 func (socialBrowserTool) Name() string { return "social_browser" }
 func (socialBrowserTool) Description() string {
-	return "Check the status of the persistent social media browser. The browser holds all social media login sessions with a stable fingerprint. Use 'start' to launch it, 'stop' to close it, or 'status' (default) to check if it's running."
+	return "Start, stop, or check the persistent social media browser. This browser holds all social media login sessions with a stable fingerprint. Actions: 'start' (launch visible browser), 'stop' (close browser), or 'status' (default). The browser is shared — you and the user can both see and interact with it."
 }
 func (socialBrowserTool) RequiresApproval() bool { return true }
 
@@ -38,7 +38,8 @@ func (socialBrowserTool) Execute(ctx context.Context, in Input) Result {
 		return Errorf("social browser is not available")
 	}
 
-	state, errMsg := in.Deps.SocialBrowser.Status()
+	mgr := in.Deps.SocialBrowser
+	state, errMsg := mgr.Status()
 
 	switch action {
 	case "status":
@@ -55,13 +56,16 @@ func (socialBrowserTool) Execute(ctx context.Context, in Input) Result {
 
 	case "start":
 		if state == "running" {
-			return Result{Content: "Browser is already running."}
+			return Result{Content: "Browser is already running. All social media login sessions are available in the visible window."}
 		}
-		// The actual Start is handled via the API; the tool announces intent.
-		return Result{Content: "Browser start requested. Use the Social Media page or the API to launch it. The browser will appear as a visible window you can interact with."}
+		if err := mgr.Start(ctx); err != nil {
+			return Errorf("failed to start browser: %v", err)
+		}
+		return Result{Content: "Browser started successfully. The browser window is now visible and ready. All social media login sessions are available."}
 
 	case "stop":
-		return Result{Content: "Browser stop requested. Use the Social Media page or the API to stop it."}
+		mgr.Stop()
+		return Result{Content: "Browser stopped."}
 
 	default:
 		return Errorf("unknown action %q; use status, start, or stop", action)

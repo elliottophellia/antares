@@ -243,6 +243,12 @@ var Toolsets = map[string][]string{
 		"intercept", "browser", "http_request", "web_fetch", "solve_captcha",
 		"read_file", "write_file", "todo", "report_finding", "add_intel",
 	},
+	"social": {
+		"read_file", "write_file", "edit_file", "list_files", "glob", "grep",
+		"terminal", "process", "web_search", "web_fetch", "http_request", "browser",
+		"todo", "memory", "skill", "delegate_task", "task", "list_roles",
+		"email_read", "social_browser", "ask_user", "schedule", "rag_search", "rag_index",
+	},
 	"default": {
 		"read_file", "read_document", "write_file", "edit_file", "list_files", "glob", "grep",
 		"terminal", "process", "web_search", "web_fetch", "http_request", "browser", "todo", "board", "project_info", "set_soul", "memory", "list_proxies", "vps_run",

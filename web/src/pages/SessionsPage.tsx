@@ -8,6 +8,7 @@ import { PageLayout } from '@/components/layout/PageLayout'
 import { Pagination } from '@/components/ui/Pagination'
 import { Button } from '@/components/ui/button'
 import { Badge, Card, EmptyState, Input, Tabs, TabsList, TabsTrigger } from '@/components/ui/primitives'
+import { ConfirmDialog } from '@/components/ui/ConfirmDialog'
 import { SkeletonList } from '@/components/ui/skeleton'
 import { useI18n, useTimeAgo } from '@/lib/i18n'
 import { usePageActions } from '@/components/layout/PageChrome'
@@ -47,6 +48,7 @@ export default function SessionsPage() {
   const [hits, setHits] = useState<SearchHit[] | null>(null)
   const [offset, setOffset] = useState(0)
   const [tab, setTab] = useState<'chat' | 'project'>('chat')
+  const [showDeleteAll, setShowDeleteAll] = useState(false)
   const PAGE = 20
 
   const { data, loading, reload } = useApi<SessionList>('/sessions?limit=100')
@@ -115,6 +117,20 @@ export default function SessionsPage() {
     }
   }
 
+  const deleteAllInCategory = async () => {
+    setBusy(true)
+    try {
+      await post('/sessions/delete-all', { category: tab })
+      setShowDeleteAll(false)
+      reload()
+      reloadEmpty()
+    } catch {
+      /* handled by error state */
+    } finally {
+      setBusy(false)
+    }
+  }
+
   usePageActions(
     <>
       {emptyCount && emptyCount.count > 0 ? (
@@ -124,12 +140,18 @@ export default function SessionsPage() {
           <span className="sm:hidden">{emptyCount.count}</span>
         </Button>
       ) : null}
+      {sessions.length > 0 ? (
+        <Button variant="ghost" size="sm" onClick={() => setShowDeleteAll(true)} disabled={busy} className="gap-1.5 text-muted-foreground hover:text-destructive">
+          <Trash className="size-4" />
+          <span className="hidden sm:inline">{t('sessions.deleteAll')}</span>
+        </Button>
+      ) : null}
       <Button size="sm" onClick={() => navigate('/')} className="gap-1.5">
         <ChatCircleDots className="size-4" />
         {t('common.new')}
       </Button>
     </>,
-    [emptyCount, busy, t],
+    [emptyCount, busy, t, sessions.length],
   )
 
   return (
@@ -242,6 +264,15 @@ export default function SessionsPage() {
           })}
         </div>
       )}
+
+      <ConfirmDialog
+        open={showDeleteAll}
+        onOpenChange={(o) => !o && setShowDeleteAll(o)}
+        title={t('sessions.deleteAllTitle')}
+        description={t('sessions.deleteAllDesc', { category: tab === 'project' ? t('sessions.tabProject') : t('sessions.tabChat'), count: sessions.length })}
+        confirmLabel={t('common.delete')}
+        onConfirm={deleteAllInCategory}
+      />
     </PageLayout>
   )
 }

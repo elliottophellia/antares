@@ -432,6 +432,68 @@ func (s *Server) handleDeleteSession(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]bool{"deleted": true})
 }
 
+// handleDeleteAllSessions deletes all sessions in a category (chat or project).
+// Categories: "chat" (non-project sessions), "project" (sessions with meta.project_dir),
+// or "all" (every session).
+func (s *Server) handleDeleteAllSessions(w http.ResponseWriter, r *http.Request) {
+	if s.requireDashboardPassword(w, r) {
+		return
+	}
+	var body struct {
+		Category string `json:"category"` // chat|project|all
+	}
+	if err := decodeBody(r, &body); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	category := strings.TrimSpace(strings.ToLower(body.Category))
+	if category == "" {
+		category = "all"
+	}
+
+	sessions, _, err := s.db.ListSessions(r.Context(), store.SessionFilter{Limit: 100000})
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+
+	var ids []string
+	for _, sess := range sessions {
+		isProject := false
+		if sess.Meta != nil {
+			if v, ok := sess.Meta["project_dir"]; ok {
+				if s, ok := v.(string); ok && s != "" {
+					isProject = true
+				}
+			}
+		}
+		switch category {
+		case "chat":
+			if !isProject {
+				ids = append(ids, sess.ID)
+			}
+		case "project":
+			if isProject {
+				ids = append(ids, sess.ID)
+			}
+		case "all":
+			ids = append(ids, sess.ID)
+		}
+	}
+
+	if len(ids) == 0 {
+		writeJSON(w, http.StatusOK, map[string]any{"deleted": 0})
+		return
+	}
+
+	n, err := s.db.DeleteSessions(r.Context(), ids)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"deleted": n})
+}
+
 func (s *Server) handleRenameSession(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Title string `json:"title"`

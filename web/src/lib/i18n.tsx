@@ -486,6 +486,9 @@ const en = {
   'sessions.cleanEmpty': 'Clean {n} empty',
   'sessions.untitled': 'Untitled',
   'sessions.deleteOne': 'Delete session',
+  'sessions.deleteAll': 'Delete All',
+  'sessions.deleteAllTitle': 'Delete all sessions?',
+  'sessions.deleteAllDesc': 'This will permanently delete all {count} {category} sessions. This cannot be undone.',
 
   'models.title': 'Models',
   'models.desc': 'Pick the provider and model Antares uses. Switch any time, no restart needed.',
