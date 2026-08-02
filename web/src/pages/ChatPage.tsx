@@ -230,7 +230,13 @@ export default function ChatPage() {
   const [streaming, setStreaming] = useState(false)
   // Live status for the streaming indicator: which step, and what tool (if any)
   // is running right now. Reset at the start of every send.
-  const [live, setLive] = useState<{ turn: number; tool?: string; waiting?: boolean }>({ turn: 1 })
+  const [live, setLive] = useState<{
+    turn: number
+    tool?: string
+    waiting?: boolean
+    /** Server notice (compacting, steering, …) shown while streaming. */
+    notice?: string
+  }>({ turn: 1 })
   const [input, setInput] = useState('')
   const [error, setError] = useState<string>()
   const [title, setTitle] = useState('')
@@ -515,7 +521,11 @@ export default function ChatPage() {
           enqueueDelta(assistantId, 'reasoning', String(event.delta ?? ''))
           break
         case 'tool_call':
-          setLive((s) => ({ turn: s.turn + 1, tool: String(event.name ?? '') }))
+          setLive((s) => ({
+            turn: s.turn + 1,
+            tool: String(event.name ?? ''),
+            notice: undefined,
+          }))
           patchAssistant((m) =>
             pushToolSeg(m, {
               id: String(event.id ?? ''),
@@ -550,11 +560,19 @@ export default function ChatPage() {
             })),
           )
           break
+        case 'notice':
+          // Compaction, steering, retries, … — without this the UI only shows
+          // "Working… · Ns" during multi-minute silent server work.
+          setLive((s) => ({
+            ...s,
+            notice: String(event.message ?? event.content ?? '').trim() || undefined,
+          }))
+          break
         case 'ask':
           // The turn is now paused inside ask_user. Remember the id so the
           // answer card can resume it; the stream stays open (no 'done').
           setAskId(String(event.id ?? ''))
-          setLive((s) => ({ ...s, tool: undefined, waiting: true }))
+          setLive((s) => ({ ...s, tool: undefined, waiting: true, notice: undefined }))
           break
         case 'usage':
           patchAssistant((m) => ({
@@ -679,9 +697,15 @@ export default function ChatPage() {
               if (evtTitle) setTitle(evtTitle)
             })
           },
-          () => {
+          (err) => {
             setStreaming(false)
             close?.()
+            // Auth failure will not fix itself with a retry — stop the 3s 401
+            // loop that filled the daemon log after every restart.
+            if (err instanceof ApiError && err.status === 401) {
+              setError(t('chat.attachAuthFailed') || 'Dashboard login expired — refresh and sign in again.')
+              return
+            }
             if (alive) window.setTimeout(connect, 3000)
           },
         )
@@ -1362,7 +1386,12 @@ export default function ChatPage() {
                   />
                 ))}
                 {streaming ? (
-                  <StreamingIndicator turn={live.turn} tool={live.tool} waiting={live.waiting} />
+                  <StreamingIndicator
+                    turn={live.turn}
+                    tool={live.tool}
+                    waiting={live.waiting}
+                    notice={live.notice}
+                  />
                 ) : null}
                 {error ? <ErrorBanner message={error} /> : null}
               </div>
@@ -1716,10 +1745,12 @@ export function StreamingIndicator({
   turn,
   tool,
   waiting,
+  notice,
 }: {
   turn?: number
   tool?: string
   waiting?: boolean
+  notice?: string
 }) {
   const { t } = useI18n()
   const [secs, setSecs] = useState(0)
@@ -1728,7 +1759,7 @@ export function StreamingIndicator({
     const start = Date.now()
     const id = setInterval(() => setSecs(Math.round((Date.now() - start) / 1000)), 1000)
     return () => clearInterval(id)
-  }, [turn, tool, waiting])
+  }, [turn, tool, waiting, notice])
   // Paused on a question: no timer, no pulsing "working" — the run is idle by
   // design, waiting on the person. Otherwise show the running tool / step.
   if (waiting) {
@@ -1741,9 +1772,11 @@ export function StreamingIndicator({
   }
   const label = tool
     ? t('chat.running', { tool })
-    : turn && turn > 1
-      ? t('chat.workingStep', { n: turn })
-      : t('chat.working')
+    : notice
+      ? notice
+      : turn && turn > 1
+        ? t('chat.workingStep', { n: turn })
+        : t('chat.working')
   return (
     <div className="flex items-center gap-2 px-1 text-xs text-muted-foreground">
       <span className="flex items-center gap-1">
@@ -1751,8 +1784,8 @@ export function StreamingIndicator({
         <span className="pulse-dot size-1.5 rounded-full bg-primary [animation-delay:0.2s]" />
         <span className="pulse-dot size-1.5 rounded-full bg-primary [animation-delay:0.4s]" />
       </span>
-      <span className="font-medium text-foreground/70">{label}</span>
-      <span className="text-[10px] tabular-nums text-muted-foreground/60">· {secs}s</span>
+      <span className="min-w-0 font-medium text-foreground/70">{label}</span>
+      <span className="shrink-0 text-[10px] tabular-nums text-muted-foreground/60">· {secs}s</span>
     </div>
   )
 }

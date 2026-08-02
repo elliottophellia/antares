@@ -76,8 +76,13 @@ func (a *Agent) maybeCompact(ctx context.Context, history []llm.Message, system,
 		return history
 	}
 
-	if cfg.ProgressNotices {
-		_ = emit(Event{Type: EventNotice, Message: fmt.Sprintf("compacting %d older messages to free context", len(middle))})
+	// Always surface compaction to the UI: on long sessions this LLM call can
+	// take tens of seconds and without a notice the dashboard only shows
+	// "Working… · Ns", which looks like a hang. progress_notices used to gate
+	// this; we still emit here because silent multi-minute work is worse.
+	if emit != nil {
+		_ = emit(Event{Type: EventNotice, Message: fmt.Sprintf(
+			"compacting %d older messages to free context (~%d tokens)", len(middle), used)})
 	}
 
 	summary, err := a.summarise(ctx, middle)
