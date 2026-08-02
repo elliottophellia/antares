@@ -117,7 +117,7 @@ func withShimEnv(env []string, shim httpShimEnv) []string {
 
 func defaultShell(configured string) (string, []string) {
 	if configured != "" {
-		return configured, []string{"-i"}
+		return configured, nil
 	}
 	if runtime.GOOS == "windows" {
 		return "powershell.exe", []string{"-NoLogo", "-NoProfile", "-Command", "-"}

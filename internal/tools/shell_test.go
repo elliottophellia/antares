@@ -36,8 +36,8 @@ func TestDefaultShellHonorsExplicitConfiguration(t *testing.T) {
 	if shell != "/custom/shell" {
 		t.Fatalf("defaultShell(configured) = %q", shell)
 	}
-	if len(args) != 1 || args[0] != "-i" {
-		t.Fatalf("configured shell args = %#v, want [-i]", args)
+	if len(args) != 0 {
+		t.Fatalf("configured shell args = %#v, want non-interactive mode", args)
 	}
 }
 

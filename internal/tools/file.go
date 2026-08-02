@@ -140,7 +140,7 @@ type readFileTool struct{}
 
 func (readFileTool) Name() string { return "read_file" }
 func (readFileTool) Description() string {
-	return "Read a text file from the workspace. Returns numbered lines. Use offset/limit for large files."
+	return "Read a text file from the workspace. Returns NUMBER|CONTENT lines; only text after | belongs in edit_file.old_string. Use offset/limit for large files."
 }
 func (readFileTool) Schema() map[string]any {
 	return schema(map[string]any{
@@ -204,7 +204,7 @@ func (readFileTool) Execute(_ context.Context, in Input) Result {
 
 	var b strings.Builder
 	for i := start; i < end; i++ {
-		fmt.Fprintf(&b, "%6d\t%s\n", i+1, lines[i])
+		fmt.Fprintf(&b, "%d|%s\n", i+1, lines[i])
 	}
 	if end < len(lines) {
 		fmt.Fprintf(&b, "\n… %d more lines (use offset=%d to continue)\n", len(lines)-end, end+1)
@@ -320,7 +320,16 @@ func (editFileTool) Execute(_ context.Context, in Input) Result {
 		return Errorf("cannot read %s: %v", args.Path, err)
 	}
 	content := string(data)
-	count := strings.Count(content, args.OldString)
+	oldString, newString := args.OldString, args.NewString
+	count := strings.Count(content, oldString)
+	if count == 0 && strings.Contains(content, "\r\n") {
+		// read_file displays logical lines with LF separators. Translate copied
+		// multi-line edits back to the source convention without rewriting the
+		// untouched CRLF content.
+		oldString = strings.ReplaceAll(oldString, "\n", "\r\n")
+		newString = strings.ReplaceAll(newString, "\n", "\r\n")
+		count = strings.Count(content, oldString)
+	}
 	switch {
 	case count == 0:
 		return Errorf("old_string not found in %s. Read the file first and copy the exact text.", args.Path)
@@ -330,9 +339,9 @@ func (editFileTool) Execute(_ context.Context, in Input) Result {
 
 	updated := content
 	if args.ReplaceAll {
-		updated = strings.ReplaceAll(content, args.OldString, args.NewString)
+		updated = strings.ReplaceAll(content, oldString, newString)
 	} else {
-		updated = strings.Replace(content, args.OldString, args.NewString, 1)
+		updated = strings.Replace(content, oldString, newString, 1)
 	}
 	if err := writeWithCheckpoint(in, path, []byte(updated), "edit_file"); err != nil {
 		return Errorf("cannot write %s: %v", args.Path, err)
