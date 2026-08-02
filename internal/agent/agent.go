@@ -171,6 +171,7 @@ type Agent struct {
 	intel    *engagement.Store
 	roleperf *roleperf.Tracker
 	board    *board.Board
+	socialBrowser tools.SocialBrowserManager
 
 	bg *bgManager
 	// bgAct tracks background-tool usage per session (RAG index/retrieve, etc.).
@@ -764,6 +765,7 @@ func (a *Agent) executeTools(
 			Deps: &tools.Deps{
 				Config: a.cfg, Store: a.db, RAG: a.rag, Shell: a.shell,
 				Sub: a.subAgentFor(req), Tasks: a.backgroundFor(req), Skills: a.skillLibrary(),
+				SocialBrowser: a.socialBrowser,
 				Checkpoint: func(sessionID, path, tool string) {
 					a.saveCheckpoint(sessionID, path, tool, req.turnMarker)
 				},

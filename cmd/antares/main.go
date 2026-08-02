@@ -295,6 +295,7 @@ func bootstrap(ctx context.Context) (*runtimeServices, error) {
 
 	rt := &runtimeServices{cfg: cfg, db: db, shell: shell, agent: ag, skills: skillMgr}
 	rt.social = socialbrowser.New()
+	ag.SetSocialBrowser(rt.social)
 
 	// MCP servers are optional; a failing one is recorded, never fatal.
 	rt.mcp = mcp.NewManager()

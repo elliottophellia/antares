@@ -53,10 +53,10 @@ func New() *Manager {
 }
 
 // Status returns the current browser state and any error detail.
-func (m *Manager) Status() (State, string) {
+func (m *Manager) Status() (string, string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return m.state, m.errMsg
+	return string(m.state), m.errMsg
 }
 
 // Start launches the persistent browser if it is not already running.
@@ -189,10 +189,10 @@ func (m *Manager) WaitForRunning(timeout time.Duration) bool {
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
 		state, _ := m.Status()
-		if state == StateRunning {
+		if state == string(StateRunning) {
 			return true
 		}
-		if state == StateError {
+		if state == string(StateError) {
 			return false
 		}
 		time.Sleep(200 * time.Millisecond)

@@ -150,9 +150,10 @@ type Deps struct {
 }
 
 // SocialBrowserManager is the minimal interface the social_browser tool needs
-// from the socialbrowser.Manager.
+// from the socialbrowser.Manager. The Status method returns (state, errMsg)
+// where state is a string enum.
 type SocialBrowserManager interface {
-	Status() (state string, errMsg string)
+	Status() (string, string)
 }
 
 // RoleInfo is the subset of a role the tools need.

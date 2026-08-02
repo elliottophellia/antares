@@ -604,6 +604,9 @@ func (a *Agent) PruneCheckpoints(olderThan time.Duration) (int, error) {
 // SetPlugins attaches the plugin manager. Passing nil disables hooks.
 func (a *Agent) SetPlugins(m *plugin.Manager) { a.plugins = m }
 
+// SetSocialBrowser attaches the persistent social media browser manager.
+func (a *Agent) SetSocialBrowser(m tools.SocialBrowserManager) { a.socialBrowser = m }
+
 // Plugins exposes the manager, or nil when none is attached.
 func (a *Agent) Plugins() *plugin.Manager { return a.plugins }
 

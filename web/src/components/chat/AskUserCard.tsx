@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import { Question, PaperPlaneTilt, ArrowLeft, ArrowRight, Check } from '@phosphor-icons/react'
+import { Question, ArrowLeft, ArrowRight, Check } from '@phosphor-icons/react'
 import { useI18n } from '@/lib/i18n'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
@@ -66,18 +66,37 @@ export function AskUserCard({
     if (multi) {
       setSelected(selected.includes(o) ? selected.filter((x) => x !== o) : [...selected, o])
     } else {
-      // Single-select: pick, and for a one-question card that's the whole answer.
       setSelected([o])
       if (questions.length === 1) submit({ 0: [o] })
     }
   }
 
-  const addCustom = () => {
+  // Commit the free-text input into the current question's answers.
+  // Returns the updated answers record.
+  const commitCustom = (base: typeof answers): typeof answers => {
     const v = custom.trim()
-    if (!v) return
-    setSelected(multi ? [...selected.filter((x) => x !== v), v] : [v])
+    if (!v) return base
+    const cur = base[idx] ?? []
+    if (multi) {
+      return { ...base, [idx]: [...cur.filter((x) => x !== v), v] }
+    }
+    return { ...base, [idx]: [v] }
+  }
+
+  // Next button: attach text first, then advance to the next question.
+  const handleNext = () => {
+    const updated = commitCustom(answers)
+    setAnswers(updated)
     setCustom('')
-    if (!multi && questions.length === 1) submit({ 0: [v] })
+    setIdx((i) => Math.min(questions.length - 1, i + 1))
+  }
+
+  // Submit button: attach text first, then submit all answers.
+  const handleSubmit = () => {
+    const updated = commitCustom(answers)
+    setAnswers(updated)
+    setCustom('')
+    submit(updated)
   }
 
   const answeredCount = questions.filter((_, i) => (answers[i]?.length ?? 0) > 0).length
@@ -111,6 +130,8 @@ export function AskUserCard({
     )
   }
 
+  const hasOptions = (q.options ?? []).length > 0
+
   return (
     <div className="fade-up rounded-[var(--radius-md)] border border-primary/40 bg-primary/[0.06] p-3.5">
       <div className="flex items-start gap-2.5">
@@ -134,7 +155,7 @@ export function AskUserCard({
           <p className="mt-1.5 whitespace-pre-wrap break-words text-sm font-medium">{q.question}</p>
 
           <div className="mt-3 space-y-2">
-            {(q.options ?? []).length > 0 ? (
+            {hasOptions ? (
               <div className="flex flex-wrap gap-2">
                 {q.options!.map((o) => {
                   const on = selected.includes(o)
@@ -155,32 +176,25 @@ export function AskUserCard({
               </div>
             ) : null}
 
-            {/* Free-text answer — always available (this is the "Other"). */}
-            <div className="flex items-center gap-2">
-              <Input
-                value={custom}
-                onChange={(e) => setCustom(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter' && !e.shiftKey) {
-                    e.preventDefault()
-                    addCustom()
+            {/* Free-text input — no send button; Next/Submit commits it. */}
+            <Input
+              value={custom}
+              onChange={(e) => setCustom(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                  e.preventDefault()
+                  if (isLast) {
+                    handleSubmit()
+                  } else {
+                    handleNext()
                   }
-                }}
-                placeholder={
-                  (q.options ?? []).length > 0 ? t('ask.otherPlaceholder') : t('ask.customPlaceholder')
                 }
-                disabled={disabled}
-              />
-              <Button
-                size="icon-sm"
-                variant="outline"
-                disabled={disabled || !custom.trim()}
-                onClick={addCustom}
-                aria-label={t('ask.add')}
-              >
-                <PaperPlaneTilt className="size-4" />
-              </Button>
-            </div>
+              }}
+              placeholder={
+                hasOptions ? t('ask.otherPlaceholder') : t('ask.customPlaceholder')
+              }
+              disabled={disabled}
+            />
 
             {multi && selected.length > 0 ? (
               <p className="text-[11px] text-muted-foreground">
@@ -189,9 +203,8 @@ export function AskUserCard({
             ) : null}
           </div>
 
-          {/* Navigation. A single question with options submits on click, so the
-              nav row only matters for multi-question or free-text cases. */}
-          {questions.length > 1 || multi || (q.options ?? []).length === 0 ? (
+          {/* Navigation. Next auto-attaches the typed text. */}
+          {questions.length > 1 || multi || !hasOptions ? (
             <div className="mt-3 flex items-center justify-between gap-2">
               <Button
                 size="sm"
@@ -206,8 +219,8 @@ export function AskUserCard({
               {isLast ? (
                 <Button
                   size="sm"
-                  disabled={disabled || answeredCount === 0}
-                  onClick={() => submit()}
+                  disabled={disabled || (answeredCount === 0 && !custom.trim())}
+                  onClick={handleSubmit}
                   className="gap-1.5"
                 >
                   <Check className="size-4" />
@@ -218,7 +231,7 @@ export function AskUserCard({
                   size="sm"
                   variant="secondary"
                   disabled={disabled}
-                  onClick={() => setIdx((i) => Math.min(questions.length - 1, i + 1))}
+                  onClick={handleNext}
                   className="gap-1.5"
                 >
                   {t('ask.next')}
