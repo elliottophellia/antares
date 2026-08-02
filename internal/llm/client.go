@@ -14,6 +14,7 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -241,6 +242,60 @@ func (o Options) doJSON(ctx context.Context, method, url string, body any, heade
 }
 
 func (o Options) do(ctx context.Context, method, url string, body any, headers map[string]string) (*http.Response, error) {
+	return o.doWithClient(ctx, o.HTTPClient, method, url, body, headers)
+}
+
+// doStream applies Timeout as an inactivity limit. http.Client.Timeout is a
+// total lifetime limit and would terminate a healthy stream that keeps sending.
+func (o Options) doStream(ctx context.Context, method, url string, body any, headers map[string]string) (*http.Response, error) {
+	client := *o.HTTPClient
+	idleTimeout := o.Timeout
+	if idleTimeout <= 0 {
+		idleTimeout = client.Timeout
+	}
+	if idleTimeout <= 0 {
+		return o.doWithClient(ctx, &client, method, url, body, headers)
+	}
+	client.Timeout = 0
+	streamCtx, cancel := context.WithCancel(ctx)
+	activity := make(chan struct{}, 1)
+	done := make(chan struct{})
+
+	go func() {
+		timer := time.NewTimer(idleTimeout)
+		defer timer.Stop()
+		for {
+			select {
+			case <-activity:
+				if !timer.Stop() {
+					select {
+					case <-timer.C:
+					default:
+					}
+				}
+				timer.Reset(idleTimeout)
+			case <-timer.C:
+				cancel()
+				return
+			case <-done:
+				return
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+
+	resp, err := o.doWithClient(streamCtx, &client, method, url, body, headers)
+	if err != nil {
+		close(done)
+		cancel()
+		return nil, err
+	}
+	resp.Body = &activityReadCloser{ReadCloser: resp.Body, activity: activity, done: done, cancel: cancel}
+	return resp, nil
+}
+
+func (o Options) doWithClient(ctx context.Context, client *http.Client, method, url string, body any, headers map[string]string) (*http.Response, error) {
 	var reader io.Reader
 	if body != nil {
 		b, err := json.Marshal(body)
@@ -265,7 +320,7 @@ func (o Options) do(ctx context.Context, method, url string, body any, headers m
 		req.Header.Set(k, v)
 	}
 
-	resp, err := o.HTTPClient.Do(req)
+	resp, err := client.Do(req)
 	if err != nil {
 		return nil, describeTransport(err, url)
 	}
@@ -276,6 +331,34 @@ func (o Options) do(ctx context.Context, method, url string, body any, headers m
 		return nil, &apiError{Status: resp.StatusCode, Body: string(data), URL: url, RetryAfter: ra}
 	}
 	return resp, nil
+}
+
+type activityReadCloser struct {
+	io.ReadCloser
+	activity chan<- struct{}
+	done     chan struct{}
+	cancel   context.CancelFunc
+	once     sync.Once
+}
+
+func (r *activityReadCloser) Read(p []byte) (int, error) {
+	n, err := r.ReadCloser.Read(p)
+	if n > 0 {
+		select {
+		case r.activity <- struct{}{}:
+		default:
+		}
+	}
+	return n, err
+}
+
+func (r *activityReadCloser) Close() error {
+	err := r.ReadCloser.Close()
+	r.once.Do(func() {
+		close(r.done)
+		r.cancel()
+	})
+	return err
 }
 
 // TransportError is a connection failure, as opposed to a response the

@@ -305,7 +305,7 @@ func (c *geminiClient) Chat(ctx context.Context, req Request) (*Response, error)
 }
 
 func (c *geminiClient) Stream(ctx context.Context, req Request, emit func(Event) error) (*Response, error) {
-	httpResp, err := c.opts.do(ctx, "POST", c.endpoint(req.Model, "streamGenerateContent", true), c.buildBody(req), c.headers())
+	httpResp, err := c.opts.doStream(ctx, "POST", c.endpoint(req.Model, "streamGenerateContent", true), c.buildBody(req), c.headers())
 	if err != nil {
 		return nil, err
 	}

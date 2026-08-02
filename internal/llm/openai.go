@@ -283,7 +283,7 @@ func (c *openAIClient) Chat(ctx context.Context, req Request) (*Response, error)
 }
 
 func (c *openAIClient) Stream(ctx context.Context, req Request, emit func(Event) error) (*Response, error) {
-	httpResp, err := c.opts.do(ctx, "POST", c.endpoint("/chat/completions", req.Model), c.buildBody(req, true), c.headers())
+	httpResp, err := c.opts.doStream(ctx, "POST", c.endpoint("/chat/completions", req.Model), c.buildBody(req, true), c.headers())
 	if err != nil {
 		return nil, err
 	}

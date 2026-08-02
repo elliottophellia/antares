@@ -4,8 +4,11 @@ import (
 	"context"
 	"errors"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"syscall"
 	"testing"
+	"time"
 )
 
 // Provider error bodies must never reach a user interface raw; each vendor
@@ -108,5 +111,39 @@ func TestDescribeTransport(t *testing.T) {
 	// A real response, however bad, is not a transport failure.
 	if IsUnreachable(&apiError{Status: 401, Body: `{"error":"nope"}`}) {
 		t.Error("an API error must not be classified as unreachable")
+	}
+}
+
+func TestStreamingTimeoutTracksInactivityInsteadOfTotalDuration(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		flusher := w.(http.Flusher)
+		for _, token := range []string{"one", "two", "three", "four"} {
+			_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"" + token + "\"}}]}\n\n"))
+			flusher.Flush()
+			time.Sleep(40 * time.Millisecond)
+		}
+		_, _ = w.Write([]byte("data: [DONE]\n\n"))
+		flusher.Flush()
+	}))
+	defer srv.Close()
+
+	client, err := New(Options{Kind: "openai-compatible", BaseURL: srv.URL, Timeout: 80 * time.Millisecond})
+	if err != nil {
+		t.Fatalf("new client: %v", err)
+	}
+
+	var text string
+	_, err = client.Stream(context.Background(), Request{Model: "slow"}, func(event Event) error {
+		if event.Type == EventText {
+			text += event.Delta
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("stream lasting longer than timeout while active: %v", err)
+	}
+	if text != "onetwothreefour" {
+		t.Fatalf("text = %q, want %q", text, "onetwothreefour")
 	}
 }

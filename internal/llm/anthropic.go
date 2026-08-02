@@ -275,7 +275,7 @@ func (c *anthropicClient) fromResponse(raw *antResponse) (*Response, error) {
 }
 
 func (c *anthropicClient) Stream(ctx context.Context, req Request, emit func(Event) error) (*Response, error) {
-	httpResp, err := c.opts.do(ctx, "POST", c.opts.BaseURL+"/messages", c.buildBody(req, true), c.headers())
+	httpResp, err := c.opts.doStream(ctx, "POST", c.opts.BaseURL+"/messages", c.buildBody(req, true), c.headers())
 	if err != nil {
 		return nil, err
 	}
