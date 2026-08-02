@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"os"
+	"os/exec"
 	"runtime"
 	"strings"
 	"testing"
@@ -123,5 +124,90 @@ func TestPersistentShellExitReturnsPromptlyAndRecovers(t *testing.T) {
 	out, code, err := replacement.run(context.Background(), "printf RECOVERED", 2*time.Second, nil)
 	if err != nil || code != 0 || out != "RECOVERED" {
 		t.Fatalf("replacement shell result = (%q, %d, %v)", out, code, err)
+	}
+}
+
+// Commands like `adb shell …` inherit the persistent shell's stdin pipe. Because
+// that pipe stays open between tool calls, they block reading (or steal the
+// completion sentinel). Wrapping the user command so its stdin is /dev/null
+// lets the sentinel run as soon as the command finishes.
+func TestPersistentShellClosesCommandStdinSoADBStyleCommandsFinish(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX persistent shell protocol does not apply on Windows")
+	}
+
+	// Build a helper that prints then blocks on stdin — the adb shell pattern.
+	dir := t.TempDir()
+	src := dir + "/block.go"
+	bin := dir + "/block"
+	if err := os.WriteFile(src, []byte(`package main
+import ("fmt"; "io"; "os")
+func main() {
+	fmt.Println("Events injected: 1")
+	io.Copy(io.Discard, os.Stdin)
+}
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	build := exec.Command("go", "build", "-o", bin, src)
+	if out, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("build helper: %v\n%s", err, out)
+	}
+
+	m := NewShellManager(config.Terminal{})
+	t.Cleanup(m.CloseAll)
+	sess, err := m.session("stdin-block-session", dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	start := time.Now()
+	out, code, err := sess.run(context.Background(), bin, 2*time.Second, nil)
+	elapsed := time.Since(start)
+	if err != nil {
+		t.Fatalf("stdin-blocking command hung/failed: %v (after %s)\nout=%q", err, elapsed, out)
+	}
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0; out=%q", code, out)
+	}
+	if !strings.Contains(out, "Events injected: 1") {
+		t.Fatalf("output = %q", out)
+	}
+	if elapsed > time.Second {
+		t.Fatalf("took %s, want prompt completion well under 1s (sentinel not stolen)", elapsed)
+	}
+
+	// Session still works after a stdin-hungry command.
+	out, code, err = sess.run(context.Background(), "printf STILL_ALIVE", 2*time.Second, nil)
+	if err != nil || code != 0 || out != "STILL_ALIVE" {
+		t.Fatalf("follow-up = (%q, %d, %v)", out, code, err)
+	}
+}
+
+// cd/export must survive the stdin redirect wrap (brace group, not subshell).
+func TestPersistentShellStdinWrapPreservesCdAndExport(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX persistent shell protocol does not apply on Windows")
+	}
+	m := NewShellManager(config.Terminal{})
+	t.Cleanup(m.CloseAll)
+	ws := t.TempDir()
+	sub := ws + "/sub"
+	if err := os.Mkdir(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	sess, err := m.session("persist-session", ws)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, code, err := sess.run(context.Background(), "cd sub && export ANTARES_TEST_FLAG=1", 2*time.Second, nil); err != nil || code != 0 {
+		t.Fatalf("cd/export: code=%d err=%v", code, err)
+	}
+	out, code, err := sess.run(context.Background(), "pwd; printf '%s' \"$ANTARES_TEST_FLAG\"", 2*time.Second, nil)
+	if err != nil || code != 0 {
+		t.Fatalf("follow-up: %v code=%d", err, code)
+	}
+	if !strings.Contains(out, "sub") || !strings.Contains(out, "1") {
+		t.Fatalf("cwd/export not preserved: %q", out)
 	}
 }
