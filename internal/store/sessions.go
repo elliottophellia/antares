@@ -151,6 +151,9 @@ func (s *sqlStore) DeleteSession(ctx context.Context, id string) error {
 	if _, err := s.exec(ctx, `DELETE FROM messages WHERE session_id=?`, id); err != nil {
 		return err
 	}
+	if _, err := s.exec(ctx, `DELETE FROM memories WHERE scope='session' AND scope_key=?`, id); err != nil {
+		// Non-fatal.
+	}
 	_, err := s.exec(ctx, `DELETE FROM sessions WHERE id=?`, id)
 	return err
 }

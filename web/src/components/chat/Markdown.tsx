@@ -1,12 +1,12 @@
 import { useMemo, useState } from 'react'
-import { Check, Copy } from '@phosphor-icons/react'
+import { Check, Copy, Image as ImageIcon } from '@phosphor-icons/react'
 import { cn } from '@/lib/utils'
 import { copyText } from '@/lib/clipboard'
 import { useI18n } from '@/lib/i18n'
 
 /**
  * A small, dependency-free Markdown renderer covering what agent replies
- * actually use: fenced code, headings, lists, tables, quotes, and inline marks.
+ * actually use: fenced code, headings, lists, tables, quotes, images, and inline marks.
  */
 export function Markdown({ content, className }: { content: string; className?: string }) {
   const blocks = useMemo(() => parseBlocks(content), [content])
@@ -30,6 +30,7 @@ type Block =
   | { type: 'quote'; text: string }
   | { type: 'table'; header: string[]; rows: string[][] }
   | { type: 'rule' }
+  | { type: 'image'; alt: string; url: string }
   | { type: 'paragraph'; text: string }
 
 function parseBlocks(src: string): Block[] {
@@ -56,6 +57,14 @@ function parseBlocks(src: string): Block[] {
     }
 
     if (!line.trim()) {
+      i++
+      continue
+    }
+
+    // Standalone image: ![alt](url)
+    const imgBlock = /^\s*!\[([^\]]*)\]\(([^)]+)\)\s*$/.exec(line)
+    if (imgBlock) {
+      blocks.push({ type: 'image', alt: imgBlock[1], url: imgBlock[2] })
       i++
       continue
     }
@@ -111,7 +120,7 @@ function parseBlocks(src: string): Block[] {
     }
 
     const para: string[] = []
-    while (i < lines.length && lines[i].trim() && !/^\s*(```|#{1,6}\s|>|[-*+]\s|\d+[.)]\s)/.test(lines[i])) {
+    while (i < lines.length && lines[i].trim() && !/^\s*(```|#{1,6}\s|>|[-*+]\s|\d+[.)]\s|!\[)/.test(lines[i])) {
       para.push(lines[i])
       i++
     }
@@ -127,6 +136,46 @@ function splitRow(line: string): string[] {
     .replace(/\|\s*$/, '')
     .split('|')
     .map((c) => c.trim())
+}
+
+function resolveImageUrl(url: string): string {
+  // Relative paths like /api/files/raw?path=... are already correct.
+  // Data URIs are already valid.
+  // Absolute URLs are already correct.
+  // Bare file paths get prefixed with /api/.
+  if (url.startsWith('http') || url.startsWith('data:') || url.startsWith('/api/') || url.startsWith('blob:')) {
+    return url
+  }
+  if (url.startsWith('/')) return url
+  return '/api/files/raw?path=' + encodeURIComponent(url)
+}
+
+function EmbeddedImage({ alt, url }: { alt: string; url: string }) {
+  const [expanded, setExpanded] = useState(false)
+  const [failed, setFailed] = useState(false)
+  const src = resolveImageUrl(url)
+
+  if (failed) {
+    return (
+      <span className="inline-flex items-center gap-1 rounded bg-muted px-1.5 py-0.5 text-xs text-muted-foreground">
+        <ImageIcon className="size-3" /> {alt || 'image'}
+      </span>
+    )
+  }
+
+  return (
+    <img
+      src={src}
+      alt={alt}
+      loading="lazy"
+      onClick={() => setExpanded(!expanded)}
+      onError={() => setFailed(true)}
+      className={cn(
+        'cursor-zoom-in rounded-[var(--radius-sm)] border border-border object-contain transition-all',
+        expanded ? 'max-w-full' : 'max-h-48 max-w-xs',
+      )}
+    />
+  )
 }
 
 function RichBlock({ block }: { block: Block }) {
@@ -165,6 +214,12 @@ function RichBlock({ block }: { block: Block }) {
       )
     case 'rule':
       return <hr className="border-border" />
+    case 'image':
+      return (
+        <div className="py-1">
+          <EmbeddedImage alt={block.alt} url={block.url} />
+        </div>
+      )
     case 'table':
       return (
         <div className="overflow-x-auto rounded-[var(--radius-sm)] border border-border">
@@ -203,10 +258,10 @@ function RichBlock({ block }: { block: Block }) {
   }
 }
 
-/** Renders inline code, bold, italics, and links. */
+/** Renders inline code, bold, italics, links, and inline images. */
 function Inline({ text }: { text: string }) {
   const nodes: React.ReactNode[] = []
-  const pattern = /(`[^`]+`)|(\*\*[^*]+\*\*)|(\*[^*]+\*)|(\[[^\]]+\]\([^)]+\))|(https?:\/\/\S+)/g
+  const pattern = /(`[^`]+`)|(\*\*[^*]+\*\*)|(\*[^*]+\*)|(!\[[^\]]*\]\([^)]+\))|(\[[^\]]+\]\([^)]+\))|(https?:\/\/\S+)/g
   let last = 0
   let m: RegExpExecArray | null
   let key = 0
@@ -223,6 +278,12 @@ function Inline({ text }: { text: string }) {
           {token.slice(1, -1)}
         </code>,
       )
+    } else if (token.startsWith('![')) {
+      // Inline image: ![alt](url)
+      const imgMatch = /^!\[([^\]]*)\]\(([^)]+)\)$/.exec(token)!
+      nodes.push(
+        <EmbeddedImage key={key++} alt={imgMatch[1]} url={imgMatch[2]} />,
+      )
     } else if (token.startsWith('**')) {
       nodes.push(<strong key={key++}>{token.slice(2, -2)}</strong>)
     } else if (token.startsWith('[')) {
@@ -235,22 +296,26 @@ function Inline({ text }: { text: string }) {
           rel="noreferrer noopener"
           className="text-primary underline underline-offset-2"
         >
-          {/* Recurse so bold/code inside a link label renders, not raw **. */}
           <Inline text={link[1]} />
         </a>,
       )
     } else if (token.startsWith('http')) {
-      nodes.push(
-        <a
-          key={key++}
-          href={token}
-          target="_blank"
-          rel="noreferrer noopener"
-          className="break-all text-primary underline underline-offset-2"
-        >
-          {token}
-        </a>,
-      )
+      // Bare URL — check if it looks like an image URL
+      if (/\.(jpg|jpeg|png|gif|webp|svg|avif)(\?|$)/i.test(token)) {
+        nodes.push(<EmbeddedImage key={key++} alt="" url={token} />)
+      } else {
+        nodes.push(
+          <a
+            key={key++}
+            href={token}
+            target="_blank"
+            rel="noreferrer noopener"
+            className="break-all text-primary underline underline-offset-2"
+          >
+            {token}
+          </a>,
+        )
+      }
     } else {
       nodes.push(<em key={key++}>{token.slice(1, -1)}</em>)
     }
