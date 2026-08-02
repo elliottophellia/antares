@@ -48,6 +48,20 @@ type Config struct {
 
 	MaxConcurrentSessions int  `yaml:"max_concurrent_sessions" json:"max_concurrent_sessions"`
 	GroupSessionsPerUser  bool `yaml:"group_sessions_per_user" json:"group_sessions_per_user"`
+
+	Social Social `yaml:"social" json:"social"`
+}
+
+// Social configures the Social Media feature: IMAP mailbox, persistent browser,
+// and autopilot toggle. Secrets (IMAP password, social account passwords) are
+// NOT stored here; they live encrypted in SQLite.
+type Social struct {
+	Enabled         bool   `yaml:"enabled" json:"enabled"`
+	IMAPHost        string `yaml:"imap_host" json:"imap_host"`
+	IMAPPort        int    `yaml:"imap_port" json:"imap_port"`
+	IMAPUsername    string `yaml:"imap_username" json:"imap_username"`
+	BrowserEnabled  bool   `yaml:"browser_enabled" json:"browser_enabled"`
+	AutopilotEnabled bool  `yaml:"autopilot_enabled" json:"autopilot_enabled"`
 }
 
 // Model selects which LLM answers by default.

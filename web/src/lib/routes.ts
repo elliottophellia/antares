@@ -12,6 +12,7 @@ import {
   Plugs,
   PlugsConnected,
   PuzzlePiece,
+  ShareNetwork,
   UsersThree,
   Broadcast,
   Kanban,
@@ -222,6 +223,13 @@ export const ROUTES: RouteDef[] = [
     icon: Robot,
     component: lazy(() => import('@/pages/SystemPage')),
   },
+  {
+    path: '/social-media',
+    titleKey: 'social.title',
+    descKey: 'social.desc',
+    icon: ShareNetwork,
+    component: lazy(() => import('@/pages/SocialMediaPage')),
+  },
 ]
 
 /** Nav entries use the short sidebar labels rather than the page titles. */
@@ -249,6 +257,7 @@ export const NAV_LABELS: Record<string, MessageKey> = {
   '/logs': 'nav.logs',
   '/config': 'nav.config',
   '/system': 'nav.system',
+  '/social-media': 'nav.socialMedia',
 }
 
 export const PRIMARY_ROUTES = ROUTES.filter((r) => r.primary)

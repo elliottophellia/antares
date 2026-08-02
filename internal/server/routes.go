@@ -245,6 +245,19 @@ func (s *Server) routes() {
 	m.HandleFunc("POST /api/pairing/approve", s.handleApprovePairing)
 	m.HandleFunc("POST /api/pairing/revoke", s.handleRevokePairing)
 
+	// Social Media
+	m.HandleFunc("GET /api/social/status", s.handleSocialStatus)
+	m.HandleFunc("POST /api/social/imap/test", s.handleSocialIMAPTest)
+	m.HandleFunc("POST /api/social/imap/save", s.handleSocialIMAPSave)
+	m.HandleFunc("POST /api/social/browser/start", s.handleSocialBrowserStart)
+	m.HandleFunc("POST /api/social/browser/stop", s.handleSocialBrowserStop)
+	m.HandleFunc("POST /api/social/browser/open", s.handleSocialBrowserOpen)
+	m.HandleFunc("POST /api/social/autopilot", s.handleSocialAutopilot)
+	m.HandleFunc("POST /api/social/encryption/setup", s.handleSocialEncryptionSetup)
+	m.HandleFunc("GET /api/social/accounts", s.handleSocialListAccounts)
+	m.HandleFunc("POST /api/social/accounts", s.handleSocialAddAccount)
+	m.HandleFunc("DELETE /api/social/accounts/{id}", s.handleSocialDeleteAccount)
+
 	// Dashboard (single-page app) — registered last so /api wins.
 	m.HandleFunc("/", s.handleDashboard)
 }

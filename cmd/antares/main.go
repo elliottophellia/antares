@@ -32,6 +32,7 @@ import (
 	"github.com/enowdev/antares/internal/server"
 	"github.com/enowdev/antares/internal/skillpack"
 	"github.com/enowdev/antares/internal/skills"
+	"github.com/enowdev/antares/internal/socialbrowser"
 	"github.com/enowdev/antares/internal/store"
 	"github.com/enowdev/antares/internal/tools"
 	"github.com/enowdev/antares/internal/tui"
@@ -204,6 +205,7 @@ type runtimeServices struct {
 	cron    *cron.Runner
 	gateway *gateway.Manager
 	mcp     *mcp.Manager
+	social  *socialbrowser.Manager
 }
 
 func bootstrap(ctx context.Context) (*runtimeServices, error) {
@@ -292,6 +294,7 @@ func bootstrap(ctx context.Context) (*runtimeServices, error) {
 	ag.SetRoles(roleReg)
 
 	rt := &runtimeServices{cfg: cfg, db: db, shell: shell, agent: ag, skills: skillMgr}
+	rt.social = socialbrowser.New()
 
 	// MCP servers are optional; a failing one is recorded, never fatal.
 	rt.mcp = mcp.NewManager()
@@ -562,6 +565,9 @@ func (rt *runtimeServices) close() {
 	if rt.gateway != nil {
 		rt.gateway.StopAll()
 	}
+	if rt.social != nil {
+		rt.social.Close()
+	}
 	rt.shell.CloseAll()
 	tools.CloseBrowsers()
 	_ = rt.db.Close()
@@ -587,6 +593,7 @@ func cmdServeForeground() error {
 		Cron:    rt.cron,
 		Gateway: rt.gateway,
 		MCP:     rt.mcp,
+		Social:  rt.social,
 	})
 
 	if rt.cfg.Cron.Enabled {

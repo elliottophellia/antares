@@ -131,5 +131,9 @@ func Default() *Config {
 
 		MaxConcurrentSessions: 0,
 		GroupSessionsPerUser:  true,
+		Social: Social{
+			Enabled:  false,
+			IMAPHost: "imap.gmail.com", IMAPPort: 993,
+		},
 	}
 }
