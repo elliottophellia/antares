@@ -87,6 +87,12 @@ help them now — do not block them.
 	if len(active) > 0 {
 		b.WriteString("\n## Tool notes\n\n")
 		b.WriteString("- Paths given to file tools are relative to the workspace; you cannot read outside it.\n")
+		if hasTool(active, "read_file") || hasTool(active, "edit_file") {
+			// Harness guidance for the read → edit loop. Without this, models
+			// paste line numbers into old_string or expand tabs to spaces and
+			// the exact match fails repeatedly.
+			b.WriteString("- read_file returns lines as `NUMBER|CONTENT`. The `|` is metadata only. When calling edit_file, copy **only** the content after `|` into old_string/new_string — never the line number. Preserve tabs and spaces exactly (do not expand tabs to spaces). Line endings are matched automatically.\n")
+		}
 		b.WriteString("- The terminal keeps state between calls: `cd`, exports, and activated environments persist.\n")
 		if hasTool(active, "memory") && cfg.Memory.Enabled {
 			b.WriteString("- Save durable facts about the user or project with the memory tool. Save only what stays true across sessions.\n")

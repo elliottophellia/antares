@@ -64,7 +64,11 @@ func Default() *Config {
 		},
 		Tools: Tools{
 			Toolset: "default", ApprovalMode: "auto", MaxOutputChars: 60000,
-			Timeouts:  map[string]int{"terminal": 300, "web_fetch": 60, "web_search": 30},
+			Timeouts: map[string]int{
+				"terminal": 300, "web_fetch": 60, "web_search": 30,
+				// VPS tools allow up to 900s per call; keep the agent envelope above that.
+				"vps_run": 960, "vps_upload": 960, "vps_download": 960,
+			},
 			WebSearch: WebSearch{Provider: "browser", MaxResults: 8},
 			Browser: Browser{
 				Enabled: true, Width: 1280, Height: 800,

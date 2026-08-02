@@ -158,19 +158,19 @@ type Result struct {
 
 // Agent owns the shared services a run needs.
 type Agent struct {
-	cfg      *config.Config
-	db       store.Store
-	reg      *tools.Registry
-	shell    *tools.ShellManager
-	rag      tools.RAGProvider
-	skills   *skills.Manager
-	checks   *checkpoint.Store
-	plugins  *plugin.Manager
-	roles    *roles.Registry
-	findings *findings.Store
-	intel    *engagement.Store
-	roleperf *roleperf.Tracker
-	board    *board.Board
+	cfg           *config.Config
+	db            store.Store
+	reg           *tools.Registry
+	shell         *tools.ShellManager
+	rag           tools.RAGProvider
+	skills        *skills.Manager
+	checks        *checkpoint.Store
+	plugins       *plugin.Manager
+	roles         *roles.Registry
+	findings      *findings.Store
+	intel         *engagement.Store
+	roleperf      *roleperf.Tracker
+	board         *board.Board
 	socialBrowser tools.SocialBrowserManager
 
 	bg *bgManager
@@ -871,6 +871,11 @@ func (a *Agent) toolTimeout(name string) time.Duration {
 		// process(wait) intentionally blocks for at most 30 seconds. Leave margin
 		// for scheduling and JSON serialization so the tool can return its state.
 		return 45 * time.Second
+	case "vps_run", "vps_upload", "vps_download":
+		// Tools accept timeout_seconds up to 900. The agent envelope must sit
+		// above that or a long systemctl/apt/transfer is killed early with a
+		// bare context deadline and looks like a flaky VPS failure.
+		return 16 * time.Minute
 	case "delegate_task":
 		return 30 * time.Minute
 	default:
