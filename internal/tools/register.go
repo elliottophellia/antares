@@ -57,6 +57,8 @@ func init() {
 		emailReadTool{},
 		// Social Media: check/control persistent social browser.
 		socialBrowserTool{},
+		// Social Media: save/list social accounts with encrypted credentials.
+		socialAccountTool{},
 		// Native MITM intercept proxy.
 		interceptTool{},
 		// Offensive-security script wrappers (CyberStrike port). Each spawns
