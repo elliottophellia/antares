@@ -165,6 +165,9 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 // handleSetupTest verifies a credential and returns the model list in one
 // round trip, so the wizard can move straight to picking a model.
 func (s *Server) handleSetupTest(w http.ResponseWriter, r *http.Request) {
+	if s.requireSetupAccess(w, r) {
+		return
+	}
 	var body struct {
 		Provider string `json:"provider"`
 		BaseURL  string `json:"base_url"`
@@ -190,6 +193,12 @@ func (s *Server) handleSetupTest(w http.ResponseWriter, r *http.Request) {
 	}
 
 	baseURL := firstNonEmpty(body.BaseURL, chosen.BaseURL)
+	if baseURL != "" {
+		if err := validateProviderBaseURL(r.Context(), baseURL, chosen.Local); err != nil {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
+	}
 	apiKey := body.APIKey
 	// A redacted value means "keep what is stored".
 	if strings.Contains(apiKey, "••••") || apiKey == "" {
@@ -218,11 +227,15 @@ func (s *Server) handleSetupTest(w http.ResponseWriter, r *http.Request) {
 
 	models, err := client.Models(ctx)
 	if err != nil {
-		// Some endpoints refuse /models but still answer chat; a rejected
-		// credential is the case worth reporting.
 		if llm.IsAuthError(err) {
 			writeJSON(w, http.StatusOK, map[string]any{
 				"ok": false, "error": "The provider rejected this API key.",
+			})
+			return
+		}
+		if !llm.IsUnsupported(err) {
+			writeJSON(w, http.StatusBadGateway, map[string]any{
+				"ok": false, "error": "The provider could not be reached or returned an invalid response: " + err.Error(),
 			})
 			return
 		}
@@ -245,6 +258,12 @@ func (s *Server) handleSetupTest(w http.ResponseWriter, r *http.Request) {
 
 // handleSetupComplete writes everything the wizard collected in one save.
 func (s *Server) handleSetupComplete(w http.ResponseWriter, r *http.Request) {
+	s.setupMu.Lock()
+	defer s.setupMu.Unlock()
+	if s.requireSetupAccess(w, r) {
+		return
+	}
+
 	var body struct {
 		Provider  string `json:"provider"`
 		BaseURL   string `json:"base_url"`
@@ -280,6 +299,10 @@ func (s *Server) handleSetupComplete(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
+	if !NeedsSetup(cfg) {
+		writeError(w, http.StatusConflict, errors.New("initial setup has already been completed"))
+		return
+	}
 
 	catalogue := setupProviderCatalogue(cfg)
 	var chosen *setupProvider
@@ -294,12 +317,20 @@ func (s *Server) handleSetupComplete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	baseURL := firstNonEmpty(body.BaseURL, chosen.BaseURL)
+	if baseURL != "" {
+		if err := validateProviderBaseURL(r.Context(), baseURL, chosen.Local); err != nil {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
+	}
+
 	entry := cfg.Providers[body.Provider]
 	entry.Kind = chosen.Kind
 	entry.Enabled = true
 	entry.Label = chosen.Label
-	if url := firstNonEmpty(body.BaseURL, chosen.BaseURL); url != "" {
-		entry.BaseURL = url
+	if baseURL != "" {
+		entry.BaseURL = baseURL
 	}
 	if key := strings.TrimSpace(body.APIKey); key != "" && !strings.Contains(key, "••••") {
 		entry.APIKey = key
@@ -404,6 +435,9 @@ func (s *Server) handleSetupComplete(w http.ResponseWriter, r *http.Request) {
 // It exists because config.SetPath cannot write into the providers map: map
 // values are not addressable through reflection.
 func (s *Server) handleSetProviderKey(w http.ResponseWriter, r *http.Request) {
+	if s.requireDashboardPassword(w, r) {
+		return
+	}
 	var body struct {
 		APIKey     string `json:"api_key"`
 		BaseURL    string `json:"base_url"`
@@ -440,6 +474,12 @@ func (s *Server) handleSetProviderKey(w http.ResponseWriter, r *http.Request) {
 		entry.Kind = chosen.Kind
 	}
 	baseURL := firstNonEmpty(body.BaseURL, entry.BaseURL, chosen.BaseURL)
+	if baseURL != "" {
+		if err := validateProviderBaseURL(r.Context(), baseURL, chosen.Local); err != nil {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
+	}
 	region := firstNonEmpty(body.Region, entry.Region)
 	apiVersion := firstNonEmpty(body.APIVersion, entry.APIVersion)
 	key := strings.TrimSpace(body.APIKey)
@@ -463,9 +503,17 @@ func (s *Server) handleSetProviderKey(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 
 	models, err := client.Models(ctx)
-	if err != nil && llm.IsAuthError(err) {
-		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": err.Error()})
-		return
+	if err != nil {
+		if llm.IsAuthError(err) {
+			writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": err.Error()})
+			return
+		}
+		if !llm.IsUnsupported(err) {
+			writeJSON(w, http.StatusBadGateway, map[string]any{
+				"ok": false, "error": "The provider could not be reached or returned an invalid response: " + err.Error(),
+			})
+			return
+		}
 	}
 
 	entry.APIKey = key

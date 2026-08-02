@@ -31,6 +31,9 @@ func (s *Server) handlePlugins(w http.ResponseWriter, r *http.Request) {
 // to the config: a plugin you want off permanently should be removed, and this
 // is for trying one without a restart.
 func (s *Server) handleTogglePlugin(w http.ResponseWriter, r *http.Request) {
+	if s.requireDashboardPassword(w, r) {
+		return
+	}
 	var body struct {
 		Enabled bool `json:"enabled"`
 	}
@@ -55,6 +58,9 @@ func (s *Server) handleTogglePlugin(w http.ResponseWriter, r *http.Request) {
 // The executable itself is the user's to provide — we scaffold the manifest and
 // point at where it goes.
 func (s *Server) handleAddPlugin(w http.ResponseWriter, r *http.Request) {
+	if s.requireDashboardPassword(w, r) {
+		return
+	}
 	mgr := s.agent.Plugins()
 	if mgr == nil {
 		writeError(w, http.StatusBadRequest, errors.New("plugins are switched off"))
@@ -151,6 +157,9 @@ func (s *Server) pluginDir() string {
 
 // handleReloadPlugins rescans the plugin directories.
 func (s *Server) handleReloadPlugins(w http.ResponseWriter, r *http.Request) {
+	if s.requireDashboardPassword(w, r) {
+		return
+	}
 	mgr := s.agent.Plugins()
 	if mgr == nil {
 		writeError(w, http.StatusBadRequest, errors.New("plugins are switched off"))

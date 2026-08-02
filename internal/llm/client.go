@@ -202,6 +202,18 @@ func IsAuthError(err error) bool {
 	return false
 }
 
+// IsUnsupported reports that a provider does not expose the optional model
+// catalogue endpoint. A 404/405 is different from a timeout, malformed body,
+// or server error: the credential may still be usable for chat.
+func IsUnsupported(err error) bool {
+	if errors.Is(err, ErrUnsupported) {
+		return true
+	}
+	var ae *apiError
+	return errors.As(err, &ae) &&
+		(ae.Status == http.StatusNotFound || ae.Status == http.StatusMethodNotAllowed)
+}
+
 // IsRateLimit reports whether err came back as 429.
 func IsRateLimit(err error) bool {
 	var ae *apiError

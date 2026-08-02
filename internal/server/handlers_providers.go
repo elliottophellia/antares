@@ -69,6 +69,9 @@ func (s *Server) handleContextWindow(w http.ResponseWriter, r *http.Request) {
 // optional context window stored in model_meta. Manually added models then
 // appear in the model list alongside auto-discovered ones (see agent.Models).
 func (s *Server) handleAddProviderModel(w http.ResponseWriter, r *http.Request) {
+	if s.requireDashboardPassword(w, r) {
+		return
+	}
 	id := r.PathValue("id")
 	var body struct {
 		Model         string `json:"model"`
@@ -125,6 +128,9 @@ func (s *Server) handleAddProviderModel(w http.ResponseWriter, r *http.Request) 
 
 // handleDeleteProviderModel removes a manually added model id (and its meta).
 func (s *Server) handleDeleteProviderModel(w http.ResponseWriter, r *http.Request) {
+	if s.requireDashboardPassword(w, r) {
+		return
+	}
 	id := r.PathValue("id")
 	modelID := r.PathValue("model")
 
@@ -159,6 +165,9 @@ func (s *Server) handleDeleteProviderModel(w http.ResponseWriter, r *http.Reques
 // timeout, and custom headers. Credentials go through the key endpoint; this is
 // everything else a provider entry carries.
 func (s *Server) handleProviderSettings(w http.ResponseWriter, r *http.Request) {
+	if s.requireDashboardPassword(w, r) {
+		return
+	}
 	id := r.PathValue("id")
 	var body struct {
 		BaseURL     *string           `json:"base_url"`
@@ -176,7 +185,21 @@ func (s *Server) handleProviderSettings(w http.ResponseWriter, r *http.Request) 
 	}
 	p := cfg.Providers[id]
 	if body.BaseURL != nil {
-		p.BaseURL = strings.TrimSpace(*body.BaseURL)
+		baseURL := strings.TrimSpace(*body.BaseURL)
+		allowLocal := false
+		for _, provider := range setupProviderCatalogue(cfg) {
+			if provider.ID == id {
+				allowLocal = provider.Local
+				break
+			}
+		}
+		if baseURL != "" {
+			if err := validateProviderBaseURL(r.Context(), baseURL, allowLocal); err != nil {
+				writeError(w, http.StatusBadRequest, err)
+				return
+			}
+		}
+		p.BaseURL = baseURL
 	}
 	if body.TimeoutSecs != nil {
 		p.TimeoutSecs = *body.TimeoutSecs

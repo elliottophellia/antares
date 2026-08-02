@@ -83,6 +83,9 @@ func (s *Server) handleHubPlugins(w http.ResponseWriter, r *http.Request) {
 // a plugin runs code, the dashboard shows its command before this is called —
 // the confirmation is the UI's, and the install is the commit.
 func (s *Server) handleHubInstallPlugin(w http.ResponseWriter, r *http.Request) {
+	if s.requireDashboardPassword(w, r) {
+		return
+	}
 	mgr := s.agent.Plugins()
 	if mgr == nil {
 		writeError(w, http.StatusBadRequest, errors.New("plugins are switched off"))
@@ -119,6 +122,9 @@ func (s *Server) handleHubMCP(w http.ResponseWriter, r *http.Request) {
 
 // handleHubInstallMCP registers a catalogue server in the configuration.
 func (s *Server) handleHubInstallMCP(w http.ResponseWriter, r *http.Request) {
+	if s.requireDashboardPassword(w, r) {
+		return
+	}
 	var body struct {
 		ID  string            `json:"id"`
 		Env map[string]string `json:"env"`

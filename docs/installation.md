@@ -78,7 +78,7 @@ Re-run the installer — it overwrites the binary in place. Pass
 ## Build from source
 
 You only need this to develop Antares or to run an unreleased commit. It needs
-**Go 1.21+** (the Go toolchain auto-fetches the exact version the project pins),
+**Go 1.26+** (the Go toolchain auto-fetches the exact version the project pins),
 **Bun or npm**, and **git**.
 
 ```bash

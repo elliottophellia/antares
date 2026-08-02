@@ -79,11 +79,8 @@ func (s *Server) requireDashboardPassword(w http.ResponseWriter, r *http.Request
 	if cfg.Server.DashboardLocked() {
 		return false
 	}
-	if tok := strings.TrimSpace(cfg.Server.AuthToken); tok != "" {
-		if h := r.Header.Get("Authorization"); strings.HasPrefix(h, "Bearer ") &&
-			strings.TrimSpace(strings.TrimPrefix(h, "Bearer ")) == tok {
-			return false
-		}
+	if s.bearerAuthorizedOrQuery(r) {
+		return false
 	}
 	writeJSON(w, http.StatusPreconditionRequired, map[string]any{
 		"error": "dashboard_password_required",
@@ -185,6 +182,9 @@ func (s *Server) handleAuthLogout(w http.ResponseWriter, r *http.Request) {
 // it — either a valid login session or the current password — so a drive-by
 // request cannot take over or unlock a protected dashboard.
 func (s *Server) handleAuthSetPassword(w http.ResponseWriter, r *http.Request) {
+	s.passwordMu.Lock()
+	defer s.passwordMu.Unlock()
+
 	var body struct {
 		Current  string `json:"current"`  // required once a password is already set
 		Password string `json:"password"` // new password; empty clears (removes) it
@@ -200,6 +200,12 @@ func (s *Server) handleAuthSetPassword(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusUnauthorized, errors.New("current password required"))
 			return
 		}
+	} else if !requestIsLoopback(r) && !s.bearerAuthorized(r) {
+		// The first password is a bootstrap capability. Without this check the
+		// first network client wins a race and can lock out the owner (or claim
+		// the dashboard when no bearer token is configured).
+		writeError(w, http.StatusForbidden, errors.New("the first dashboard password must be set from loopback or with a configured bearer token"))
+		return
 	}
 
 	next := strings.TrimSpace(body.Password)

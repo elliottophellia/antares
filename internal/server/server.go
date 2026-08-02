@@ -53,6 +53,11 @@ type Server struct {
 	// expiry). Guarded by its own mutex; cleared when the password changes.
 	dashMu       sync.Mutex
 	dashSessions map[string]time.Time
+	// setupMu serializes the one-time setup write, preventing two first-run
+	// requests from both passing the setup check before either saves.
+	setupMu sync.Mutex
+	// passwordMu serializes first-password creation and password replacement.
+	passwordMu sync.Mutex
 }
 
 // Options configures a Server.
@@ -216,7 +221,7 @@ func (s *Server) withCORS(next http.Handler) http.Handler {
 			allowed := ""
 			for _, o := range origins {
 				if o == "*" {
-					allowed = origin
+					allowed = "*"
 					break
 				}
 				if strings.EqualFold(o, origin) {
@@ -226,8 +231,15 @@ func (s *Server) withCORS(next http.Handler) http.Handler {
 			}
 			if allowed != "" {
 				w.Header().Set("Access-Control-Allow-Origin", allowed)
-				w.Header().Set("Vary", "Origin")
-				w.Header().Set("Access-Control-Allow-Credentials", "true")
+				if allowed == "*" {
+					// Wildcard origins and credentialed requests are incompatible.
+					// Keep an explicit wildcard useful without reflecting an
+					// attacker-controlled origin.
+					w.Header().Set("Vary", "Origin")
+				} else {
+					w.Header().Set("Vary", "Origin")
+					w.Header().Set("Access-Control-Allow-Credentials", "true")
+				}
 			}
 		}
 		if r.Method == http.MethodOptions {
@@ -267,8 +279,9 @@ func (s *Server) withAuth(next http.Handler) http.Handler {
 		if h := r.Header.Get("Authorization"); strings.HasPrefix(h, "Bearer ") {
 			presented = strings.TrimSpace(strings.TrimPrefix(h, "Bearer "))
 		}
-		if presented == "" {
-			// EventSource cannot set headers, so SSE endpoints accept a query param.
+		if presented == "" && queryTokenAllowed(r.URL.Path) {
+			// EventSource and media elements cannot set headers, so only the
+			// narrow stream/media allowlist accepts a query capability.
 			presented = r.URL.Query().Get("token")
 		}
 		// Constant-time compare so the token isn't a timing oracle — this gate now
