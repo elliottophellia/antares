@@ -6,7 +6,7 @@ to install and nothing to orchestrate.
 
 ## Requirements
 
-- **Go 1.24 or newer** to build from source.
+- **Go 1.26 or newer** to build from source.
 - **Node or Bun** to build the dashboard. Bun is what the Makefile reaches for
   first; npm works.
 - **A model provider.** Any OpenAI-compatible endpoint, or a native adapter for
@@ -93,6 +93,11 @@ antares config set server.auth_token "$(openssl rand -hex 24)"
 
 Clients then send `Authorization: Bearer <token>`. The dashboard prompts for it
 and remembers it.
+
+Before a bearer token exists, the setup wizard's mutating requests and the first
+dashboard-password operation accept only loopback connections. Use the local
+dashboard, an SSH tunnel, or configure the bearer token from the CLI before
+bootstrapping remotely.
 
 ## Where things live
 

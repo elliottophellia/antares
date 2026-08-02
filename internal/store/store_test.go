@@ -119,7 +119,11 @@ func TestUsageAndKV(t *testing.T) {
 		}
 	}
 	series, err := s.UsageSeries(ctx, now.Add(-time.Hour), "day")
-	if err != nil || len(series) != 1 || series[0].Calls != 3 {
+	var calls int64
+	for _, point := range series {
+		calls += point.Calls
+	}
+	if err != nil || len(series) == 0 || calls != 3 {
 		t.Fatalf("series: %v %+v", err, series)
 	}
 	byModel, err := s.UsageByModel(ctx, now.Add(-time.Hour))

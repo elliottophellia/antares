@@ -14,6 +14,9 @@ import (
 // This is the manual counterpart to /api/hub/mcp/install: for a server that is
 // not in the catalogue — an internal endpoint, a command of your own.
 func (s *Server) handleAddMCPServer(w http.ResponseWriter, r *http.Request) {
+	if s.requireDashboardPassword(w, r) {
+		return
+	}
 	var body struct {
 		Name      string            `json:"name"`
 		Transport string            `json:"transport"` // stdio|http
@@ -96,6 +99,9 @@ func (s *Server) handleAddMCPServer(w http.ResponseWriter, r *http.Request) {
 
 // handleDeleteMCPServer removes a server from the config and disconnects it.
 func (s *Server) handleDeleteMCPServer(w http.ResponseWriter, r *http.Request) {
+	if s.requireDashboardPassword(w, r) {
+		return
+	}
 	name := r.PathValue("name")
 	cfg, err := config.Reload()
 	if err != nil {

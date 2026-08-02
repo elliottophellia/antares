@@ -49,6 +49,18 @@ func TestAPIErrorFallsBackToStatus(t *testing.T) {
 	}
 }
 
+func TestIsUnsupportedModelCatalogueError(t *testing.T) {
+	if !IsUnsupported(ErrUnsupported) {
+		t.Fatal("ErrUnsupported was not classified as unsupported")
+	}
+	if !IsUnsupported(&apiError{Status: 404}) || !IsUnsupported(&apiError{Status: 405}) {
+		t.Fatal("404/405 model catalogue responses were not classified as unsupported")
+	}
+	if IsUnsupported(&apiError{Status: 500}) || IsUnsupported(&apiError{Status: 401}) {
+		t.Fatal("server/auth responses were incorrectly classified as unsupported")
+	}
+}
+
 // A provider that is simply not running should say so, not print Go's layered
 // dial error with the URL repeated twice.
 func TestDescribeTransport(t *testing.T) {

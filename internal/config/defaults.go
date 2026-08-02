@@ -51,7 +51,9 @@ func Default() *Config {
 		},
 		Server: Server{
 			Host: "0.0.0.0", Port: 8787,
-			CORSOrigins: []string{"*"},
+			// Same-origin is the safe default. Cross-origin access must be
+			// explicitly configured by the operator.
+			CORSOrigins: []string{},
 		},
 		Agent: Agent{
 			MaxTurns: 200, MaxToolCalls: 32, ReasoningEffort: "medium",
@@ -110,7 +112,7 @@ func Default() *Config {
 			Enabled: true, Dirs: []string{"~/.antares/skills"},
 			CreationNudgeInterval: 25, AutoCreate: true,
 		},
-		Cron:          Cron{Enabled: true, Timezone: "Local", MaxConcurrent: 3, HistoryLimit: 200},
+		Cron: Cron{Enabled: true, Timezone: "Local", MaxConcurrent: 3, HistoryLimit: 200},
 		// Discord.Intents left 0 so the adapter applies its own DefaultIntents
 		// (guild messages + message content + direct messages). A hardcoded value
 		// here once dropped DIRECT_MESSAGES and broke DMs.

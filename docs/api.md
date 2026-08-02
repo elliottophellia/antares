@@ -8,6 +8,11 @@ same port. Everything the dashboard does is available here.
 While `server.auth_token` is empty the API is open, which is right behind a
 private network and wrong anywhere else.
 
+The mutating onboarding endpoints (`/api/setup/test` and
+`/api/setup/complete`) and first dashboard-password bootstrap are additionally
+restricted to a loopback client until a bearer token has been configured. This
+prevents a remote first writer from claiming or reconfiguring a new instance.
+
 ```bash
 antares config set server.auth_token "$(openssl rand -hex 24)"
 ```
@@ -15,6 +20,10 @@ antares config set server.auth_token "$(openssl rand -hex 24)"
 ```bash
 curl -H "Authorization: Bearer $TOKEN" http://localhost:8787/api/status
 ```
+
+Bearer tokens are accepted in query strings only for the explicitly documented
+SSE/media routes that cannot set request headers. Ordinary JSON and mutating
+routes require the `Authorization` header.
 
 `/api/health` is always open, so a health check needs no credential.
 

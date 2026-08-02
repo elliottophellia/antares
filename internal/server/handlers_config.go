@@ -30,6 +30,9 @@ func (s *Server) handleConfigSchema(w http.ResponseWriter, r *http.Request) {
 
 // handleUpdateConfig applies dotted-path updates and reloads dependent services.
 func (s *Server) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
+	if s.requireDashboardPassword(w, r) {
+		return
+	}
 	var body struct {
 		Updates map[string]any `json:"updates"`
 	}
@@ -92,6 +95,9 @@ func (s *Server) handleGetRawConfig(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleSaveRawConfig(w http.ResponseWriter, r *http.Request) {
+	if s.requireDashboardPassword(w, r) {
+		return
+	}
 	var body struct {
 		YAML string `json:"yaml"`
 	}
@@ -311,6 +317,9 @@ func (s *Server) handleModelListAll(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleModelSet(w http.ResponseWriter, r *http.Request) {
+	if s.requireDashboardPassword(w, r) {
+		return
+	}
 	var body struct {
 		Model    string `json:"model"`
 		Provider string `json:"provider"`
@@ -378,6 +387,9 @@ func (s *Server) handleListTools(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleToggleTool(w http.ResponseWriter, r *http.Request) {
+	if s.requireDashboardPassword(w, r) {
+		return
+	}
 	var body struct {
 		Name    string `json:"name"`
 		Enabled bool   `json:"enabled"`
@@ -410,6 +422,9 @@ func (s *Server) handleToggleTool(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleSetToolset(w http.ResponseWriter, r *http.Request) {
+	if s.requireDashboardPassword(w, r) {
+		return
+	}
 	var body struct {
 		Toolset string `json:"toolset"`
 	}
