@@ -184,10 +184,11 @@ type vpsUploadTool struct{}
 
 func (vpsUploadTool) Name() string { return "vps_upload" }
 func (vpsUploadTool) Description() string {
-	return "Upload a local file to a saved VPS over SFTP. " +
+	return "Upload a local workspace file to a dashboard-saved VPS over SFTP (preferred over rsync/scp/terminal). " +
 		"`local_path` is relative to the workspace (or absolute inside write roots); " +
 		"`remote_path` is the destination on the server. Creates remote parent dirs. " +
-		"Max 256 MiB. Call vps_run with no command first if you need the server id/label."
+		"Max 256 MiB, one file per call. Call vps_run with no command first if you need the server id/label. " +
+		"Do not use terminal rsync/scp for saved VPS hosts when this tool is available."
 }
 func (vpsUploadTool) Schema() map[string]any {
 	return schema(map[string]any{
@@ -254,9 +255,10 @@ type vpsDownloadTool struct{}
 
 func (vpsDownloadTool) Name() string { return "vps_download" }
 func (vpsDownloadTool) Description() string {
-	return "Download a file from a saved VPS over SFTP into the local workspace. " +
+	return "Download a file from a dashboard-saved VPS over SFTP into the local workspace (preferred over rsync/scp/terminal). " +
 		"`remote_path` is on the server; `local_path` is the destination (workspace-relative). " +
-		"Creates local parent dirs. Max 256 MiB."
+		"Creates local parent dirs. Max 256 MiB, one file per call. " +
+		"Do not use terminal rsync/scp for saved VPS hosts when this tool is available."
 }
 func (vpsDownloadTool) Schema() map[string]any {
 	return schema(map[string]any{

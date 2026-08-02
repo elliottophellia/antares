@@ -62,6 +62,11 @@ Once you know the state, operate deliberately:
 ## Rules
 
 - **Only servers the user owns.** These are their machines, added on purpose.
+- **Files go through SFTP tools.** For copy to/from a saved host, use
+  `vps_upload` / `vps_download` — never `rsync`, `scp`, or interactive `sftp` in
+  the terminal for those hosts (credentials and host-key pinning live in the
+  tools). Use `vps_run` only for remote shell work, or if the user explicitly
+  wants a remote-side pull of a huge tree.
 - **Read before write.** Never restart, delete, or upgrade without first showing
   what you found and, for anything risky, saying what you're about to do.
 - **Destructive commands need care.** `rm -rf`, `mkfs`, `dd`, dropping a
