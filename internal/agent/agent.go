@@ -310,7 +310,7 @@ func (a *Agent) Run(ctx context.Context, req Request, emit Emit) (*Result, error
 		return nil, err
 	}
 
-	history, err := a.loadHistory(ctx, sess.ID, req)
+	history, err := a.loadHistory(ctx, sess, req)
 	if err != nil {
 		return nil, err
 	}
@@ -407,7 +407,7 @@ func (a *Agent) Run(ctx context.Context, req Request, emit Emit) (*Result, error
 			}
 		}
 
-		history = a.maybeCompact(runCtx, history, systemPrompt, modelName, toolSpecs, emit)
+		history = a.maybeCompact(runCtx, history, systemPrompt, modelName, toolSpecs, emit, sess)
 
 		llmReq := llm.Request{
 			Model:             modelName,

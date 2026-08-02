@@ -9,6 +9,7 @@ import (
 
 	"github.com/enowdev/antares/internal/llm"
 	"github.com/enowdev/antares/internal/providers"
+	"github.com/enowdev/antares/internal/store"
 )
 
 // contextWindowFor returns the active model's token budget for the usage event.
@@ -35,8 +36,10 @@ func (a *Agent) contextWindowFor(model string) int {
 }
 
 // maybeCompact summarises older turns once the conversation approaches the
-// model's context window, keeping recent turns verbatim.
-func (a *Agent) maybeCompact(ctx context.Context, history []llm.Message, system, model string, tools []llm.Tool, emit Emit) []llm.Message {
+// model's context window, keeping recent turns verbatim. On success the
+// summary is persisted on the session so the next turn does not re-run a
+// multi-minute summarise over thousands of raw messages.
+func (a *Agent) maybeCompact(ctx context.Context, history []llm.Message, system, model string, tools []llm.Tool, emit Emit, sess *store.Session) []llm.Message {
 	cfg := a.cfg.Compression
 	if !cfg.Enabled || len(history) < 8 {
 		return history
@@ -78,8 +81,7 @@ func (a *Agent) maybeCompact(ctx context.Context, history []llm.Message, system,
 
 	// Always surface compaction to the UI: on long sessions this LLM call can
 	// take tens of seconds and without a notice the dashboard only shows
-	// "Working… · Ns", which looks like a hang. progress_notices used to gate
-	// this; we still emit here because silent multi-minute work is worse.
+	// "Working… · Ns", which looks like a hang.
 	if emit != nil {
 		_ = emit(Event{Type: EventNotice, Message: fmt.Sprintf(
 			"compacting %d older messages to free context (~%d tokens)", len(middle), used)})
@@ -101,8 +103,70 @@ func (a *Agent) maybeCompact(ctx context.Context, history []llm.Message, system,
 	})
 	compacted = append(compacted, tail...)
 
+	// Persist so the next turn loads head+summary+tail instead of re-summarising.
+	if sess != nil && !isQuietSession(sess) {
+		a.persistContextCompact(ctx, sess, summary, protectFirst, protectLast)
+	}
+
 	slog.Info("context compacted", "before", len(history), "after", len(compacted), "tokens_before", used)
 	return compacted
+}
+
+// isQuietSession is true for ephemeral sub-agent sessions we never persist.
+func isQuietSession(sess *store.Session) bool {
+	return sess == nil || sess.ID == ""
+}
+
+// persistContextCompact records the summary and the highest seq it covers so
+// loadHistory can rebuild the compacted view without another LLM call.
+func (a *Agent) persistContextCompact(ctx context.Context, sess *store.Session, summary string, protectFirst, protectLast int) {
+	if a.db == nil || sess == nil {
+		return
+	}
+	rows, err := a.db.ListMessages(ctx, sess.ID, 0, 0)
+	if err != nil {
+		slog.Warn("persist compact: list messages failed", "error", err)
+		return
+	}
+	visible := make([]store.Message, 0, len(rows))
+	for _, r := range rows {
+		if r.Hidden {
+			continue
+		}
+		visible = append(visible, r)
+	}
+	if len(visible) <= protectFirst+protectLast {
+		return
+	}
+	// Middle ends at the last message before the protected tail.
+	middleEnd := visible[len(visible)-protectLast-1]
+	throughSeq := middleEnd.Seq
+
+	if sess.Meta == nil {
+		sess.Meta = store.Meta{}
+	}
+	// Reload session to avoid clobbering concurrent meta updates with a stale
+	// struct, then merge our key.
+	fresh, err := a.db.GetSession(ctx, sess.ID)
+	if err != nil {
+		slog.Warn("persist compact: get session failed", "error", err)
+		return
+	}
+	if fresh.Meta == nil {
+		fresh.Meta = store.Meta{}
+	}
+	fresh.Meta[contextCompactMetaKey] = map[string]any{
+		"summary":     summary,
+		"through_seq": throughSeq,
+		"keep_first":  protectFirst,
+	}
+	if err := a.db.UpdateSession(ctx, fresh); err != nil {
+		slog.Warn("persist compact: update session failed", "error", err)
+		return
+	}
+	// Keep the in-memory session in sync for the rest of this turn.
+	sess.Meta = fresh.Meta
+	slog.Info("context compact persisted", "session", sess.ID, "through_seq", throughSeq, "keep_first", protectFirst)
 }
 
 // estimateRequestTokens includes tool schemas as well as system/history. Large
