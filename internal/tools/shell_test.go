@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
@@ -209,5 +210,55 @@ func TestPersistentShellStdinWrapPreservesCdAndExport(t *testing.T) {
 	}
 	if !strings.Contains(out, "sub") || !strings.Contains(out, "1") {
 		t.Fatalf("cwd/export not preserved: %q", out)
+	}
+}
+
+// TestPersistentShellClosesInheritedStdinForDaemonForkingClients guards against
+// the adb regression: a client like `adb` forks a background daemon at first
+// invocation, and that daemon inherits every fd of the persistent shell it was
+// launched from. Without redirecting stdin to /dev/null, bash then blocks on
+// the completion sentinel forever because a reader on its stdin pipe is still
+// alive, so a command that finished in milliseconds times out at
+// terminal.timeout (300 s) instead.
+func TestPersistentShellClosesInheritedStdinForDaemonForkingClients(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX persistent shell protocol does not apply on Windows")
+	}
+	if _, err := exec.LookPath("setsid"); err != nil {
+		t.Skip("setsid unavailable — cannot simulate a daemon-forking client")
+	}
+
+	m := NewShellManager(config.Terminal{Shell: "/bin/bash"})
+	t.Cleanup(m.CloseAll)
+	sess, err := m.session("daemon-session", t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	pidFile := filepath.Join(t.TempDir(), "daemon.pid")
+	command := "setsid /bin/sh -c 'sleep 60' >/dev/null 2>&1 & echo $! >" + pidFile + "; echo parent-done"
+	start := time.Now()
+	out, code, err := sess.run(context.Background(), command, 3*time.Second, nil)
+	elapsed := time.Since(start)
+
+	// Clean up the lingering child before asserting so a slow assertion path
+	// does not leak a stray process into the test environment.
+	if raw, readErr := os.ReadFile(pidFile); readErr == nil {
+		if pid := strings.TrimSpace(string(raw)); pid != "" {
+			_ = exec.Command("/bin/sh", "-c", "kill -TERM "+pid+" 2>/dev/null || true").Run()
+		}
+	}
+
+	if err != nil {
+		t.Fatalf("daemon-forking command hung/failed: %v (after %s)\nout=%q", err, elapsed, out)
+	}
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0; out=%q", code, out)
+	}
+	if !strings.Contains(out, "parent-done") {
+		t.Fatalf("output = %q, want parent-done", out)
+	}
+	if elapsed > time.Second {
+		t.Fatalf("took %s, want completion well under 1s (daemon must not hold shell stdin)", elapsed)
 	}
 }
