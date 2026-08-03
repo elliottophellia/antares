@@ -303,7 +303,7 @@ func (a *Agent) Run(ctx context.Context, req Request, emit Emit) (*Result, error
 		a.mu.Unlock()
 	}()
 
-	client, modelName, providerName, err := a.newClient(req.Model)
+	client, modelName, providerName, err := a.newClient(req.Model, sess.ID)
 	if err != nil {
 		_ = emit(Event{Type: EventError, Err: err.Error()})
 		_ = emit(Event{Type: EventDone})
@@ -367,6 +367,11 @@ func (a *Agent) Run(ctx context.Context, req Request, emit Emit) (*Result, error
 		toolSpecs = append(toolSpecs, llm.Tool{Name: t.Name(), Description: t.Description(), Parameters: t.Schema()})
 		byName[t.Name()] = t
 	}
+	// Sub2API Antigravity treats a tool literally named "web_search" as Google's
+	// built-in search and rejects mixing it with functionDeclarations. Rename
+	// only on the wire for those routes; execution still resolves to web_search.
+	_, prov := a.cfg.ResolveProvider(providerName)
+	toolSpecs, byName = sanitizeToolsForProvider(toolSpecs, byName, providerName, prov.BaseURL)
 
 	systemPrompt := a.buildSystemPrompt(ctx, req, sess, activeTools)
 
@@ -467,6 +472,9 @@ func (a *Agent) Run(ctx context.Context, req Request, emit Emit) (*Result, error
 		assistant := llm.Message{
 			Role: llm.RoleAssistant, Content: resp.Content,
 			Reasoning: resp.Reasoning, ToolCalls: resp.ToolCalls,
+			// Gemini multi-turn tool use requires echoing thoughtSignature on
+			// the same functionCall/text parts in the next request.
+			ThoughtSignature: resp.ThoughtSignature,
 		}
 		history = append(history, assistant)
 		if !req.Quiet {

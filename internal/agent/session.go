@@ -285,7 +285,7 @@ func (a *Agent) maybeTitle(ctx context.Context, sess *store.Session, userMsg, re
 // any error so the caller falls back to the heuristic — a title is never worth
 // failing a turn over.
 func (a *Agent) llmTitle(ctx context.Context, userMsg, reply string) string {
-	client, model, _, err := a.newAuxClient()
+	client, model, _, err := a.newAuxClient("")
 	if err != nil {
 		return ""
 	}

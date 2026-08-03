@@ -207,7 +207,7 @@ func rebalanceToolBoundary(middle, tail []llm.Message) ([]llm.Message, []llm.Mes
 
 // summarise asks the auxiliary (or main) model to condense a message span.
 func (a *Agent) summarise(ctx context.Context, msgs []llm.Message) (string, error) {
-	client, model, _, err := a.newAuxClient()
+	client, model, _, err := a.newAuxClient("")
 	if err != nil {
 		return "", err
 	}
