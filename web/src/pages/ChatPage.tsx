@@ -430,6 +430,10 @@ export default function ChatPage() {
   }, [sessionId])
   const virtuosoRef = useRef<VirtuosoHandle>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+  // Where the list opens. Captured once per mount: Virtuoso treats this as the
+  // initial anchor, so recomputing it from messages.length on every render
+  // re-anchors the list mid-stream and fights followOutput.
+  const initialIndexRef = useRef(0)
 
   // A streaming turn emits hundreds of tiny events. Queue them for one render,
   // grouping by message first so flushing is O(messages + patches), not
@@ -784,7 +788,11 @@ export default function ChatPage() {
     get<SessionDetail>(`/sessions/${sessionId}`)
       .then((d) => {
         if (cancelled) return
-        setMessages(hydrate(d))
+        const restored = hydrate(d)
+        // Open a restored transcript at its newest message. Set before the list
+        // mounts (it is still `loading`), so Virtuoso reads the final value once.
+        initialIndexRef.current = Math.max(0, restored.length - 1)
+        setMessages(restored)
         setTitle(d.session.title || t('chat.conversation'))
         setProjectDir(d.session.meta?.project_dir ?? '')
         // Restore the context gauge from persisted usage: the last turn's input
@@ -1244,6 +1252,40 @@ export default function ChatPage() {
     setInput(value)
   }, [historyPos])
 
+  // Virtuoso's `components` must keep a stable identity. Declared inline it was a
+  // fresh object — and a fresh Footer component type — on every render, so the
+  // list unmounted and remounted the footer on each streaming tick, resizing the
+  // scroller under itself. Footer reads live values through refs so the component
+  // type never has to change.
+  const approvalsRef = useRef(approvals)
+  approvalsRef.current = approvals
+  const errorRef = useRef(error)
+  errorRef.current = error
+  // Re-render the footer when its contents actually change (not per token).
+  const footerTick = `${approvals.map((a) => `${a.id}:${a.decided ?? ''}`).join(',')}|${error ?? ''}`
+  const virtuosoComponents = useMemo(
+    () => ({
+      Footer: () => (
+        <div className="mx-auto w-full max-w-3xl space-y-5 px-4 pb-6 sm:px-6">
+          {approvalsRef.current.map((a) => (
+            <ApprovalCard
+              key={a.id}
+              approval={a}
+              onDecided={(id, decision) =>
+                setApprovals((prev) =>
+                  prev.map((x) => (x.id === id ? { ...x, decided: decision } : x)),
+                )
+              }
+            />
+          ))}
+          {errorRef.current ? <ErrorBanner message={errorRef.current} /> : null}
+        </div>
+      ),
+    }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [footerTick],
+  )
+
   const newChat = () => {
     stop()
     localStorage.removeItem('antares:last-session')
@@ -1447,15 +1489,25 @@ export default function ChatPage() {
         </div>
       ) : (
         // Virtualised transcript: only on-screen messages are in the DOM, so a
-        // very long session stays light. followOutput="auto" keeps it pinned to
-        // the newest message only while the user is at the bottom — scroll up
-        // and it stops, scroll back and it resumes.
+        // very long session stays light. followOutput keeps it pinned to the
+        // newest message only while the user is at the bottom — scroll up and it
+        // stops, scroll back and it resumes.
+        //
+        // followOutput is `true`, not "auto": "auto" scrolls only *after* it has
+        // re-measured, so while a message is streaming (its height grows on every
+        // token) the list plays catch-up — measure, scroll, content grows, measure
+        // again — which reads as the viewport juddering near the bottom.
+        //
+        // initialTopMostItemIndex is deliberately NOT derived from messages.length
+        // here: it only defines the *initial* position, but recomputing it on every
+        // render re-anchors the list mid-stream. See initialIndexRef.
         <Virtuoso
           ref={virtuosoRef}
           className="min-h-0 flex-1"
           data={messages}
-          followOutput="auto"
-          initialTopMostItemIndex={Math.max(0, messages.length - 1)}
+          followOutput={true}
+          initialTopMostItemIndex={initialIndexRef.current}
+          components={virtuosoComponents}
           computeItemKey={(_, m) => m.id}
           itemContent={(_, m) => (
             <div className="mx-auto w-full min-w-0 max-w-3xl overflow-x-clip px-4 sm:px-6">
@@ -1471,39 +1523,31 @@ export default function ChatPage() {
               </div>
             </div>
           )}
-          components={{
-            Footer: () => (
-              <div className="mx-auto w-full max-w-3xl space-y-5 px-4 pb-6 sm:px-6">
-                {approvals.map((a) => (
-                  <ApprovalCard
-                    key={a.id}
-                    approval={a}
-                    onDecided={(id, decision) =>
-                      setApprovals((prev) =>
-                        prev.map((x) => (x.id === id ? { ...x, decided: decision } : x)),
-                      )
-                    }
-                  />
-                ))}
-                {streaming ? (
-                  <StreamingIndicator
-                    turn={live.turn}
-                    tool={live.tool}
-                    waiting={live.waiting}
-                    notice={live.notice}
-                  />
-                ) : null}
-                {error ? <ErrorBanner message={error} /> : null}
-              </div>
-            ),
-          }}
         />
       )}
 
       {/* Floating composer: sits close to the last message rather than pinned
-          against the very bottom edge of the viewport. */}
+          against the very bottom edge of the viewport.
+
+          The streaming indicator lives here, OUTSIDE the virtualised list. Its
+          height changes every second (the elapsed-seconds counter, and notice /
+          tool labels of varying length). Inside the list that turned every tick
+          into a resize the scroller had to correct for, which is what made the
+          viewport judder while pinned to the bottom. */}
       <div className="bg-gradient-to-t from-background via-background to-transparent px-4 pt-3 pb-[max(1.5rem,env(safe-area-inset-bottom))] sm:px-6 sm:pb-[max(2rem,env(safe-area-inset-bottom))]">
-        <div className="mx-auto w-full max-w-3xl">{composerCard(true)}</div>
+        <div className="mx-auto w-full max-w-3xl">
+          {streaming ? (
+            <div className="pb-2">
+              <StreamingIndicator
+                turn={live.turn}
+                tool={live.tool}
+                waiting={live.waiting}
+                notice={live.notice}
+              />
+            </div>
+          ) : null}
+          {composerCard(true)}
+        </div>
       </div>
       </div>
 

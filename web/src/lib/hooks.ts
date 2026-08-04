@@ -122,6 +122,12 @@ export function useMediaQuery(query: string): boolean {
 }
 
 /**
+ * NOTE: currently unused. The chat transcript does NOT use this — it is
+ * virtualised with react-virtuoso and follows the bottom via `followOutput`
+ * (see ChatPage). Do not wire this to a Virtuoso list: two things setting
+ * scrollTop fight each other and the viewport judders. This remains for plain
+ * (non-virtualised) scroll containers.
+ *
  * Keep an element pinned to the bottom as `dep` grows (a streaming transcript),
  * but ONLY while the user is at the bottom. Scroll up and auto-follow stops so
  * you can read; scroll back to the bottom and it resumes — like a chat or a
