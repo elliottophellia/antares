@@ -219,6 +219,42 @@ const SUGGESTION_KEYS: MessageKey[] = [
   'chat.suggest4',
 ]
 
+/** Composer ↑/↓ recall — most recent first, de-duped consecutive, capped. */
+const INPUT_HISTORY_KEY = 'antares:composer-history'
+const INPUT_HISTORY_MAX = 50
+
+function loadInputHistory(): string[] {
+  try {
+    const raw = localStorage.getItem(INPUT_HISTORY_KEY)
+    if (!raw) return []
+    const parsed = JSON.parse(raw) as unknown
+    if (!Array.isArray(parsed)) return []
+    return parsed.filter((x): x is string => typeof x === 'string' && x.trim() !== '').slice(0, INPUT_HISTORY_MAX)
+  } catch {
+    return []
+  }
+}
+
+function pushInputHistory(entry: string, prev: string[]): string[] {
+  const text = entry.trim()
+  if (!text) return prev
+  // Drop consecutive duplicate of the most recent entry.
+  const next = prev[0] === text ? prev : [text, ...prev.filter((x) => x !== text)]
+  return next.slice(0, INPUT_HISTORY_MAX)
+}
+
+/** Caret is on the first visual line of a textarea (for shell-style history ↑). */
+function caretOnFirstLine(el: HTMLTextAreaElement): boolean {
+  const pos = el.selectionStart ?? 0
+  return !el.value.slice(0, pos).includes('\n')
+}
+
+/** Caret is on the last visual line (for history ↓). */
+function caretOnLastLine(el: HTMLTextAreaElement): boolean {
+  const pos = el.selectionStart ?? 0
+  return !el.value.slice(pos).includes('\n')
+}
+
 export default function ChatPage() {
   const { sessionId } = useParams<{ sessionId: string }>()
   const navigate = useNavigate()
@@ -230,8 +266,20 @@ export default function ChatPage() {
   const [streaming, setStreaming] = useState(false)
   // Live status for the streaming indicator: which step, and what tool (if any)
   // is running right now. Reset at the start of every send.
-  const [live, setLive] = useState<{ turn: number; tool?: string; waiting?: boolean }>({ turn: 1 })
+  const [live, setLive] = useState<{
+    turn: number
+    tool?: string
+    waiting?: boolean
+    /** Server notice (compacting, steering, …) shown while streaming. */
+    notice?: string
+  }>({ turn: 1 })
   const [input, setInput] = useState('')
+  // Recent composer prompts (shell-style ↑/↓). Persisted across reloads.
+  const [inputHistory, setInputHistory] = useState<string[]>(() => loadInputHistory())
+  // -1 = editing a live draft (not browsing history). ≥0 = index into inputHistory
+  // from the end (0 = most recent).
+  const [historyPos, setHistoryPos] = useState(-1)
+  const draftRef = useRef('') // draft saved when first leaving with ↑
   const [error, setError] = useState<string>()
   const [title, setTitle] = useState('')
   const [approvals, setApprovals] = useState<ApprovalView[]>([])
@@ -515,7 +563,11 @@ export default function ChatPage() {
           enqueueDelta(assistantId, 'reasoning', String(event.delta ?? ''))
           break
         case 'tool_call':
-          setLive((s) => ({ turn: s.turn + 1, tool: String(event.name ?? '') }))
+          setLive((s) => ({
+            turn: s.turn + 1,
+            tool: String(event.name ?? ''),
+            notice: undefined,
+          }))
           patchAssistant((m) =>
             pushToolSeg(m, {
               id: String(event.id ?? ''),
@@ -550,11 +602,19 @@ export default function ChatPage() {
             })),
           )
           break
+        case 'notice':
+          // Compaction, steering, retries, … — without this the UI only shows
+          // "Working… · Ns" during multi-minute silent server work.
+          setLive((s) => ({
+            ...s,
+            notice: String(event.message ?? event.content ?? '').trim() || undefined,
+          }))
+          break
         case 'ask':
           // The turn is now paused inside ask_user. Remember the id so the
           // answer card can resume it; the stream stays open (no 'done').
           setAskId(String(event.id ?? ''))
-          setLive((s) => ({ ...s, tool: undefined, waiting: true }))
+          setLive((s) => ({ ...s, tool: undefined, waiting: true, notice: undefined }))
           break
         case 'usage':
           patchAssistant((m) => ({
@@ -679,9 +739,15 @@ export default function ChatPage() {
               if (evtTitle) setTitle(evtTitle)
             })
           },
-          () => {
+          (err) => {
             setStreaming(false)
             close?.()
+            // Auth failure will not fix itself with a retry — stop the 3s 401
+            // loop that filled the daemon log after every restart.
+            if (err instanceof ApiError && err.status === 401) {
+              setError(t('chat.attachAuthFailed') || 'Dashboard login expired — refresh and sign in again.')
+              return
+            }
             if (alive) window.setTimeout(connect, 3000)
           },
         )
@@ -849,7 +915,18 @@ export default function ChatPage() {
       const text = raw.trim()
       if ((!text && attached.length === 0 && attachedDocs.length === 0) || streaming) return
       if (text.startsWith('/') && text.length > 1) {
+        // Still record slash commands so ↑ recalls them.
+        if (text) {
+          setInputHistory((prev) => {
+            const next = pushInputHistory(text, prev)
+            localStorage.setItem(INPUT_HISTORY_KEY, JSON.stringify(next))
+            return next
+          })
+        }
+        setHistoryPos(-1)
+        draftRef.current = ''
         void runCommand(text)
+        setInput('')
         return
       }
 
@@ -870,6 +947,16 @@ export default function ChatPage() {
     }
     const assistantId = `local_${Date.now()}_a`
     setMessages((prev) => [...prev, userMsg, { id: assistantId, role: 'assistant', content: '' }])
+    // Remember what was sent for ↑/↓ (composer history).
+    if (text) {
+      setInputHistory((prev) => {
+        const next = pushInputHistory(text, prev)
+        localStorage.setItem(INPUT_HISTORY_KEY, JSON.stringify(next))
+        return next
+      })
+    }
+    setHistoryPos(-1)
+    draftRef.current = ''
     setInput('')
     setImages([])
     setDocs([])
@@ -1114,11 +1201,48 @@ export default function ChatPage() {
         }
       }
     }
+    // Shell-style prompt history: ↑ older, ↓ newer. Only when the caret is on
+    // the first/last line so multi-line editing still moves the cursor normally.
+    if (e.key === 'ArrowUp' && !e.shiftKey && !e.altKey && !e.metaKey && !e.ctrlKey) {
+      const el = e.currentTarget
+      if (inputHistory.length > 0 && caretOnFirstLine(el)) {
+        e.preventDefault()
+        if (historyPos === -1) draftRef.current = input
+        const idx = historyPos === -1 ? 0 : Math.min(historyPos + 1, inputHistory.length - 1)
+        setHistoryPos(idx)
+        setInput(inputHistory[idx] ?? '')
+        return
+      }
+    }
+    if (e.key === 'ArrowDown' && !e.shiftKey && !e.altKey && !e.metaKey && !e.ctrlKey) {
+      const el = e.currentTarget
+      if (historyPos >= 0 && caretOnLastLine(el)) {
+        e.preventDefault()
+        if (historyPos <= 0) {
+          setHistoryPos(-1)
+          setInput(draftRef.current)
+        } else {
+          const idx = historyPos - 1
+          setHistoryPos(idx)
+          setInput(inputHistory[idx] ?? '')
+        }
+        return
+      }
+    }
     if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
       e.preventDefault()
       send()
     }
   }
+
+  // Typing while browsing history leaves history mode (treat as new draft).
+  const onInputChange = useCallback((value: string) => {
+    if (historyPos !== -1) {
+      setHistoryPos(-1)
+      draftRef.current = ''
+    }
+    setInput(value)
+  }, [historyPos])
 
   const newChat = () => {
     stop()
@@ -1151,7 +1275,7 @@ export default function ChatPage() {
         onRemoveImage={(i) => setImages((prev) => prev.filter((_, x) => x !== i))}
         onRemoveDoc={(i) => setDocs((prev) => prev.filter((_, x) => x !== i))}
         onPaste={onPaste}
-        onChange={setInput}
+        onChange={onInputChange}
         onKeyDown={onKeyDown}
         onSend={send}
         onStop={stop}
@@ -1362,7 +1486,12 @@ export default function ChatPage() {
                   />
                 ))}
                 {streaming ? (
-                  <StreamingIndicator turn={live.turn} tool={live.tool} waiting={live.waiting} />
+                  <StreamingIndicator
+                    turn={live.turn}
+                    tool={live.tool}
+                    waiting={live.waiting}
+                    notice={live.notice}
+                  />
                 ) : null}
                 {error ? <ErrorBanner message={error} /> : null}
               </div>
@@ -1716,10 +1845,12 @@ export function StreamingIndicator({
   turn,
   tool,
   waiting,
+  notice,
 }: {
   turn?: number
   tool?: string
   waiting?: boolean
+  notice?: string
 }) {
   const { t } = useI18n()
   const [secs, setSecs] = useState(0)
@@ -1728,7 +1859,7 @@ export function StreamingIndicator({
     const start = Date.now()
     const id = setInterval(() => setSecs(Math.round((Date.now() - start) / 1000)), 1000)
     return () => clearInterval(id)
-  }, [turn, tool, waiting])
+  }, [turn, tool, waiting, notice])
   // Paused on a question: no timer, no pulsing "working" — the run is idle by
   // design, waiting on the person. Otherwise show the running tool / step.
   if (waiting) {
@@ -1741,9 +1872,11 @@ export function StreamingIndicator({
   }
   const label = tool
     ? t('chat.running', { tool })
-    : turn && turn > 1
-      ? t('chat.workingStep', { n: turn })
-      : t('chat.working')
+    : notice
+      ? notice
+      : turn && turn > 1
+        ? t('chat.workingStep', { n: turn })
+        : t('chat.working')
   return (
     <div className="flex items-center gap-2 px-1 text-xs text-muted-foreground">
       <span className="flex items-center gap-1">
@@ -1751,8 +1884,8 @@ export function StreamingIndicator({
         <span className="pulse-dot size-1.5 rounded-full bg-primary [animation-delay:0.2s]" />
         <span className="pulse-dot size-1.5 rounded-full bg-primary [animation-delay:0.4s]" />
       </span>
-      <span className="font-medium text-foreground/70">{label}</span>
-      <span className="text-[10px] tabular-nums text-muted-foreground/60">· {secs}s</span>
+      <span className="min-w-0 font-medium text-foreground/70">{label}</span>
+      <span className="shrink-0 text-[10px] tabular-nums text-muted-foreground/60">· {secs}s</span>
     </div>
   )
 }
