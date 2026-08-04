@@ -50,6 +50,15 @@ type Config struct {
 	GroupSessionsPerUser  bool `yaml:"group_sessions_per_user" json:"group_sessions_per_user"`
 
 	Social Social `yaml:"social" json:"social"`
+
+	// inline*FromEnv record that model.base_url / model.api_key were supplied by
+	// ANTARES_BASE_URL / ANTARES_API_KEY rather than read from config.yaml.
+	// ResolveProvider honours an env-supplied credential over a named provider's
+	// stored one (the documented override), while a stale value left in the file
+	// must not clobber the provider. Unexported so they are never serialised back
+	// into config.yaml.
+	inlineBaseURLFromEnv bool
+	inlineAPIKeyFromEnv  bool
 }
 
 // Social configures the Social Media feature: IMAP mailbox, persistent browser,

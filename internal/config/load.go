@@ -173,6 +173,15 @@ func applyEnv(c *Config) {
 	str("ANTARES_PROVIDER", &c.Model.Provider)
 	str("ANTARES_BASE_URL", &c.Model.BaseURL)
 	str("ANTARES_API_KEY", &c.Model.APIKey)
+	// Remember that these came from the environment: ResolveProvider lets an
+	// env-supplied credential override a named provider's stored one, while a
+	// stale value sitting in config.yaml does not.
+	if v, ok := os.LookupEnv("ANTARES_BASE_URL"); ok && strings.TrimSpace(v) != "" {
+		c.inlineBaseURLFromEnv = true
+	}
+	if v, ok := os.LookupEnv("ANTARES_API_KEY"); ok && strings.TrimSpace(v) != "" {
+		c.inlineAPIKeyFromEnv = true
+	}
 
 	str("ANTARES_DB_DRIVER", &c.Database.Driver)
 	str("ANTARES_DB_DSN", &c.Database.DSN)
@@ -252,20 +261,26 @@ func normalize(c *Config) {
 // to the inline model.* fields when no named provider matches.
 //
 // Top-level model.base_url / model.api_key are legacy "inline provider" overrides.
-// They must NOT clobber a named provider that already has its own base_url or
-// api_key — otherwise switching the UI to antigravity/gemini while stale
-// CodeBuddy values remain in model.* silently routes Claude to /v1 with the
-// wrong key (Sub2API platform=codebuddy, cascading 401s).
+// A value left in the *config file* must NOT clobber a named provider that
+// already has its own base_url or api_key — otherwise switching the UI to
+// antigravity/gemini while stale CodeBuddy values remain in model.* silently
+// routes Claude to /v1 with the wrong key (cascading 401s).
+//
+// ANTARES_BASE_URL / ANTARES_API_KEY are the documented exception: an env var is
+// an explicit, per-run instruction from the operator, so it still wins over the
+// named provider's stored credentials.
 func (c *Config) ResolveProvider(name string) (string, Provider) {
 	if name == "" {
 		name = c.Model.Provider
 	}
 	if p, ok := c.Providers[name]; ok {
 		if name == c.Model.Provider {
-			if strings.TrimSpace(c.Model.BaseURL) != "" && strings.TrimSpace(p.BaseURL) == "" {
+			if v := strings.TrimSpace(c.Model.BaseURL); v != "" &&
+				(c.inlineBaseURLFromEnv || strings.TrimSpace(p.BaseURL) == "") {
 				p.BaseURL = c.Model.BaseURL
 			}
-			if strings.TrimSpace(c.Model.APIKey) != "" && strings.TrimSpace(p.APIKey) == "" {
+			if v := strings.TrimSpace(c.Model.APIKey); v != "" &&
+				(c.inlineAPIKeyFromEnv || strings.TrimSpace(p.APIKey) == "") {
 				p.APIKey = c.Model.APIKey
 			}
 		}

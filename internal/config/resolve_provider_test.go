@@ -43,6 +43,34 @@ func TestResolveProviderAllowsInlineWhenProviderHasNoCredentials(t *testing.T) {
 	}
 }
 
+// ANTARES_BASE_URL / ANTARES_API_KEY are documented overrides. An operator who
+// exports them for a run must win over the named provider's stored credentials —
+// otherwise the env vars are silently inert whenever providers.<id> already has
+// its own key, which is the common case.
+func TestResolveProviderEnvCredentialsOverrideNamedProvider(t *testing.T) {
+	t.Setenv("ANTARES_BASE_URL", "http://env-gateway:9000/v1")
+	t.Setenv("ANTARES_API_KEY", "sk-from-env")
+
+	cfg := Default()
+	cfg.Model.Provider = "zai"
+	cfg.Providers = map[string]Provider{
+		"zai": {
+			Kind: "anthropic", Enabled: true,
+			BaseURL: "https://api.z.ai/api/anthropic/v1",
+			APIKey:  "sk-stored-in-yaml",
+		},
+	}
+	applyEnv(cfg)
+
+	_, p := cfg.ResolveProvider("zai")
+	if p.BaseURL != "http://env-gateway:9000/v1" {
+		t.Fatalf("ANTARES_BASE_URL ignored: BaseURL = %q", p.BaseURL)
+	}
+	if p.APIKey != "sk-from-env" {
+		t.Fatalf("ANTARES_API_KEY ignored: APIKey = %q", p.APIKey)
+	}
+}
+
 func TestClearInlineModelCredentials(t *testing.T) {
 	cfg := Default()
 	cfg.Model.BaseURL = "http://x"

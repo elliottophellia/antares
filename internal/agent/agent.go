@@ -429,6 +429,9 @@ func (a *Agent) Run(ctx context.Context, req Request, emit Emit) (*Result, error
 		}
 
 		resp, err := a.callModel(runCtx, client, llmReq, cfg.Streaming.Enabled, emit)
+		if err == nil {
+			err = validateToolCallArguments(resp)
+		}
 		// A transient provider glitch (e.g. truncated/malformed tool_call
 		// arguments — "please retry") can slip past the client's own retry once
 		// tokens have streamed. Retry the whole turn here, telling the UI to
@@ -441,6 +444,9 @@ func (a *Agent) Run(ctx context.Context, req Request, emit Emit) (*Result, error
 			case <-time.After(time.Duration(att+1) * 800 * time.Millisecond):
 			}
 			resp, err = a.callModel(runCtx, client, llmReq, cfg.Streaming.Enabled, emit)
+			if err == nil {
+				err = validateToolCallArguments(resp)
+			}
 		}
 		if err != nil {
 			if errors.Is(err, context.Canceled) {
@@ -620,6 +626,28 @@ func (a *Agent) Run(ctx context.Context, req Request, emit Emit) (*Result, error
 	_ = emit(Event{Type: EventDone})
 
 	return &Result{SessionID: sess.ID, Reply: lastReply, Turns: turn, Usage: total}, nil
+}
+
+// validateToolCallArguments catches provider streams that finish with a
+// truncated JSON argument payload. Without this check the malformed call reaches
+// the tool, fails Bind with unexpected EOF, and consumes the turn instead of
+// using the existing provider-glitch retry path.
+func validateToolCallArguments(resp *llm.Response) error {
+	if resp == nil {
+		return nil
+	}
+	for i := range resp.ToolCalls {
+		call := &resp.ToolCalls[i]
+		if strings.TrimSpace(call.Arguments) == "" {
+			call.Arguments = "{}"
+			continue
+		}
+		var args map[string]any
+		if err := json.Unmarshal([]byte(call.Arguments), &args); err != nil {
+			return fmt.Errorf("malformed tool_call arguments for %s: %w", call.Name, err)
+		}
+	}
+	return nil
 }
 
 // callModel runs one completion, streaming when enabled.

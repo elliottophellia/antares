@@ -92,6 +92,24 @@ func TestRetryable(t *testing.T) {
 	}
 }
 
+func TestRetryableProviderTruncatedJSON(t *testing.T) {
+	for _, message := range []string{
+		"provider error: Unterminated string starting at: line 1 column 30 (char 29)",
+		"provider error: unexpected end of JSON input",
+		"provider error: EOF while parsing a string",
+	} {
+		if !Retryable(errors.New(message)) {
+			t.Errorf("provider truncated JSON must be retryable: %q", message)
+		}
+	}
+}
+
+func TestInvalidRequestJSONIsNotRetryable(t *testing.T) {
+	if Retryable(errors.New("provider error: invalid JSON schema for tool parameters")) {
+		t.Fatal("permanent invalid schema must not be retried")
+	}
+}
+
 func TestParseRetryAfterSeconds(t *testing.T) {
 	if got := parseRetryAfter("5"); got != 5*time.Second {
 		t.Fatalf("expected 5s, got %v", got)

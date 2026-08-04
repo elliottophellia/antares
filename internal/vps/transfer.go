@@ -63,18 +63,41 @@ func Upload(ctx context.Context, t Target, localPath, remotePath string) (n int6
 	}
 	defer src.Close()
 
-	dst, err := sc.OpenFile(remotePath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC)
+	// Upload to a sibling temp path and rename over the target, so a transfer that
+	// times out partway cannot leave a truncated file where a working one was.
+	// That matters most for the usual reason to upload: replacing a live service
+	// config the next `systemctl restart` will read.
+	tmpRemote := remotePath + ".antares-upload.tmp"
+	dst, err := sc.OpenFile(tmpRemote, os.O_WRONLY|os.O_CREATE|os.O_TRUNC)
 	if err != nil {
-		return 0, seen, fmt.Errorf("open remote %s: %w", remotePath, err)
+		return 0, seen, fmt.Errorf("open remote %s: %w", tmpRemote, err)
 	}
-	defer dst.Close()
+	committed := false
+	defer func() {
+		_ = dst.Close()
+		if !committed {
+			_ = sc.Remove(tmpRemote)
+		}
+	}()
 
 	n, err = copyWithContext(ctx, dst, src)
 	if err != nil {
 		return n, seen, err
 	}
+	if err := dst.Close(); err != nil {
+		return n, seen, fmt.Errorf("close remote %s: %w", tmpRemote, err)
+	}
 	// Preserve mode bits the local file had (best-effort; some servers refuse).
-	_ = sc.Chmod(remotePath, fi.Mode().Perm())
+	_ = sc.Chmod(tmpRemote, fi.Mode().Perm())
+	// Some SFTP servers refuse a rename onto an existing path; fall back to
+	// removing the target first, which is still narrower than truncate-then-write.
+	if err := sc.Rename(tmpRemote, remotePath); err != nil {
+		_ = sc.Remove(remotePath)
+		if err2 := sc.Rename(tmpRemote, remotePath); err2 != nil {
+			return n, seen, fmt.Errorf("finalise remote %s: %w", remotePath, err2)
+		}
+	}
+	committed = true
 	return n, seen, nil
 }
 
@@ -122,16 +145,42 @@ func Download(ctx context.Context, t Target, remotePath, localPath string) (n in
 	}
 	defer src.Close()
 
-	dst, err := os.OpenFile(localPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, fi.Mode().Perm())
+	// Stream into a sibling temp file and rename on success. Writing straight to
+	// localPath with O_TRUNC would destroy an existing file before the first byte
+	// arrives, so a timeout mid-transfer (the common case on a slow link) would
+	// leave a truncated stub where the original used to be.
+	//
+	// The mode is a fixed 0o600 rather than the remote file's bits: a remote file
+	// that happens to be 0777 must not produce a world-writable local file, and a
+	// remote 0400 must not produce one the user cannot read.
+	dst, err := os.CreateTemp(filepath.Dir(localPath), ".antares-download-*")
 	if err != nil {
-		return 0, seen, err
+		return 0, seen, fmt.Errorf("create local temp file: %w", err)
 	}
+	tmpName := dst.Name()
+	committed := false
 	defer func() {
 		_ = dst.Close()
+		if !committed {
+			_ = os.Remove(tmpName)
+		}
 	}()
+	if err := dst.Chmod(0o600); err != nil {
+		return 0, seen, fmt.Errorf("chmod local temp file: %w", err)
+	}
 
 	n, err = copyWithContext(ctx, dst, src)
-	return n, seen, err
+	if err != nil {
+		return n, seen, err
+	}
+	if err := dst.Close(); err != nil {
+		return n, seen, fmt.Errorf("close local file: %w", err)
+	}
+	if err := os.Rename(tmpName, localPath); err != nil {
+		return n, seen, fmt.Errorf("finalise local file: %w", err)
+	}
+	committed = true
+	return n, seen, nil
 }
 
 // cleanRemotePath normalises a remote path for SFTP (slash-separated). Absolute

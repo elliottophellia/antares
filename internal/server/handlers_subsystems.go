@@ -366,6 +366,13 @@ func (s *Server) handleMCPStatus(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleMCPRefresh(w http.ResponseWriter, r *http.Request) {
+	// Check the concrete pointer before boxing it: a nil *mcp.Manager inside a
+	// non-nil mcpRefresher interface would slip past the nil guard in refreshMCP
+	// and panic on the first field access in Refresh.
+	if s.mcp == nil {
+		s.refreshMCP(w, r, nil)
+		return
+	}
 	s.refreshMCP(w, r, s.mcp)
 }
 
