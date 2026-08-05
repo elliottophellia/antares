@@ -65,7 +65,28 @@ providers:
 | `openai` | OpenAI proper |
 | `anthropic` | Extended thinking and prompt caching |
 | `gemini` | Thinking budgets |
+| `opencode` | OpenCode Go (Zen) — routes each model to the wire format it needs |
 | `custom` | Anything else with a `base_url` |
+
+`opencode` exists because OpenCode Zen serves two wire formats from one base
+URL, chosen per model: MiniMax and Qwen speak the Anthropic Messages API
+(`/messages`, `x-api-key`), everything else speaks OpenAI Chat Completions
+(`/chat/completions`, `Authorization: Bearer`). Every other kind picks its
+format once per provider, so this one routes per request:
+
+```yaml
+providers:
+  opencode:
+    kind: opencode
+    base_url: https://opencode.ai/zen/go/v1
+    api_key: …            # or OPENCODE_API_KEY
+```
+
+Get a key at <https://opencode.ai/auth>. The model list is live — Antares reads
+it from the provider's `/models` endpoint, so new models appear without a
+release. A model family Antares does not recognise defaults to the OpenAI
+format, which is correct for the GLM, Kimi, DeepSeek, MiMo, GPT, Grok and
+Hunyuan families it currently serves.
 
 `model.auxiliary` is worth setting. Titles, compaction summaries, verification,
 and goal judging all use it, and a small model does those as well as a large one
@@ -77,6 +98,7 @@ Keys can come from the environment instead:
 ANTHROPIC_API_KEY=…
 OPENAI_API_KEY=…
 OPENROUTER_API_KEY=…
+OPENCODE_API_KEY=…
 GEMINI_API_KEY=…
 ```
 

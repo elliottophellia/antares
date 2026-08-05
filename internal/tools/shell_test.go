@@ -174,8 +174,13 @@ func main() {
 	if !strings.Contains(out, "Events injected: 1") {
 		t.Fatalf("output = %q", out)
 	}
-	if elapsed > time.Second {
-		t.Fatalf("took %s, want prompt completion well under 1s (sentinel not stolen)", elapsed)
+	// The real signal is that the command returned at all rather than running to
+	// the 2s timeout: a stolen sentinel makes the tool wait for the deadline.
+	// The bound is generous because this whole package runs in parallel under
+	// `go test ./...`, where process startup alone can cost several hundred ms —
+	// a 1s bound failed there while passing in isolation.
+	if elapsed > 1500*time.Millisecond {
+		t.Fatalf("took %s, want completion well before the 2s timeout (sentinel not stolen)", elapsed)
 	}
 
 	// Session still works after a stdin-hungry command.

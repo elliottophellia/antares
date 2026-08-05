@@ -81,6 +81,17 @@ func setupProviderCatalogue(cfg *config.Config) []setupProvider {
 			Models:  []string{"glm-5.2", "glm-4.7", "glm-4.6"},
 		},
 		{
+			ID: "opencode", Label: "OpenCode Go (Zen)", Kind: "opencode",
+			Hint:    "GLM, Kimi, DeepSeek, MiMo, MiniMax and Qwen on an OpenCode subscription.",
+			KeyHint: "your OpenCode API key", KeyURL: "https://opencode.ai/auth",
+			BaseURL: "https://opencode.ai/zen/go/v1",
+			Note:    "One endpoint, two wire formats: MiniMax and Qwen use the Anthropic API, the rest use OpenAI. Antares routes each model automatically.",
+			Models: []string{
+				"glm-5.2", "kimi-k3", "deepseek-v4-pro",
+				"minimax-m3", "qwen3.8-max",
+			},
+		},
+		{
 			ID: "ollama", Label: "Ollama", Kind: "openai-compatible",
 			Hint:    "Runs on this machine. No key needed.",
 			BaseURL: "http://127.0.0.1:11434/v1", Local: true,
