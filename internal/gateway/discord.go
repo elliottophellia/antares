@@ -472,6 +472,26 @@ func (d *Discord) appID() string {
 	return d.selfID
 }
 
+// messageAddressesBot reports whether a guild message is aimed at the bot: it
+// mentions the bot as a user (in the parsed mentions array, or via a raw <@id>
+// in the content, which happens when the mentions array lags), or it is a reply
+// to one of the bot's own messages. text is the message content; selfID is the
+// bot's user id.
+func messageAddressesBot(m dcMessage, text, selfID string) bool {
+	for _, u := range m.Mentions {
+		if u.ID == selfID {
+			return true
+		}
+	}
+	if strings.Contains(text, "<@"+selfID+">") || strings.Contains(text, "<@!"+selfID+">") {
+		return true
+	}
+	if m.ReferencedMessage != nil && m.ReferencedMessage.Author.ID == selfID {
+		return true
+	}
+	return false
+}
+
 // handleMessage authorises and answers one Discord message.
 func (d *Discord) handleMessage(ctx context.Context, m dcMessage) {
 	d.mu.RLock()
@@ -485,27 +505,25 @@ func (d *Discord) handleMessage(ctx context.Context, m dcMessage) {
 
 	isDirect := m.GuildID == ""
 	if !isDirect {
-		// In a guild the bot answers only when addressed: mentioned as a user
-		// (in the parsed mentions or via a raw <@id> in the content, which can
-		// happen when the mentions array lags), or replied to.
-		addressed := false
-		for _, u := range m.Mentions {
-			if u.ID == selfID {
-				addressed = true
-				break
-			}
+		// A binding with reply_mode "always" makes the bot answer every message
+		// in its channel, not only ones that address it. Resolve the most
+		// specific binding for this channel and honour that mode; with no binding
+		// (or mode "mention") the bot stays addressed-only, as before.
+		var binding *config.Binding
+		if cfg := d.mgr.config(); cfg != nil {
+			binding = ResolveBinding(cfg.Gateway.Bindings, "discord", m.GuildID, m.ChannelID)
 		}
-		if !addressed && (strings.Contains(text, "<@"+selfID+">") || strings.Contains(text, "<@!"+selfID+">")) {
-			addressed = true
-		}
-		if !addressed && m.ReferencedMessage != nil && m.ReferencedMessage.Author.ID == selfID {
-			addressed = true
-		}
-		if !addressed {
-			// Un-addressed group chatter: ignore silently, no log — a busy
-			// channel would otherwise flood the log.
+		alwaysReply := binding != nil && strings.EqualFold(strings.TrimSpace(binding.ReplyMode), "always")
+
+		addressed := messageAddressesBot(m, text, selfID)
+		if !addressed && !alwaysReply {
+			// Un-addressed group chatter in a mention-only channel: ignore
+			// silently, no log — a busy channel would otherwise flood the log.
 			return
 		}
+		// Strip the mention tokens whether or not they were required, so an
+		// "always" channel that still @-mentions the bot does not leave the raw
+		// <@id> in the text handed to the agent.
 		text = strings.TrimSpace(strings.NewReplacer(
 			"<@"+selfID+">", "", "<@!"+selfID+">", "",
 		).Replace(text))

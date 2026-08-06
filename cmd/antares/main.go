@@ -328,7 +328,7 @@ func bootstrap(ctx context.Context) (*runtimeServices, error) {
 // handleGatewayMessage runs one platform message through the agent, reusing a
 // persistent session per channel so conversations stay continuous.
 func (rt *runtimeServices) handleGatewayMessage(ctx context.Context, msg gateway.InboundMessage, partial func(string)) (string, error) {
-	key := "gateway_session:" + msg.Platform + ":" + msg.ChannelID
+	key := gateway.GatewaySessionKey(config.Get(), msg)
 	sessionID, err := rt.db.GetKV(ctx, key)
 	if err != nil {
 		sessionID = ""
