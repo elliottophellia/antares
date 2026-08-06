@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/enowdev/antares/internal/llm"
 	"github.com/enowdev/antares/internal/rag"
 	"github.com/enowdev/antares/internal/store"
 	"github.com/enowdev/antares/internal/tools"
@@ -133,6 +134,14 @@ func (a *Agent) autoContext(ctx context.Context, req Request, sess *store.Sessio
 		{collection: "antares", label: "docs"}, // the default knowledge collection
 		{collection: conversationCollection, label: "conversation"},
 	}
+	// Per-user memory: when enabled, fold in what is known about the specific
+	// person so the agent can recall topics tied to them. Placed first so their
+	// own history outranks the shared collections for the same budget.
+	if a.cfg.RAG.PerUser && req.UserID != "" {
+		if uc := rag.UserCollection(req.Platform, req.UserID); uc != "" {
+			sources = append([]source{{collection: uc, label: "about this user"}}, sources...)
+		}
+	}
 	// In a project session that opted into indexing, also pull from the project's
 	// own collection so the codebase informs every turn.
 	if pd, _ := sess.Meta["project_dir"].(string); strings.TrimSpace(pd) != "" {
@@ -234,4 +243,86 @@ func (a *Agent) indexTurn(sess *store.Session, userMsg, reply string) {
 			return
 		}
 	}()
+}
+
+// indexUserTurn distils what a turn reveals about the gateway user and stores it
+// in that user's own RAG collection, so later turns (and other channels) can
+// recall topics and facts tied to them. Gated on rag.per_user. Runs in the
+// background and never blocks or fails a turn.
+func (a *Agent) indexUserTurn(req Request, userMsg, reply string) {
+	if a.rag == nil || !a.cfg.RAG.PerUser || req.UserID == "" {
+		return
+	}
+	collection := rag.UserCollection(req.Platform, req.UserID)
+	if collection == "" {
+		return
+	}
+	userMsg = strings.TrimSpace(userMsg)
+	reply = strings.TrimSpace(reply)
+	if userMsg == "" {
+		return
+	}
+	name := firstNonEmpty(req.UserDisplayName, req.UserName, req.UserID)
+
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+		defer cancel()
+
+		// Summarise into durable facts about the person, not a verbatim log:
+		// searching for a topic later should surface a crisp statement, not raw
+		// chatter. On any summariser error, fall back to storing the raw exchange
+		// so the collection is never silently empty.
+		summary := a.summariseUserTurn(ctx, name, userMsg, reply)
+		content := summary
+		if strings.TrimSpace(content) == "" {
+			content = "User (" + name + "): " + userMsg
+			if reply != "" {
+				content += "\n\nAssistant: " + reply
+			}
+		}
+
+		doc := tools.RAGDoc{
+			ID:      req.UserID + ":" + newID("uturn"),
+			Path:    "user/" + name,
+			Content: content,
+			Meta: map[string]any{
+				"platform": req.Platform,
+				"user_id":  req.UserID,
+				"name":     name,
+				"kind":     "user",
+			},
+		}
+		a.bgAct.record(req.SessionID, "rag: index user memory")
+		_, _ = a.rag.Index(ctx, collection, []tools.RAGDoc{doc})
+	}()
+}
+
+// summariseUserTurn asks the auxiliary model for a few durable facts about the
+// user implied by one exchange. Returns "" on any error (caller falls back to
+// the raw exchange). Nothing here is shown to the user.
+func (a *Agent) summariseUserTurn(ctx context.Context, name, userMsg, reply string) string {
+	client, model, _, err := a.newAuxClient("")
+	if err != nil {
+		return ""
+	}
+	prompt := "From this chat exchange, extract only durable facts, preferences, or topics about the user " +
+		"named " + name + " that would be worth recalling in a later conversation with them " +
+		"(interests, projects, stated preferences, ongoing situations). Write 1-4 short bullet points, " +
+		"each a standalone statement. If the exchange reveals nothing worth remembering about the user, reply with exactly NONE.\n\n" +
+		"User: " + userMsg + "\n\nAssistant: " + reply
+
+	resp, err := client.Chat(ctx, llm.Request{
+		Model:       model,
+		Messages:    []llm.Message{{Role: llm.RoleUser, Content: prompt}},
+		Temperature: 0.2,
+		MaxTokens:   300,
+	})
+	if err != nil || resp == nil {
+		return ""
+	}
+	out := strings.TrimSpace(resp.Content)
+	if out == "" || strings.EqualFold(out, "NONE") || strings.HasPrefix(strings.ToUpper(out), "NONE") {
+		return ""
+	}
+	return "About " + name + ":\n" + out
 }

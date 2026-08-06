@@ -628,6 +628,9 @@ func (a *Agent) Run(ctx context.Context, req Request, emit Emit) (*Result, error
 		// Fold this exchange into the conversation memory so later turns and
 		// sessions can recall it. Non-blocking, best-effort.
 		a.indexTurn(sess, req.Message, lastReply)
+		// When per-user RAG is on, also distil what this turn reveals about the
+		// gateway sender into their own collection.
+		a.indexUserTurn(req, req.Message, lastReply)
 	}
 	_ = emit(Event{Type: EventDone})
 

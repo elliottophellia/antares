@@ -339,6 +339,14 @@ type RAG struct {
 	// AutoContext feeds every chat turn: index the conversation and surface
 	// relevant memory/docs into the prompt automatically.
 	AutoContext bool `yaml:"auto_context" json:"auto_context"`
+
+	// PerUser keeps a separate RAG collection per gateway user (keyed by
+	// platform+user id), on top of the shared conversation collection. Each
+	// person's turns are summarised into their own collection, and that
+	// collection is folded into auto-context when they chat — so the agent can
+	// recall topics and facts tied to that specific user. Off by default; it
+	// stores cross-conversation data about individuals, so it is opt-in.
+	PerUser bool `yaml:"per_user" json:"per_user"`
 }
 
 // ImageGen configures text-to-image generation.
