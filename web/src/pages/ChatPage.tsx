@@ -219,6 +219,36 @@ const SUGGESTION_KEYS: MessageKey[] = [
   'chat.suggest4',
 ]
 
+// The "resume where I left off" pointer. Stored in sessionStorage, not
+// localStorage, so it is PER-TAB: two tabs can sit on different sessions at
+// once, and each still survives a refresh of that tab. In localStorage the
+// pointer was shared, so opening a second tab on "/" always resumed the first
+// tab's session. Wrapped so a Safari private-mode throw can never break a send.
+const LAST_SESSION_KEY = 'antares:last-session'
+const lastSession = {
+  get(): string | null {
+    try {
+      return sessionStorage.getItem(LAST_SESSION_KEY)
+    } catch {
+      return null
+    }
+  },
+  set(id: string) {
+    try {
+      sessionStorage.setItem(LAST_SESSION_KEY, id)
+    } catch {
+      /* private mode / storage disabled — resume is best-effort */
+    }
+  },
+  clear() {
+    try {
+      sessionStorage.removeItem(LAST_SESSION_KEY)
+    } catch {
+      /* ignore */
+    }
+  },
+}
+
 /** Composer ↑/↓ recall — most recent first, de-duped consecutive, capped. */
 const INPUT_HISTORY_KEY = 'antares:composer-history'
 const INPUT_HISTORY_MAX = 50
@@ -497,14 +527,14 @@ export default function ChatPage() {
   // arrives with state.fresh set, which skips the resume and forgets it.
   useEffect(() => {
     if (sessionId) {
-      localStorage.setItem('antares:last-session', sessionId)
+      lastSession.set(sessionId)
       return
     }
     if (location.state?.fresh) {
-      localStorage.removeItem('antares:last-session')
+      lastSession.clear()
       return
     }
-    const last = localStorage.getItem('antares:last-session')
+    const last = lastSession.get()
     if (last) navigate(`/c/${last}`, { replace: true })
     // Only when the route id changes, not on every render.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -816,8 +846,8 @@ export default function ChatPage() {
         // to a session that was deleted). Forget it and drop to a fresh chat
         // instead of getting stuck on a blank, dead url.
         if (e instanceof ApiError && e.status === 404) {
-          if (localStorage.getItem('antares:last-session') === sessionId) {
-            localStorage.removeItem('antares:last-session')
+          if (lastSession.get() === sessionId) {
+            lastSession.clear()
           }
           setMessages([])
           setTitle('')
@@ -881,7 +911,7 @@ export default function ChatPage() {
           case 'new':
           case 'clear':
             stop()
-            localStorage.removeItem('antares:last-session')
+            lastSession.clear()
             setMessages([])
             setTitle('')
             setApprovals([])
@@ -1030,7 +1060,7 @@ export default function ChatPage() {
               // Point the url at the real session (and remember it so the hydrate
               // the navigation triggers does not overwrite the live messages).
               localSessionRef.current = id
-              localStorage.setItem('antares:last-session', id)
+              lastSession.set(id)
               navigate(`/c/${id}`, { replace: true })
             }
           }
@@ -1288,7 +1318,7 @@ export default function ChatPage() {
 
   const newChat = () => {
     stop()
-    localStorage.removeItem('antares:last-session')
+    lastSession.clear()
     setMessages([])
     setTitle('')
     // Keep the remembered role for the new chat instead of resetting to default.
