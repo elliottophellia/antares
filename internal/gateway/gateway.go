@@ -26,6 +26,10 @@ type InboundMessage struct {
 	GuildID  string
 	UserID   string
 	UserName string
+	// DisplayName is the friendliest name for the sender — a Discord server
+	// nickname, else the account display name, else the username. Empty falls
+	// back to UserName. Shown to the agent so it can address the person.
+	DisplayName string
 	// Roles are the sender's server-role ids (Discord guild members). Used to
 	// gate a server binding by role. Empty in DMs and on platforms without roles.
 	Roles []string

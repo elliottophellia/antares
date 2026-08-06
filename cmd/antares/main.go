@@ -373,11 +373,13 @@ func (rt *runtimeServices) handleGatewayMessage(ctx context.Context, msg gateway
 
 	var reply strings.Builder
 	req := agent.Request{
-		SessionID: sessionID,
-		Message:   msg.Text,
-		Platform:  msg.Platform,
-		UserID:    msg.UserID,
-		ChannelID: msg.ChannelID,
+		SessionID:       sessionID,
+		Message:         msg.Text,
+		Platform:        msg.Platform,
+		UserID:          msg.UserID,
+		UserName:        msg.UserName,
+		UserDisplayName: msg.DisplayName,
+		ChannelID:       msg.ChannelID,
 	}
 	if binding != nil {
 		req.Role = binding.Role

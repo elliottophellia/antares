@@ -76,6 +76,20 @@ help them now — do not block them.
 		fmt.Fprintf(&b, "- Host: %s\n", host)
 	}
 	fmt.Fprintf(&b, "- Channel: %s\n", firstNonEmpty(req.Platform, "web"))
+	// Who the agent is talking to. On a chat platform the display name lets it
+	// address the person by their nickname (the earlier "I can't see your nick"
+	// answer was because this was never provided), and the id disambiguates two
+	// people with the same name in a busy channel.
+	if name := firstNonEmpty(req.UserDisplayName, req.UserName); name != "" {
+		if req.UserID != "" {
+			fmt.Fprintf(&b, "- Talking to: %s (%s user id %s)\n", name, firstNonEmpty(req.Platform, "user"), req.UserID)
+		} else {
+			fmt.Fprintf(&b, "- Talking to: %s\n", name)
+		}
+		if req.UserName != "" && !strings.EqualFold(req.UserName, name) {
+			fmt.Fprintf(&b, "- Their username: %s\n", req.UserName)
+		}
+	}
 	fmt.Fprintf(&b, "- Terminal backend: %s\n", cfg.Terminal.Backend)
 	if req.Platform == "discord" {
 		b.WriteString("- You are answering in Discord. Discord Markdown works: **bold**, *italics*, " +

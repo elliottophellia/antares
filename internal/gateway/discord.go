@@ -138,7 +138,10 @@ type gatewayPayload struct {
 type dcAuthor struct {
 	ID       string `json:"id"`
 	Username string `json:"username"`
-	Bot      bool   `json:"bot"`
+	// GlobalName is the account-wide display name (the new Discord name shown
+	// when there is no per-server nickname). Empty for legacy accounts.
+	GlobalName string `json:"global_name"`
+	Bot        bool   `json:"bot"`
 }
 
 type dcMessage struct {
@@ -154,9 +157,11 @@ type dcMessage struct {
 	ReferencedMessage *struct {
 		Author dcAuthor `json:"author"`
 	} `json:"referenced_message"`
-	// Member is present on guild messages and carries the sender's role ids.
+	// Member is present on guild messages and carries the sender's role ids and
+	// per-server nickname.
 	Member *struct {
 		Roles []string `json:"roles"`
+		Nick  string   `json:"nick"`
 	} `json:"member"`
 }
 
@@ -385,6 +390,7 @@ type dcInteraction struct {
 	Member *struct {
 		User  dcAuthor `json:"user"`
 		Roles []string `json:"roles"`
+		Nick  string   `json:"nick"`
 	} `json:"member"`
 	User *dcAuthor `json:"user"`
 	Data struct {
@@ -423,12 +429,16 @@ func (d *Discord) handleInteraction(ctx context.Context, it dcInteraction) {
 	}
 
 	var roles []string
+	nick := ""
 	if it.Member != nil {
 		roles = it.Member.Roles
+		nick = it.Member.Nick
 	}
 	msg := InboundMessage{
 		Platform: "discord", ChannelID: it.ChannelID, GuildID: it.GuildID,
-		UserID: author.ID, UserName: author.Username, Roles: roles, Text: line,
+		UserID: author.ID, UserName: author.Username,
+		DisplayName: discordDisplayName(nick, author.GlobalName, author.Username),
+		Roles:       roles, Text: line,
 		IsDirect: it.GuildID == "", MessageID: it.ID,
 	}
 
@@ -470,6 +480,18 @@ func (d *Discord) appID() string {
 	d.mu.RLock()
 	defer d.mu.RUnlock()
 	return d.selfID
+}
+
+// discordDisplayName picks the friendliest name for a sender: the per-server
+// nickname, else the account-wide display name, else the username. Trimmed;
+// returns "" only when all three are empty.
+func discordDisplayName(nick, globalName, username string) string {
+	for _, n := range []string{nick, globalName, username} {
+		if s := strings.TrimSpace(n); s != "" {
+			return s
+		}
+	}
+	return ""
 }
 
 // messageAddressesBot reports whether a guild message is aimed at the bot: it
@@ -545,12 +567,15 @@ func (d *Discord) handleMessage(ctx context.Context, m dcMessage) {
 	}
 
 	var roles []string
+	nick := ""
 	if m.Member != nil {
 		roles = m.Member.Roles
+		nick = m.Member.Nick
 	}
 	msg := InboundMessage{
 		Platform: "discord", ChannelID: m.ChannelID, GuildID: m.GuildID, UserID: m.Author.ID,
-		UserName: m.Author.Username, Roles: roles, Text: text, IsDirect: isDirect, MessageID: m.ID,
+		UserName: m.Author.Username, DisplayName: discordDisplayName(nick, m.Author.GlobalName, m.Author.Username),
+		Roles: roles, Text: text, IsDirect: isDirect, MessageID: m.ID,
 	}
 
 	// Pairing (and its code) is a DM-only handshake. In a server, access is

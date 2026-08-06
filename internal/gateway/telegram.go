@@ -205,7 +205,9 @@ func (t *Telegram) handleMessage(ctx context.Context, m tgMessage) {
 	msg := InboundMessage{
 		Platform: "telegram", ChannelID: chatID, UserID: userID,
 		UserName: firstNonEmpty(m.From.Username, m.From.FirstName),
-		Text:     text, IsDirect: isDirect,
+		// Telegram's first name is the friendliest way to address someone.
+		DisplayName: firstNonEmpty(m.From.FirstName, m.From.Username),
+		Text:        text, IsDirect: isDirect,
 		MessageID: strconv.FormatInt(m.MessageID, 10),
 	}
 

@@ -105,6 +105,12 @@ type Request struct {
 	Platform  string
 	UserID    string
 	ChannelID string
+	// UserName is the sender's platform handle (e.g. Discord username), and
+	// UserDisplayName the friendliest name to address them by (server nickname
+	// or display name). Both are shown to the model so it knows who it is
+	// talking to; empty on surfaces without a distinct user (the CLI).
+	UserName        string
+	UserDisplayName string
 	// Toolset overrides the configured toolset for this run.
 	Toolset string
 	// Model overrides the configured model for this run.

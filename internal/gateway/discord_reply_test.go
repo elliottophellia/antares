@@ -147,3 +147,26 @@ func TestReplyModeMostSpecificBindingWins(t *testing.T) {
 		t.Fatal("the channel-specific always binding should win over the guild-wide mention binding")
 	}
 }
+
+func TestDiscordDisplayName(t *testing.T) {
+	// Server nickname wins over everything.
+	if got := discordDisplayName("Nicky", "GlobalGuy", "user123"); got != "Nicky" {
+		t.Fatalf("nick should win, got %q", got)
+	}
+	// No nick → account display name.
+	if got := discordDisplayName("", "GlobalGuy", "user123"); got != "GlobalGuy" {
+		t.Fatalf("global_name should win over username, got %q", got)
+	}
+	// Neither → username.
+	if got := discordDisplayName("", "", "user123"); got != "user123" {
+		t.Fatalf("username fallback, got %q", got)
+	}
+	// Whitespace-only fields are skipped.
+	if got := discordDisplayName("  ", "  ", "user123"); got != "user123" {
+		t.Fatalf("blank fields must be skipped, got %q", got)
+	}
+	// All empty → empty.
+	if got := discordDisplayName("", "", ""); got != "" {
+		t.Fatalf("all-empty should be empty, got %q", got)
+	}
+}
