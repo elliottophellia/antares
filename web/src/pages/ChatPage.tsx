@@ -1934,7 +1934,10 @@ export function StreamingIndicator({
   )
 }
 
-function ReasoningBlock({ text }: { text: string }) {
+// Memoised for the same reason as ToolCallCard: on a message that grows to many
+// segments during one streaming turn, only the changed segment should re-render.
+// `text` is a primitive, so memo compares by value and finished blocks are free.
+const ReasoningBlock = memo(function ReasoningBlock({ text }: { text: string }) {
   const { t } = useI18n()
   const [open, setOpen] = useState(false)
   // A slim inline toggle rather than a boxed card: collapsed reasoning should
@@ -1956,7 +1959,17 @@ function ReasoningBlock({ text }: { text: string }) {
       ) : null}
     </div>
   )
-}
+})
+
+// A plain-text segment. Memoised so it is skipped when an unrelated segment on
+// the same message changes during streaming.
+const TextSegment = memo(function TextSegment({ text }: { text: string }) {
+  return (
+    <div className="text-[13px] leading-relaxed">
+      <Markdown content={text} />
+    </div>
+  )
+})
 
 // Memoised: a streaming turn mutates only the last message, but setMessages
 // hands a new array each token. Without memo every bubble in a long transcript
@@ -2087,11 +2100,7 @@ export const MessageBubble = memo(function MessageBubble({
               }
               return <ToolCallCard key={seg.call.id} call={seg.call} />
             }
-            return (
-              <div key={`t${i}`} className="text-[13px] leading-relaxed">
-                <Markdown content={seg.text} />
-              </div>
-            )
+            return <TextSegment key={`t${i}`} text={seg.text} />
           })
         : // Fallback for any message that predates the timeline model.
           <>

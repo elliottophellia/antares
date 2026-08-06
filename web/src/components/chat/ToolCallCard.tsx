@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { memo, useMemo, useState } from 'react'
 import {
   CaretDown,
   CaretRight,
@@ -125,7 +125,14 @@ function summarize(name: string, args: Record<string, unknown>): string {
   }
 }
 
-export function ToolCallCard({ call }: { call: ToolCallView }) {
+// Memoised on the call object. During a streaming turn every tool call lives on
+// ONE assistant message, so each new call replaces that message and re-renders
+// the whole bubble. Without this, all N already-finished cards re-render on
+// every one of the N calls — O(N²) work (and JSON.parse + summarize each time)
+// on a single message that a runaway loop can grow to hundreds of segments,
+// which is what pushed the tab to an out-of-memory crash. Finished calls keep a
+// stable `call` reference, so memo skips them and only the live card re-renders.
+export const ToolCallCard = memo(function ToolCallCard({ call }: { call: ToolCallView }) {
   const { t } = useI18n()
   const [open, setOpen] = useState(false)
 
@@ -315,7 +322,7 @@ export function ToolCallCard({ call }: { call: ToolCallView }) {
       ) : null}
     </div>
   )
-}
+})
 
 function prettyJSON(raw: string): string {
   try {
