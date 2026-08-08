@@ -92,6 +92,7 @@ help them now — do not block them.
 			// paste line numbers into old_string or expand tabs to spaces and
 			// the exact match fails repeatedly.
 			b.WriteString("- read_file returns lines as `NUMBER|CONTENT`. The `|` is metadata only. When calling edit_file, copy **only** the content after `|` into old_string/new_string — never the line number. Preserve tabs and spaces exactly (do not expand tabs to spaces). Line endings are matched automatically.\n")
+		b.WriteString("- edit_file needs an **exact, unique** old_string. Do not invent identifiers from memory (e.g. `entity` vs `attachEntity`) and do not reuse a short snippet that appears many times in the file. If the tool reports multiple occurrences with line numbers, re-read those lines and widen old_string with unique neighbours. Prefer edit_file over terminal sed/perl for source edits.\n")
 		}
 		if hasTool(active, "vps_upload") || hasTool(active, "vps_download") || hasTool(active, "vps_run") {
 			// Without this, models fall back to terminal rsync/scp and never use

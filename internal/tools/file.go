@@ -325,7 +325,7 @@ func (editFileTool) Execute(_ context.Context, in Input) Result {
 	case count == 0:
 		return Errorf("%s", editNotFoundMessage(args.Path, content, args.OldString))
 	case count > 1 && !args.ReplaceAll:
-		return Errorf("old_string appears %d times in %s; add more surrounding context or set replace_all", count, args.Path)
+		return Errorf("%s", editAmbiguousMessage(args.Path, content, oldString, count))
 	}
 
 	var updated string
@@ -463,8 +463,51 @@ func resolveEditMatch(content, oldIn, newIn string) (oldString, newString string
 	return oldIn, newIn, 0, ""
 }
 
+// editAmbiguousMessage lists where a non-unique old_string hits so the model
+// can widen context to a single site instead of retrying the same short snippet.
+func editAmbiguousMessage(path, content, oldString string, count int) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "old_string appears %d times in %s; add more surrounding context (unique lines above/below) or set replace_all.", count, path)
+	lines := occurrenceLines(content, oldString, 8)
+	if len(lines) > 0 {
+		b.WriteString(" Occurrences at line(s): ")
+		for i, ln := range lines {
+			if i > 0 {
+				b.WriteString(", ")
+			}
+			fmt.Fprintf(&b, "%d", ln)
+		}
+		b.WriteByte('.')
+	}
+	b.WriteString(" Re-read those lines and include enough unique neighbours in old_string so it matches exactly once.")
+	return b.String()
+}
+
+// occurrenceLines returns 1-based line numbers where needle starts, capped.
+func occurrenceLines(content, needle string, max int) []int {
+	if needle == "" || max <= 0 {
+		return nil
+	}
+	var out []int
+	searchFrom := 0
+	for len(out) < max {
+		i := strings.Index(content[searchFrom:], needle)
+		if i < 0 {
+			break
+		}
+		abs := searchFrom + i
+		// Line number = 1 + number of newlines before abs.
+		out = append(out, 1+strings.Count(content[:abs], "\n"))
+		searchFrom = abs + len(needle)
+		if searchFrom >= len(content) {
+			break
+		}
+	}
+	return out
+}
+
 // editNotFoundMessage explains why an edit missed, with actionable recovery
-// hints for the model (line prefixes, tabs vs spaces, re-read).
+// hints for the model (line prefixes, tabs vs spaces, re-read, near-miss lines).
 func editNotFoundMessage(path, content, oldString string) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "old_string not found in %s.", path)
@@ -488,8 +531,126 @@ func editNotFoundMessage(path, content, oldString string) string {
 		}
 	}
 
-	b.WriteString(" Read the file first and copy only the content after the NUMBER| separator; preserve tabs, spaces, and indentation exactly.")
+	if hint := nearMissHint(content, oldString); hint != "" {
+		b.WriteString(" ")
+		b.WriteString(hint)
+		return b.String()
+	}
+
+	b.WriteString(" This is usually a model copy error (stale text, wrong identifier, or invented context) — not a search/grep bug. Re-read the exact lines with read_file and copy only the content after NUMBER| into old_string; preserve tabs, spaces, and indentation exactly.")
 	return b.String()
+}
+
+// nearMissHint surfaces a few file lines that share a long token with old_string
+// so the model can see the real identifier (e.g. attachEntity vs entity).
+func nearMissHint(content, oldString string) string {
+	// Pick a distinctive fragment from the middle of old_string (≥12 chars).
+	frag := distinctiveFragment(oldString)
+	if frag == "" {
+		return ""
+	}
+	var hits []string
+	for i, line := range strings.Split(content, "\n") {
+		if strings.Contains(line, frag) {
+			hits = append(hits, fmt.Sprintf("%d|%s", i+1, truncateRunes(strings.TrimRight(line, "\r"), 160)))
+			if len(hits) >= 4 {
+				break
+			}
+		}
+	}
+	if len(hits) == 0 {
+		// Fall back: look for a long identifier-like token from old_string.
+		for _, tok := range identifierTokens(oldString) {
+			if len(tok) < 8 {
+				continue
+			}
+			for i, line := range strings.Split(content, "\n") {
+				if strings.Contains(line, tok) {
+					hits = append(hits, fmt.Sprintf("%d|%s", i+1, truncateRunes(strings.TrimRight(line, "\r"), 160)))
+					if len(hits) >= 4 {
+						break
+					}
+				}
+			}
+			if len(hits) > 0 {
+				break
+			}
+		}
+	}
+	if len(hits) == 0 {
+		return ""
+	}
+	return "Near-miss lines in the file (re-read these; do not invent identifiers):\n" + strings.Join(hits, "\n")
+}
+
+func distinctiveFragment(s string) string {
+	s = strings.TrimSpace(s)
+	s = strings.ReplaceAll(s, "\r\n", "\n")
+	// Prefer a middle slice of a long single line if present.
+	for _, line := range strings.Split(s, "\n") {
+		line = strings.TrimSpace(line)
+		if len(line) >= 24 {
+			// Skip common cast noise prefixes that appear everywhere.
+			start := 0
+			if i := strings.Index(line, "->"); i > 0 && i+2 < len(line) {
+				start = i
+			}
+			frag := line[start:]
+			if len(frag) > 48 {
+				frag = frag[:48]
+			}
+			if len(frag) >= 16 {
+				return frag
+			}
+		}
+	}
+	if len(s) >= 24 {
+		if len(s) > 48 {
+			return s[:48]
+		}
+		return s
+	}
+	return ""
+}
+
+func identifierTokens(s string) []string {
+	var out []string
+	start := -1
+	flush := func(i int) {
+		if start >= 0 && i-start >= 4 {
+			out = append(out, s[start:i])
+		}
+		start = -1
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		id := (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_'
+		if id {
+			if start < 0 {
+				start = i
+			}
+		} else {
+			flush(i)
+		}
+	}
+	flush(len(s))
+	// Prefer longer tokens first.
+	for i := 0; i < len(out); i++ {
+		for j := i + 1; j < len(out); j++ {
+			if len(out[j]) > len(out[i]) {
+				out[i], out[j] = out[j], out[i]
+			}
+		}
+	}
+	return out
+}
+
+func truncateRunes(s string, max int) string {
+	if max <= 0 || len(s) <= max {
+		return s
+	}
+	// Byte-safe enough for diagnostic ASCII-heavy code lines.
+	return s[:max] + "…"
 }
 
 // expandTabs replaces leading and embedded tabs with spaces at the given width

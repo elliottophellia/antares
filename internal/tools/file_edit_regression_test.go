@@ -142,6 +142,71 @@ func TestEditFileDiagnosesTabVsSpaceMismatch(t *testing.T) {
 	}
 }
 
+// When the same short snippet appears many times (common in C++ reimpl files),
+// the error must list line numbers so the model can widen context to one site.
+func TestEditFileAmbiguousListsLineNumbers(t *testing.T) {
+	workspace := t.TempDir()
+	path := filepath.Join(workspace, "CCam.cpp")
+	// Same body 3 times — like AllocateMatrix stubs that differ only by nearby locals.
+	line := "        reinterpret_cast<CEntity*>(entity)->AllocateMatrix();\n"
+	original := "void a() {\n" + line + "}\nvoid b() {\n" + line + "}\nvoid c() {\n" + line + "}\n"
+	if err := os.WriteFile(path, []byte(original), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	editArgs, _ := json.Marshal(map[string]any{
+		"path":       "CCam.cpp",
+		"old_string": strings.TrimSuffix(line, "\n"),
+		"new_string": "        reinterpret_cast<CEntity*>(attachEntity)->AllocateMatrix();",
+	})
+	edited := (editFileTool{}).Execute(context.Background(), Input{Args: editArgs, Workspace: workspace})
+	if !edited.IsError {
+		t.Fatal("expected ambiguous old_string failure")
+	}
+	if !strings.Contains(edited.Content, "appears 3 times") {
+		t.Fatalf("want appears 3 times, got: %s", edited.Content)
+	}
+	if !strings.Contains(edited.Content, "Occurrences at line(s):") {
+		t.Fatalf("want line numbers in error, got: %s", edited.Content)
+	}
+	// Lines 2, 5, 8 in the synthetic file.
+	for _, want := range []string{"2", "5", "8"} {
+		if !strings.Contains(edited.Content, want) {
+			t.Fatalf("error missing line %s: %s", want, edited.Content)
+		}
+	}
+}
+
+// Wrong identifier in old_string (entity vs attachEntity) must surface near-miss
+// lines from the real file so the model re-reads instead of inventing.
+func TestEditFileNotFoundNearMissShowsRealLine(t *testing.T) {
+	workspace := t.TempDir()
+	path := filepath.Join(workspace, "CCam.cpp")
+	original := "void Process() {\n" +
+		"    auto* attachEntity = *reinterpret_cast<uint8_t**>(raw + 504);\n" +
+		"    if (attachEntity == nullptr) return;\n" +
+		"    reinterpret_cast<CEntity*>(attachEntity)->AllocateMatrix();\n" +
+		"}\n"
+	if err := os.WriteFile(path, []byte(original), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// Model still thinks the local is `entity` (stale / wrong site).
+	editArgs, _ := json.Marshal(map[string]any{
+		"path":       "CCam.cpp",
+		"old_string": "    reinterpret_cast<CEntity*>(entity)->AllocateMatrix();",
+		"new_string": "    reinterpret_cast<CEntity*>(attachEntity)->AllocateMatrix();",
+	})
+	edited := (editFileTool{}).Execute(context.Background(), Input{Args: editArgs, Workspace: workspace})
+	if !edited.IsError {
+		t.Fatal("expected not-found")
+	}
+	if !strings.Contains(edited.Content, "Near-miss") && !strings.Contains(edited.Content, "AllocateMatrix") {
+		t.Fatalf("want near-miss hint with real file content, got: %s", edited.Content)
+	}
+	if !strings.Contains(edited.Content, "attachEntity") {
+		t.Fatalf("near-miss should reveal attachEntity, got: %s", edited.Content)
+	}
+}
+
 func TestStripReadFileLinePrefixes(t *testing.T) {
 	in := "10|\tfoo()\n11|\tbar()\n12|}"
 	got, ok := stripReadFileLinePrefixes(in)
