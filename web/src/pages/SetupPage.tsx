@@ -575,7 +575,7 @@ export default function SetupPage() {
             </p>
           </div>
           <div className="flex flex-wrap justify-center gap-2">
-            <Button onClick={() => navigate('/')} className="gap-1.5">
+            <Button onClick={() => navigate('/', { state: { fresh: true } })} className="gap-1.5">
               {t('setup.startChatting')}
               <ArrowRight className="size-4" />
             </Button>

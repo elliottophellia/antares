@@ -146,7 +146,7 @@ export default function SessionsPage() {
           <span className="hidden sm:inline">{t('sessions.deleteAll')}</span>
         </Button>
       ) : null}
-      <Button size="sm" onClick={() => navigate('/')} className="gap-1.5">
+      <Button size="sm" onClick={() => navigate('/', { state: { fresh: true } })} className="gap-1.5">
         <ChatCircleDots className="size-4" />
         {t('common.new')}
       </Button>
@@ -215,7 +215,7 @@ export default function SessionsPage() {
           title={tab === 'project' ? t('sessions.noneProject') : t('sessions.none')}
           description={tab === 'project' ? t('sessions.noneProjectDesc') : t('sessions.noneDesc')}
           action={
-            <Button size="sm" onClick={() => navigate('/')}>
+            <Button size="sm" onClick={() => navigate('/', { state: { fresh: true } })}>
               {t('sessions.startChat')}
             </Button>
           }
