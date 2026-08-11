@@ -65,12 +65,12 @@ type Config struct {
 // and autopilot toggle. Secrets (IMAP password, social account passwords) are
 // NOT stored here; they live encrypted in SQLite.
 type Social struct {
-	Enabled         bool   `yaml:"enabled" json:"enabled"`
-	IMAPHost        string `yaml:"imap_host" json:"imap_host"`
-	IMAPPort        int    `yaml:"imap_port" json:"imap_port"`
-	IMAPUsername    string `yaml:"imap_username" json:"imap_username"`
-	BrowserEnabled  bool   `yaml:"browser_enabled" json:"browser_enabled"`
-	AutopilotEnabled bool  `yaml:"autopilot_enabled" json:"autopilot_enabled"`
+	Enabled          bool   `yaml:"enabled" json:"enabled"`
+	IMAPHost         string `yaml:"imap_host" json:"imap_host"`
+	IMAPPort         int    `yaml:"imap_port" json:"imap_port"`
+	IMAPUsername     string `yaml:"imap_username" json:"imap_username"`
+	BrowserEnabled   bool   `yaml:"browser_enabled" json:"browser_enabled"`
+	AutopilotEnabled bool   `yaml:"autopilot_enabled" json:"autopilot_enabled"`
 }
 
 // Model selects which LLM answers by default.
@@ -677,10 +677,10 @@ type Gateway struct {
 // naming only the guild, which beats a platform-wide rule.
 type Binding struct {
 	ID        string `yaml:"id" json:"id"`
-	Platform  string `yaml:"platform" json:"platform"`   // discord|telegram
-	GuildID   string `yaml:"guild_id" json:"guild_id"`   // discord server; empty = any
+	Platform  string `yaml:"platform" json:"platform"`     // discord|telegram
+	GuildID   string `yaml:"guild_id" json:"guild_id"`     // discord server; empty = any
 	ChannelID string `yaml:"channel_id" json:"channel_id"` // channel/chat id; empty = any in guild
-	Label     string `yaml:"label" json:"label"`         // human label for the UI
+	Label     string `yaml:"label" json:"label"`           // human label for the UI
 	Enabled   bool   `yaml:"enabled" json:"enabled"`
 
 	// Policy applied when this binding matches.
@@ -693,7 +693,7 @@ type Binding struct {
 	// NO ONE in the server is served by this binding (strict — a server binding
 	// with no roles is off). Ignored for DMs and Telegram.
 	AllowedRoles []string `yaml:"allowed_roles" json:"allowed_roles"`
-	ReplyMode    string   `yaml:"reply_mode" json:"reply_mode"` // mention|always (groups only)
+	ReplyMode    string   `yaml:"reply_mode" json:"reply_mode"`       // mention|always (groups only)
 	PromptPrefix string   `yaml:"prompt_prefix" json:"prompt_prefix"` // appended to the system prompt
 	// RelevanceFilter, when set, gates messages: a cheap model call decides
 	// whether the message fits the criteria before the full agent runs. Empty
@@ -805,10 +805,11 @@ type CodeExecution struct {
 
 // Guardrails detects and stops runaway tool loops.
 type Guardrails struct {
-	WarningsEnabled bool `yaml:"warnings_enabled" json:"warnings_enabled"`
-	HardStopEnabled bool `yaml:"hard_stop_enabled" json:"hard_stop_enabled"`
-	WarnAfter       int  `yaml:"warn_after" json:"warn_after"`
-	HardStopAfter   int  `yaml:"hard_stop_after" json:"hard_stop_after"`
+	WarningsEnabled      bool `yaml:"warnings_enabled" json:"warnings_enabled"`
+	HardStopEnabled      bool `yaml:"hard_stop_enabled" json:"hard_stop_enabled"`
+	WarnAfter            int  `yaml:"warn_after" json:"warn_after"`
+	HardStopAfter        int  `yaml:"hard_stop_after" json:"hard_stop_after"`
+	AbsoluteMaxToolCalls int  `yaml:"absolute_max_tool_calls" json:"absolute_max_tool_calls"`
 }
 
 // SessionReset controls automatic session rotation.
@@ -825,9 +826,9 @@ type Streaming struct {
 
 // Display holds UI preferences shared by the dashboard.
 type Display struct {
-	Compact          bool   `yaml:"compact" json:"compact"`
-	ToolProgress     bool   `yaml:"tool_progress" json:"tool_progress"`
-	ShowReasoning    bool   `yaml:"show_reasoning" json:"show_reasoning"`
+	Compact       bool `yaml:"compact" json:"compact"`
+	ToolProgress  bool `yaml:"tool_progress" json:"tool_progress"`
+	ShowReasoning bool `yaml:"show_reasoning" json:"show_reasoning"`
 	// MaxLiveReasoningChars caps how much of a streaming reasoning trace the
 	// dashboard keeps in React state (trailing window). High-effort models can
 	// emit hundreds of KB per turn; unbounded string growth freezes the tab.

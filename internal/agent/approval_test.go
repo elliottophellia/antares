@@ -82,10 +82,15 @@ func TestPromptModeWaitsForADecision(t *testing.T) {
 	a := agentWithMode("prompt")
 	call := llm.ToolCall{ID: "1", Name: "write_file", Arguments: `{"path":"a"}`}
 
-	var requestID string
+	// The approval id crosses goroutines via a channel, so the test is race-free
+	// under -race.
+	idCh := make(chan string, 1)
 	emit := func(e Event) error {
 		if e.Type == EventApproval {
-			requestID = e.ID
+			select {
+			case idCh <- e.ID:
+			default:
+			}
 		}
 		return nil
 	}
@@ -96,14 +101,10 @@ func TestPromptModeWaitsForADecision(t *testing.T) {
 	}()
 
 	// Wait for the request to be registered, then approve it.
-	deadline := time.Now().Add(3 * time.Second)
-	for time.Now().Before(deadline) {
-		if len(a.PendingApprovals()) > 0 {
-			break
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	if requestID == "" {
+	var requestID string
+	select {
+	case requestID = <-idCh:
+	case <-time.After(3 * time.Second):
 		t.Fatal("no approval was requested")
 	}
 	if !a.ResolveApproval(requestID, true) {
@@ -118,10 +119,15 @@ func TestPromptModeRefusalIsToldToTheModel(t *testing.T) {
 	a := agentWithMode("prompt")
 	call := llm.ToolCall{ID: "1", Name: "terminal", Arguments: `{"command":"rm -rf ~"}`}
 
-	var requestID string
+	// The approval id is handed across goroutines via a channel rather than a
+	// bare variable, so the test is race-free under -race.
+	idCh := make(chan string, 1)
 	emit := func(e Event) error {
 		if e.Type == EventApproval {
-			requestID = e.ID
+			select {
+			case idCh <- e.ID:
+			default:
+			}
 		}
 		return nil
 	}
@@ -130,9 +136,11 @@ func TestPromptModeRefusalIsToldToTheModel(t *testing.T) {
 		done <- a.checkApproval(context.Background(), call, writingTool{"terminal"}, "s", emit)
 	}()
 
-	deadline := time.Now().Add(3 * time.Second)
-	for time.Now().Before(deadline) && requestID == "" {
-		time.Sleep(10 * time.Millisecond)
+	var requestID string
+	select {
+	case requestID = <-idCh:
+	case <-time.After(3 * time.Second):
+		t.Fatal("no approval request was emitted")
 	}
 	a.ResolveApproval(requestID, false)
 

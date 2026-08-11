@@ -13,6 +13,7 @@ import (
 	"log/slog"
 	"os"
 	"os/exec"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"time"
@@ -390,16 +391,18 @@ func (a *Agent) Run(ctx context.Context, req Request, emit Emit) (*Result, error
 	}
 
 	var (
-		total      llm.Usage
-		lastReply  string
-		turn       int
-		toolCalls  int
-		verified   int
-		judged     int
-		usedTodo   bool          // the model kept a task list this run
-		todoNudges int           // times we pushed it to finish open tasks
-		grContinue int           // times the tool-call guardrail was extended for open tasks
-		failures   []toolFailure // errored tool calls, for post-turn learning
+		total              llm.Usage
+		lastReply          string
+		turn               int
+		toolCalls          int
+		totalToolCalls     int // all tool calls across grContinue resets, never reset
+		verified           int
+		judged             int
+		usedTodo           bool          // the model kept a task list this run
+		todoNudges         int           // times we pushed it to finish open tasks
+		grContinue         int           // times the tool-call guardrail was extended for open tasks
+		emptyResponseCount int           // consecutive empty model responses, capped to prevent loops
+		failures           []toolFailure // errored tool calls, for post-turn learning
 	)
 	repeats := newRepeatTracker(cfg.Agent.RepeatLimit)
 	todoOpenPrev := -1 // open task count at the last nudge, to detect no progress
@@ -459,6 +462,10 @@ func (a *Agent) Run(ctx context.Context, req Request, emit Emit) (*Result, error
 				_ = emit(Event{Type: EventNotice, Message: "interrupted"})
 				break
 			}
+			if errors.Is(err, context.DeadlineExceeded) {
+				_ = emit(Event{Type: EventNotice, Message: "timed out"})
+				break
+			}
 			// Run owns the terminal events so callers never double-report.
 			_ = emit(Event{Type: EventError, Err: err.Error()})
 			_ = emit(Event{Type: EventDone})
@@ -494,6 +501,7 @@ func (a *Agent) Run(ctx context.Context, req Request, emit Emit) (*Result, error
 		}
 		if resp.Content != "" {
 			lastReply = resp.Content
+			emptyResponseCount = 0
 		}
 
 		if len(resp.ToolCalls) == 0 {
@@ -525,6 +533,18 @@ func (a *Agent) Run(ctx context.Context, req Request, emit Emit) (*Result, error
 					continue
 				}
 			}
+			// The model returned no text and no tool calls. Rather than silently
+			// stopping, surface a notice and nudge it to try again. A hard cap
+			// prevents an infinite empty-response loop.
+			if resp.Content == "" && emptyResponseCount < 3 {
+				emptyResponseCount++
+				_ = emit(Event{Type: EventNotice, Message: "model returned an empty response — retrying"})
+				history = append(history, llm.Message{
+					Role:    llm.RoleUser,
+					Content: "Your previous response was empty. Please provide a response or use a tool to make progress.",
+				})
+				continue
+			}
 			break
 		}
 
@@ -534,6 +554,14 @@ func (a *Agent) Run(ctx context.Context, req Request, emit Emit) (*Result, error
 			}
 		}
 		toolCalls += len(resp.ToolCalls)
+		totalToolCalls += len(resp.ToolCalls)
+		if g := a.cfg.Guardrails; g.HardStopEnabled && g.AbsoluteMaxToolCalls > 0 && totalToolCalls >= g.AbsoluteMaxToolCalls {
+			_ = emit(Event{Type: EventNotice, Message: fmt.Sprintf(
+				"absolute tool-call ceiling reached (%d calls) — stopping", totalToolCalls)})
+			lastReply = fmt.Sprintf("I reached the absolute tool-call limit of %d and stopped. %s",
+				g.AbsoluteMaxToolCalls, lastReply)
+			break
+		}
 		if a.guardrailTripped(toolCalls, emit) {
 			// The tool-call budget is a loop backstop, not a task deadline. When
 			// there is still work on the todo list, extend it instead of stopping
@@ -881,6 +909,30 @@ func (a *Agent) executeTools(
 		_ = safeEmit(Event{Type: EventToolResult, ID: call.ID, Name: call.Name, Content: content, IsError: res.IsError})
 	}
 
+	// recoverRun wraps run() with panic recovery so a panicking tool cannot
+	// deadlock wg.Wait() (parallel) or kill the turn without a user-visible
+	// error (serial). The panic is logged, surfaced as an error tool result,
+	// and the model gets a chance to recover.
+	recoverRun := func(i int, call llm.ToolCall) {
+		defer func() {
+			if r := recover(); r != nil {
+				slog.Error("tool panicked", "tool", call.Name, "panic", r, "stack", string(debug.Stack()))
+				outcomes[i] = toolOutcome{
+					message: llm.Message{
+						Role: llm.RoleTool, ToolCallID: call.ID, Name: call.Name,
+						Content: fmt.Sprintf("Tool %q panicked: %v", call.Name, r),
+					},
+					isError: true,
+				}
+				_ = safeEmit(Event{
+					Type: EventToolResult, ID: call.ID, Name: call.Name,
+					Content: outcomes[i].message.Content, IsError: true,
+				})
+			}
+		}()
+		run(i, call)
+	}
+
 	parallel := a.cfg.Model.ParallelToolCall && len(calls) > 1
 	if parallel {
 		var wg sync.WaitGroup
@@ -891,14 +943,14 @@ func (a *Agent) executeTools(
 				defer wg.Done()
 				sem <- struct{}{}
 				defer func() { <-sem }()
-				run(i, call)
+				recoverRun(i, call)
 			}(i, call)
 		}
 		wg.Wait()
 		return outcomes
 	}
 	for i, call := range calls {
-		run(i, call)
+		recoverRun(i, call)
 	}
 	return outcomes
 }

@@ -71,6 +71,45 @@ func TestStdioReportsToolErrors(t *testing.T) {
 	}
 }
 
+// TestStdioSelfClosesWhenChildWedged verifies that a permanently unresponsive
+// child does not force every future call to wait the full timeout: after
+// maxConsecutiveTimeouts back-to-back ctx timeouts the transport closes itself,
+// so the next call fails fast with a connection error rather than hanging.
+func TestStdioSelfClosesWhenChildWedged(t *testing.T) {
+	client, err := Connect(context.Background(), "fake", ServerConfig{
+		Transport: "stdio",
+		Command:   os.Args[0],
+		Args:      []string{"-test.run=TestHelperServer"},
+		Env:       map[string]string{"ANTARES_MCP_HELPER": "1"},
+	})
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	defer client.Close()
+
+	// Drive maxConsecutiveTimeouts calls that each time out on a short context.
+	for i := 0; i < maxConsecutiveTimeouts; i++ {
+		ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
+		_, err := client.Call(ctx, "hang", nil)
+		cancel()
+		if err == nil {
+			t.Fatalf("call %d: expected a timeout error, got nil", i)
+		}
+	}
+
+	// The transport should now be closed; a further call must fail fast rather
+	// than block for its whole timeout.
+	start := time.Now()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if _, err := client.Call(ctx, "hang", nil); err == nil {
+		t.Fatal("expected the wedged transport to fail the call")
+	}
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Fatalf("call did not fail fast after self-close: took %s", elapsed)
+	}
+}
+
 func TestEmptyToolListEncodesAsArray(t *testing.T) {
 	client := &Client{}
 	got := client.Tools()
@@ -217,6 +256,12 @@ func TestHelperServer(t *testing.T) {
 				Arguments map[string]any `json:"arguments"`
 			}
 			_ = json.Unmarshal(req.Params, &p)
+			if p.Name == "hang" {
+				// Simulate a wedged backend: never reply. The caller's context
+				// timeout must return, and after enough consecutive timeouts the
+				// transport self-closes.
+				continue
+			}
 			if p.Name != "echo" {
 				reply(req.ID, map[string]any{
 					"isError": true,
