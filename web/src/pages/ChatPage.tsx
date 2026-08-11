@@ -374,6 +374,13 @@ export default function ChatPage() {
     if (r) localStorage.setItem('antares:reasoning', r)
     else localStorage.removeItem('antares:reasoning')
   }, [])
+  // Per-chat model override, chosen via the picker in the composer. Kept in a
+  // ref so the stream request closure always reads the latest selection.
+  const [activeModel, setActiveModel] = useState('')
+  const activeModelRef = useRef('')
+  useEffect(() => {
+    activeModelRef.current = activeModel
+  }, [activeModel])
   // Project session: the folder this chat is bound to. Chosen on a NEW chat and
   // sent with the first message; once the session exists it is fixed (locked).
   const [projectDir, setProjectDir] = useState('')
@@ -1086,6 +1093,9 @@ export default function ChatPage() {
         message,
         images: attached,
         role,
+        // Per-chat model override; omitted when unset so the server falls
+        // back to the configured default.
+        ...(activeModelRef.current ? { model: activeModelRef.current } : {}),
         // Per-turn reasoning override; omitted when unset so the server falls
         // back to the configured default.
         ...(reasoning ? { reasoning_effort: reasoning } : {}),
@@ -1436,7 +1446,7 @@ export default function ChatPage() {
         roleSlot={
           <div className="flex min-w-0 items-center gap-1.5">
             <RolePicker value={role} onChange={pickRole} compact />
-            <ModelPicker />
+            <ModelPicker onModelChange={setActiveModel} />
             <ReasoningPicker value={reasoning} onChange={pickReasoning} compact />
             <ProjectPicker
               value={projectDir}

@@ -69,16 +69,19 @@ func Get() *Config {
 	return c
 }
 
-// Save writes the config to the active profile file and refreshes the cache.
-func Save(cfg *Config) error {
+func SaveAt(path string, cfg *Config) error {
 	normalize(cfg)
-	if err := writeFile(ConfigFile(), cfg); err != nil {
+	if err := writeFile(path, cfg); err != nil {
 		return err
 	}
 	mu.Lock()
 	loaded = cfg
 	mu.Unlock()
 	return nil
+}
+
+func Save(cfg *Config) error {
+	return SaveAt(ConfigFile(), cfg)
 }
 
 // Raw returns the on-disk YAML text for the active profile.
