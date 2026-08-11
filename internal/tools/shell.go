@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"sync"
@@ -61,6 +62,16 @@ type shellSession struct {
 	lastUsed time.Time
 	cwd      string
 	dead     atomic.Bool
+	ps       bool // true when the session shell speaks PowerShell
+}
+
+// isPowerShellShell reports whether a configured shell is PowerShell (any
+// edition). Dialect detection is by binary base name, not GOOS, so a user who
+// points terminal.shell at bash.exe on Windows still gets the POSIX protocol.
+func isPowerShellShell(shell string) bool {
+	base := strings.ToLower(filepath.Base(shell))
+	base = strings.TrimSuffix(base, ".exe")
+	return base == "powershell" || base == "pwsh"
 }
 
 // lockedBuffer collects interleaved stdout/stderr safely.
@@ -120,7 +131,14 @@ func defaultShell(configured string) (string, []string) {
 		return configured, nil
 	}
 	if runtime.GOOS == "windows" {
-		return "powershell.exe", []string{"-NoLogo", "-NoProfile", "-Command", "-"}
+		// Interactive console host. `-Command -` is unusable for a persistent
+		// session: it reads all of stdin as one script and executes only at
+		// EOF, which never happens on the long-lived pipe, so every call
+		// would wait out its full timeout. The interactive host executes each
+		// complete line as it arrives, which the PowerShell branch of run()
+		// depends on. -NonInteractive makes confirmations fail instead of
+		// prompting on stdin (a prompt would wedge the session).
+		return "powershell.exe", []string{"-NoLogo", "-NoProfile", "-NonInteractive"}
 	}
 	// The persistent-shell protocol below emits POSIX syntax (`$?`, `printf`).
 	// Do not inherit an arbitrary interactive shell such as fish: fish parses
@@ -208,6 +226,7 @@ func (m *ShellManager) session(id, workspace string) (*shellSession, error) {
 	s := &shellSession{
 		cmd: cmd, stdin: stdin, out: out, done: make(chan struct{}),
 		lastUsed: time.Now(), cwd: workspace,
+		ps: isPowerShellShell(shell),
 	}
 	go func() {
 		_ = cmd.Wait()
@@ -284,15 +303,33 @@ func (m *ShellManager) ReapIdle(lifetime time.Duration) {
 	}
 }
 
+// killLocked marks the session dead and kills its shell. The caller must hold
+// s.mu. Closing stdin and killing the process makes the session unusable, so
+// the next session() call starts a fresh shell. Used by terminate() and by
+// run() when it abandons a command (timeout, cancellation): leaving the shell
+// alive with a half-run command on its stdin pipe would make every subsequent
+// call queue behind it and compound timeouts.
+func (s *shellSession) killLocked() {
+	if s.cmd != nil && s.cmd.Process != nil {
+		_ = s.stdin.Close()
+		_ = s.cmd.Process.Kill()
+		// Process.Kill returns before the OS has released the process's
+		// handles (including its working directory), which races callers that
+		// remove the workspace right after CloseAll. Wait for the Wait
+		// goroutine so resources are actually freed; cap the wait so a wedged
+		// process cannot stall the session-recycle path.
+		select {
+		case <-s.done:
+		case <-time.After(2 * time.Second):
+		}
+	}
+	s.dead.Store(true)
+}
+
 func (s *shellSession) terminate() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.cmd == nil || s.cmd.Process == nil {
-		return
-	}
-	_ = s.stdin.Close()
-	_ = s.cmd.Process.Kill()
-	s.dead.Store(true)
+	s.killLocked()
 }
 
 // sentinel marks the end of one command's output and carries its exit code.
@@ -321,7 +358,48 @@ func (s *shellSession) run(ctx context.Context, command string, timeout time.Dur
 	// timeout even though the remote work already finished. A brace group with
 	// `</dev/null` detaches the command without a subshell, so `cd` and
 	// `export` still persist across calls.
-	script := "set +e\n{\n" + command + "\n} </dev/null\nprintf '\\n" + marker + "%s\\n' \"$?\"\n"
+	//
+	// PowerShell (the Windows default shell) cannot parse any of that syntax:
+	// `set +e`, `{ … } </dev/null` and `printf` are all errors there, so the
+	// user command never runs, no sentinel is ever printed, and every terminal
+	// call waits out the full timeout. The Windows branch emits a
+	// PowerShell-native script instead, with these protocol invariants (all
+	// verified empirically against PS 5.1):
+	//
+	//  1. The interactive console host only completes a statement when it is
+	//     parsed complete, so every protocol line is a single-line statement.
+	//  2. The command is embedded in single-quoted `$c` (embedded single quotes
+	//     doubled) and executed with Invoke-Expression. The `$null | <command>`
+	//     detach used for everything before broke cmdlets with
+	//     ParameterBindingException and rejected bare expressions with a parse
+	//     error; only natives tolerate it. Natives still need it to detach
+	//     stdin, so the first token is classified with Get-Command.
+	//  3. Get-Command needs -ErrorAction Ignore: SilentlyContinue still appends
+	//     the miss to $Error and poisons the exit-code delta below.
+	//  4. Exit status: native codes ride in $LASTEXITCODE; cmdlet/expression
+	//     failures are detected by the $Error.Count delta (`$?` is clobbered by
+	//     the wrapper and iex swallows non-terminating failures). `$ok` defaults
+	//     to false so a terminating error — e.g. a command that sets
+	//     ErrorActionPreference='Stop' and then fails, aborting the line before
+	//     `$ok` is computed — still maps to exit code 1.
+	//  5. The sentinel is assembled from quoted fragments so the console's echo
+	//     never contains the full marker verbatim; `function global:prompt
+	//     { '' }` only shrinks the prompt (the `PS>` echo prefix is hardcoded
+	//     and stripped by sanitizePS).
+	var script string
+	if s.ps {
+		nano := marker[len(sentinelPrefix) : len(marker)-2] // bare digits, no trailing __
+		flat := flattenPSCommand(command)
+		// Embed the flattened command in a single-quoted PowerShell string;
+		// doubling embedded single quotes is the PS escape for a literal quote.
+		quoted := strings.ReplaceAll(flat, "'", "''")
+		script = "$ErrorActionPreference = 'Continue'; $LASTEXITCODE = $null; $global:__antares_code = $null; function global:prompt { '' }\n" +
+			"$c='" + quoted + "'; $ok=$false; $ec=$Error.Count; if ((Get-Command ($c -split ' ')[0] -ErrorAction Ignore).CommandType -eq 'Application') { iex ('$null | ' + $c) } else { iex $c }; if ($Error.Count -eq $ec) { $ok=$true }\n" +
+			"if ($LASTEXITCODE -ne $null) { $global:__antares_code = $LASTEXITCODE } elseif (-not $ok) { $global:__antares_code = 1 } else { $global:__antares_code = 0 }\n" +
+			"Write-Output (\"`n\" + '" + sentinelPrefix + "' + '" + nano + "__' + $global:__antares_code)\n"
+	} else {
+		script = "set +e\n{\n" + command + "\n} </dev/null\nprintf '\\n" + marker + "%s\\n' \"$?\"\n"
+	}
 	if _, err := io.WriteString(s.stdin, script); err != nil {
 		s.dead.Store(true)
 		return "", -1, fmt.Errorf("write to shell: %w", err)
@@ -335,6 +413,9 @@ func (s *shellSession) run(ctx context.Context, command string, timeout time.Dur
 	for {
 		select {
 		case <-ctx.Done():
+			// The command's fate is unknowable and it may still hold the shell
+			// busy; recycle so the next call starts fresh instead of queuing.
+			s.killLocked()
 			return s.finish(marker), -1, ctx.Err()
 		case <-s.done:
 			// The shell can exit before printing the sentinel (for example when a
@@ -348,6 +429,9 @@ func (s *shellSession) run(ctx context.Context, command string, timeout time.Dur
 				if idx := strings.Index(chunk, marker); idx >= 0 {
 					chunk = chunk[:idx]
 				}
+				if s.ps {
+					chunk = sanitizePS(chunk)
+				}
 				if chunk != "" {
 					onChunk(chunk)
 				}
@@ -359,11 +443,19 @@ func (s *shellSession) run(ctx context.Context, command string, timeout time.Dur
 					code := 0
 					fmt.Sscanf(strings.TrimSpace(strings.SplitN(tail, "\n", 2)[0]), "%d", &code)
 					s.out.drain()
-					return strings.TrimRight(buf[:idx], "\n"), code, nil
+					out := buf[:idx]
+					if s.ps {
+						out = sanitizePS(out)
+					}
+					return strings.TrimRight(out, "\n"), code, nil
 				}
 			}
 			if time.Now().After(deadline) {
 				out := s.finish(marker)
+				// Same recycle as ctx.Done: the timed-out command is still
+				// occupying the persistent shell and would block the next call
+				// on the same stdin pipe for another full timeout.
+				s.killLocked()
 				return out, -1, fmt.Errorf("command timed out after %s", timeout)
 			}
 		}
@@ -376,7 +468,54 @@ func (s *shellSession) finish(marker string) string {
 	if idx := strings.Index(buf, marker); idx >= 0 {
 		buf = buf[:idx]
 	}
+	if s.ps {
+		buf = sanitizePS(buf)
+	}
 	return strings.TrimRight(buf, "\n")
+}
+
+// flattenPSCommand joins a possibly multi-line command into a single line for
+// the interactive PowerShell session. Newlines become statement separators;
+// the `; ;` runs left by blank lines are collapsed because PowerShell rejects
+// empty statements. Multi-line quoted strings change meaning under flattening;
+// agent commands are single-line in practice, and the alternative (letting the
+// console host parse multi-line constructs) hangs the session on continuation
+// prompts.
+func flattenPSCommand(command string) string {
+	flat := strings.ReplaceAll(strings.ReplaceAll(command, "\r\n", "\n"), "\n", "; ")
+	flat = strings.ReplaceAll(flat, "\r", "; ")
+	for {
+		next := strings.ReplaceAll(flat, "; ;", ";")
+		if next == flat {
+			break
+		}
+		flat = next
+	}
+	flat = strings.TrimSpace(flat)
+	if flat == "" {
+		flat = "Write-Output ''"
+	}
+	return flat
+}
+
+// sanitizePS strips the interactive console's prompt and echoed-input lines
+// from captured output. PowerShell echoes every script line it reads (prefixed
+// `PS>` or `>>` for continuations); without this filter every terminal result
+// would be polluted with the protocol that produced it. CRLF is normalized so
+// parsing and display match the POSIX path.
+func sanitizePS(s string) string {
+	s = strings.ReplaceAll(s, "\r\n", "\n")
+	s = strings.ReplaceAll(s, "\r", "\n")
+	lines := strings.Split(s, "\n")
+	kept := make([]string, 0, len(lines))
+	for _, ln := range lines {
+		t := strings.TrimLeft(ln, " \t")
+		if strings.HasPrefix(t, "PS>") || strings.HasPrefix(t, "PS ") || strings.HasPrefix(t, ">>") {
+			continue
+		}
+		kept = append(kept, ln)
+	}
+	return strings.Join(kept, "\n")
 }
 
 // ---- terminal tool ----------------------------------------------------------

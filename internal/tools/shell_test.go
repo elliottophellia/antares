@@ -267,3 +267,241 @@ func TestPersistentShellClosesInheritedStdinForDaemonForkingClients(t *testing.T
 		t.Fatalf("took %s, want completion well under 1s (daemon must not hold shell stdin)", elapsed)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Windows: persistent PowerShell session (interactive console host protocol).
+// ---------------------------------------------------------------------------
+
+func newPSSession(t *testing.T) *shellSession {
+	t.Helper()
+	m := NewShellManager(config.Terminal{})
+	// TempDir must be created before the CloseAll cleanup is registered:
+	// cleanups run LIFO, so the shell process is killed before TempDir's
+	// RemoveAll runs, otherwise powershell still holding the CWD makes
+	// RemoveAll fail and the test fails on cleanup.
+	dir := t.TempDir()
+	t.Cleanup(m.CloseAll)
+	sess, err := m.session("ps-test-session", dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !sess.ps {
+		t.Fatalf("session shell is not PowerShell, got ps=%v", sess.ps)
+	}
+	return sess
+}
+
+func TestPSBasicEchoCompletesViaSentinel(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("PowerShell session protocol is Windows-only")
+	}
+	sess := newPSSession(t)
+	start := time.Now()
+	out, code, err := sess.run(context.Background(), "Write-Output HELLO", 5*time.Second, nil)
+	if err != nil {
+		t.Fatalf("command did not complete via sentinel: %v", err)
+	}
+	if code != 0 || !strings.Contains(out, "HELLO") {
+		t.Fatalf("command result = (%q, %d), want HELLO + 0", out, code)
+	}
+	if elapsed := time.Since(start); elapsed > 3*time.Second {
+		t.Fatalf("basic command took %s, want prompt completion", elapsed)
+	}
+	if strings.Contains(out, "PS>") || strings.Contains(out, "PS ") {
+		t.Fatalf("output polluted with console prompts: %q", out)
+	}
+}
+
+func TestPSNativeExitCodePropagates(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("PowerShell session protocol is Windows-only")
+	}
+	sess := newPSSession(t)
+	_, code, err := sess.run(context.Background(), "cmd /c exit 7", 5*time.Second, nil)
+	if err != nil {
+		t.Fatalf("native command failed: %v", err)
+	}
+	if code != 7 {
+		t.Fatalf("native exit code = %d, want 7", code)
+	}
+}
+
+func TestPSCmdletFailureMapsToOne(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("PowerShell session protocol is Windows-only")
+	}
+	sess := newPSSession(t)
+	_, code, err := sess.run(context.Background(), "dir C:\\nope-not-real-zzz", 5*time.Second, nil)
+	if err != nil {
+		t.Fatalf("cmdlet failure must still reach the sentinel: %v", err)
+	}
+	if code != 1 {
+		t.Fatalf("cmdlet failure code = %d, want 1", code)
+	}
+}
+
+func TestPSExitCodeDoesNotGoStale(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("PowerShell session protocol is Windows-only")
+	}
+	sess := newPSSession(t)
+	if _, code, err := sess.run(context.Background(), "cmd /c exit 3", 5*time.Second, nil); err != nil || code != 3 {
+		t.Fatalf("first command = code %d, err %v", code, err)
+	}
+	_, code, err := sess.run(context.Background(), "Write-Output hi", 5*time.Second, nil)
+	if err != nil {
+		t.Fatalf("second command failed: %v", err)
+	}
+	if code != 0 {
+		t.Fatalf("second command code = %d, want 0 (stale LASTEXITCODE leaked)", code)
+	}
+}
+
+func TestPSClosesCommandStdinSoStdinReadingCommandsFinish(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("PowerShell session protocol is Windows-only")
+	}
+	sess := newPSSession(t)
+	start := time.Now()
+	_, code, err := sess.run(context.Background(), "cmd /c \"set /p x=READ:\"", 5*time.Second, nil)
+	if err != nil {
+		t.Fatalf("stdin-reading command did not finish: %v", err)
+	}
+	if elapsed := time.Since(start); elapsed > 3*time.Second {
+		t.Fatalf("took %s, want prompt completion (stdin must be detached)", elapsed)
+	}
+	if code != 1 {
+		t.Fatalf("set /p on detached stdin should fail, code = %d, want 1", code)
+	}
+}
+
+func TestPSCdPersistsAcrossCalls(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("PowerShell session protocol is Windows-only")
+	}
+	sess := newPSSession(t)
+	if _, code, err := sess.run(context.Background(), "Set-Location C:\\Windows", 5*time.Second, nil); err != nil || code != 0 {
+		t.Fatalf("Set-Location = code %d, err %v", code, err)
+	}
+	out, code, err := sess.run(context.Background(), "(Get-Location).Path", 5*time.Second, nil)
+	if err != nil || code != 0 {
+		t.Fatalf("Get-Location = code %d, err %v", code, err)
+	}
+	if !strings.Contains(out, "C:\\Windows") {
+		t.Fatalf("cwd did not persist: %q", out)
+	}
+}
+
+func TestPSTimeoutKillsSessionAndNextCallRecovers(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("PowerShell session protocol is Windows-only")
+	}
+	m := NewShellManager(config.Terminal{})
+	dir := t.TempDir()
+	t.Cleanup(m.CloseAll)
+	sess, err := m.session("ps-timeout-session", dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := time.Now()
+	_, _, err = sess.run(context.Background(), "Start-Sleep -Seconds 30", 1*time.Second, nil)
+	if err == nil || !strings.Contains(err.Error(), "timed out") {
+		t.Fatalf("blocking command err = %v, want timeout", err)
+	}
+	if time.Since(start) > 4*time.Second {
+		t.Fatalf("timeout took %s, want ~1s", time.Since(start))
+	}
+	// The timed-out command held the shell; the next call must start fresh.
+	sess, err = m.session("ps-timeout-session", t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, code, err := sess.run(context.Background(), "Write-Output RECOVERED", 5*time.Second, nil)
+	if err != nil || code != 0 || !strings.Contains(out, "RECOVERED") {
+		t.Fatalf("post-timeout command = (%q, %d, %v), want RECOVERED/0/nil", out, code, err)
+	}
+}
+
+func TestPSEAPStopLeakDoesNotHangNextCall(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("PowerShell session protocol is Windows-only")
+	}
+	sess := newPSSession(t)
+	// A command that flips ErrorActionPreference to Stop and then fails must
+	// not kill the session or hang the sentinel.
+	if _, code, err := sess.run(context.Background(), "$ErrorActionPreference='Stop'; dir C:\\nope-stop-zzz", 5*time.Second, nil); err != nil || code != 1 {
+		t.Fatalf("EAP=Stop failing command = code %d, err %v", code, err)
+	}
+	start := time.Now()
+	out, code, err := sess.run(context.Background(), "Write-Output AFTER_STOP", 5*time.Second, nil)
+	if err != nil || code != 0 || !strings.Contains(out, "AFTER_STOP") {
+		t.Fatalf("post-Stop command = (%q, %d, %v), want AFTER_STOP/0/nil", out, code, err)
+	}
+	if time.Since(start) > 3*time.Second {
+		t.Fatalf("post-Stop command took %s, want prompt completion", time.Since(start))
+	}
+}
+
+func TestPSMultiLineCommandFlattens(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("PowerShell session protocol is Windows-only")
+	}
+	sess := newPSSession(t)
+	out, code, err := sess.run(context.Background(), "Write-Output A\nWrite-Output B", 5*time.Second, nil)
+	if err != nil || code != 0 {
+		t.Fatalf("multi-line command = code %d, err %v", code, err)
+	}
+	if !strings.Contains(out, "A") || !strings.Contains(out, "B") {
+		t.Fatalf("multi-line output = %q, want A and B", out)
+	}
+}
+
+// TestPSBareExpressionRuns covers the construct that the old `$null |`
+// protocol rejected with a parse error ("Expressions are only allowed as the
+// first element of a pipeline") — the iex classification must run it plainly.
+func TestPSBareExpressionRuns(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("PowerShell session protocol is Windows-only")
+	}
+	sess := newPSSession(t)
+	out, code, err := sess.run(context.Background(), "(Get-Location).Path", 5*time.Second, nil)
+	if err != nil || code != 0 {
+		t.Fatalf("bare expression = code %d, err %v", code, err)
+	}
+	if !strings.Contains(out, "Temp") && !strings.Contains(out, "Windows") {
+		t.Fatalf("expression output = %q, want a filesystem path", out)
+	}
+}
+
+// TestPSAssignmentPersists ensures assignments run in the session scope and
+// survive into the next call (the old protocol needed a dot-sourced block for
+// these; iex runs them in scope directly).
+func TestPSAssignmentPersists(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("PowerShell session protocol is Windows-only")
+	}
+	sess := newPSSession(t)
+	if _, code, err := sess.run(context.Background(), "$antares_probe = 42", 5*time.Second, nil); err != nil || code != 0 {
+		t.Fatalf("assignment = code %d, err %v", code, err)
+	}
+	out, code, err := sess.run(context.Background(), "Write-Output $antares_probe", 5*time.Second, nil)
+	if err != nil || code != 0 || !strings.Contains(out, "42") {
+		t.Fatalf("assigned var read = (%q, %d, %v), want 42/0/nil", out, code, err)
+	}
+}
+
+// TestPSSingleQuotesSurviveEmbedding guards the $c='...' wrapper: user single
+// quotes are doubled when embedded and must come back exactly.
+func TestPSSingleQuotesSurviveEmbedding(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("PowerShell session protocol is Windows-only")
+	}
+	sess := newPSSession(t)
+	out, code, err := sess.run(context.Background(), "Write-Output 'it''s fine'", 5*time.Second, nil)
+	if err != nil || code != 0 {
+		t.Fatalf("quoted command = code %d, err %v", code, err)
+	}
+	if !strings.Contains(out, "it's fine") {
+		t.Fatalf("quoted output = %q, want it's fine", out)
+	}
+}
