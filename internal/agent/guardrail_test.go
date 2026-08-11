@@ -13,6 +13,14 @@ import (
 // whether a run that hit the budget still has work to do. These tests pin that
 // gate and the message that pushes the model to keep going.
 
+// agentWithConfig builds an Agent for tests with its atomic config pointer set.
+// The cfg field is an atomic.Pointer, so it cannot be set via a struct literal.
+func agentWithConfig(cfg *config.Config) *Agent {
+	a := &Agent{}
+	a.cfg.Store(cfg)
+	return a
+}
+
 func newKVAgent(t *testing.T) *Agent {
 	t.Helper()
 	db, err := store.Open(context.Background(), "memory", "", 1, 5000, false)

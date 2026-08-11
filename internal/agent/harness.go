@@ -199,7 +199,7 @@ or
 // verify asks a cheap model whether the request was actually satisfied. It
 // returns nil when verification is off, unavailable, or the reply passes.
 func (a *Agent) verify(ctx context.Context, request, reply string, transcript []llm.Message) *verdict {
-	if !a.cfg.Agent.VerifyReplies || strings.TrimSpace(reply) == "" {
+	if !a.config().Agent.VerifyReplies || strings.TrimSpace(reply) == "" {
 		return nil
 	}
 	client, model, _, err := a.newAuxClient("")
@@ -518,7 +518,7 @@ func (a *Agent) followUp(
 		return ""
 	}
 
-	maxChecks := a.cfg.Agent.VerifyMax
+	maxChecks := a.config().Agent.VerifyMax
 	if maxChecks <= 0 {
 		maxChecks = 2
 	}
@@ -536,7 +536,7 @@ func (a *Agent) followUp(
 	}
 	maxIter := goal.Max
 	if maxIter <= 0 {
-		maxIter = a.cfg.Agent.GoalMaxIterations
+		maxIter = a.config().Agent.GoalMaxIterations
 	}
 	if maxIter <= 0 {
 		maxIter = 10
@@ -671,7 +671,7 @@ func (a *Agent) Panel(ctx context.Context, question string, models []string, emi
 		return "", nil, errors.New("ask something")
 	}
 	if len(models) == 0 {
-		models = a.cfg.Model.Panel
+		models = a.config().Model.Panel
 	}
 	if len(models) == 0 {
 		return "", nil, errors.New("no panel is configured — set model.panel to two or more model ids")
@@ -890,7 +890,7 @@ var nowFunc = time.Now
 // set, otherwise the default model — which fails cleanly if that model has no
 // eyes.
 func (a *Agent) describeImage(ctx context.Context, data []byte, mime, question string) (string, error) {
-	model := strings.TrimSpace(a.cfg.Model.Vision)
+	model := strings.TrimSpace(a.config().Model.Vision)
 	client, resolved, _, err := a.newClient(model, "")
 	if err != nil {
 		return "", err
@@ -922,7 +922,7 @@ func (a *Agent) describeImage(ctx context.Context, data []byte, mime, question s
 // audioClient builds a raw (unwrapped) client that supports the audio endpoints.
 // Audio needs an OpenAI-compatible provider; anything else returns a clear error.
 func (a *Agent) audioClient() (llm.AudioClient, error) {
-	id, p := a.cfg.ResolveProvider(a.cfg.Model.Provider)
+	id, p := a.config().ResolveProvider(a.config().Model.Provider)
 	client, err := llm.New(llm.Options{
 		Kind: p.Kind, BaseURL: p.BaseURL, APIKey: p.APIKey,
 		Headers: p.Headers, ProviderID: id, Timeout: 2 * time.Minute,
@@ -944,9 +944,9 @@ func (a *Agent) speak(ctx context.Context, text, voice string) ([]byte, string, 
 		return nil, "", err
 	}
 	if voice == "" {
-		voice = firstNonEmpty(a.cfg.Model.Voice, "alloy")
+		voice = firstNonEmpty(a.config().Model.Voice, "alloy")
 	}
-	return ac.Speak(ctx, a.cfg.Model.TTS, voice, "mp3", text)
+	return ac.Speak(ctx, a.config().Model.TTS, voice, "mp3", text)
 }
 
 // transcribe turns speech audio into text.
@@ -955,5 +955,5 @@ func (a *Agent) transcribe(ctx context.Context, filename string, audio []byte) (
 	if err != nil {
 		return "", err
 	}
-	return ac.Transcribe(ctx, a.cfg.Model.STT, filename, audio)
+	return ac.Transcribe(ctx, a.config().Model.STT, filename, audio)
 }

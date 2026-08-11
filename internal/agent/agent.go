@@ -16,6 +16,7 @@ import (
 	"runtime/debug"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/enowdev/antares/internal/board"
@@ -165,7 +166,10 @@ type Result struct {
 
 // Agent owns the shared services a run needs.
 type Agent struct {
-	cfg           *config.Config
+	// cfg is swapped atomically: a live model/config switch (SetConfig) races
+	// with the many goroutines that read the config during a turn, so the
+	// pointer must be published and read atomically. Read it via a.config().
+	cfg           atomic.Pointer[config.Config]
 	db            store.Store
 	reg           *tools.Registry
 	shell         *tools.ShellManager
@@ -194,8 +198,8 @@ type Agent struct {
 
 // New builds an agent.
 func New(cfg *config.Config, db store.Store, reg *tools.Registry, shell *tools.ShellManager, ragProvider tools.RAGProvider) *Agent {
-	return &Agent{
-		cfg: cfg, db: db, reg: reg, shell: shell, rag: ragProvider,
+	a := &Agent{
+		db: db, reg: reg, shell: shell, rag: ragProvider,
 		checks:   checkpoint.NewStore(config.Path("checkpoints")),
 		roles:    roles.NewRegistry(nil),
 		findings: findings.NewStore(config.Path("findings")),
@@ -206,13 +210,26 @@ func New(cfg *config.Config, db store.Store, reg *tools.Registry, shell *tools.S
 		bgAct:    newBgActivity(),
 		active:   map[string]context.CancelFunc{},
 	}
+	a.cfg.Store(cfg)
+	return a
 }
 
-// Config exposes the live configuration.
-func (a *Agent) Config() *config.Config { return a.cfg }
+// config returns the live configuration, read atomically so a concurrent
+// SetConfig (a live model/config switch) cannot tear the pointer.
+func (a *Agent) config() *config.Config { return a.cfg.Load() }
 
-// SetConfig swaps in a reloaded configuration.
-func (a *Agent) SetConfig(cfg *config.Config) { a.cfg = cfg }
+// Config exposes the live configuration.
+func (a *Agent) Config() *config.Config { return a.cfg.Load() }
+
+// SetConfig swaps in a reloaded configuration. The pointer is published
+// atomically; callers that need a stable view for a whole operation should
+// snapshot it once via config() rather than re-reading across steps.
+func (a *Agent) SetConfig(cfg *config.Config) {
+	if cfg == nil {
+		return
+	}
+	a.cfg.Store(cfg)
+}
 
 // SetRAG swaps the retrieval provider after a config change.
 func (a *Agent) SetRAG(p tools.RAGProvider) { a.rag = p }
@@ -265,7 +282,7 @@ func (a *Agent) Run(ctx context.Context, req Request, emit Emit) (*Result, error
 	if emit == nil {
 		emit = func(Event) error { return nil }
 	}
-	cfg := a.cfg
+	cfg := a.config()
 
 	sess, err := a.resolveSession(ctx, &req)
 	if err != nil {
@@ -377,7 +394,7 @@ func (a *Agent) Run(ctx context.Context, req Request, emit Emit) (*Result, error
 	// Sub2API Antigravity treats a tool literally named "web_search" as Google's
 	// built-in search and rejects mixing it with functionDeclarations. Rename
 	// only on the wire for those routes; execution still resolves to web_search.
-	_, prov := a.cfg.ResolveProvider(providerName)
+	_, prov := a.config().ResolveProvider(providerName)
 	toolSpecs, byName = sanitizeToolsForProvider(toolSpecs, byName, providerName, prov.BaseURL)
 
 	systemPrompt := a.buildSystemPrompt(ctx, req, sess, activeTools)
@@ -555,7 +572,7 @@ func (a *Agent) Run(ctx context.Context, req Request, emit Emit) (*Result, error
 		}
 		toolCalls += len(resp.ToolCalls)
 		totalToolCalls += len(resp.ToolCalls)
-		if g := a.cfg.Guardrails; g.HardStopEnabled && g.AbsoluteMaxToolCalls > 0 && totalToolCalls >= g.AbsoluteMaxToolCalls {
+		if g := a.config().Guardrails; g.HardStopEnabled && g.AbsoluteMaxToolCalls > 0 && totalToolCalls >= g.AbsoluteMaxToolCalls {
 			_ = emit(Event{Type: EventNotice, Message: fmt.Sprintf(
 				"absolute tool-call ceiling reached (%d calls) — stopping", totalToolCalls)})
 			lastReply = fmt.Sprintf("I reached the absolute tool-call limit of %d and stopped. %s",
@@ -708,7 +725,7 @@ func (a *Agent) callModel(ctx context.Context, client llm.Client, req llm.Reques
 		case llm.EventText:
 			return emit(Event{Type: EventText, Delta: ev.Delta})
 		case llm.EventReasoning:
-			if a.cfg.Display.ShowReasoning {
+			if a.config().Display.ShowReasoning {
 				return emit(Event{Type: EventReasoning, Delta: ev.Delta})
 			}
 		}
@@ -808,7 +825,7 @@ func (a *Agent) executeTools(
 
 		workspace := sess.Workspace
 		if workspace == "" {
-			workspace = a.cfg.Agent.Workspace
+			workspace = a.config().Agent.Workspace
 		}
 		// A project session confines writes to the project folder plus the
 		// antares workspace, while allowing reads anywhere. Empty for an
@@ -816,7 +833,7 @@ func (a *Agent) executeTools(
 		var writeRoots []string
 		if pd, _ := sess.Meta["project_dir"].(string); strings.TrimSpace(pd) != "" {
 			writeRoots = []string{pd}
-			if aw := a.cfg.Agent.Workspace; aw != "" && aw != pd {
+			if aw := a.config().Agent.Workspace; aw != "" && aw != pd {
 				writeRoots = append(writeRoots, aw)
 			}
 		}
@@ -836,7 +853,7 @@ func (a *Agent) executeTools(
 			},
 			AskUser: a.askBridge(sess.ID, safeEmit),
 			Deps: &tools.Deps{
-				Config: a.cfg, Store: a.db, RAG: a.rag, Shell: a.shell,
+				Config: a.config(), Store: a.db, RAG: a.rag, Shell: a.shell,
 				Sub: a.subAgentFor(req), Tasks: a.backgroundFor(req), Skills: a.skillLibrary(),
 				SocialBrowser: a.socialBrowser,
 				Checkpoint: func(sessionID, path, tool string) {
@@ -873,7 +890,7 @@ func (a *Agent) executeTools(
 
 		start := time.Now()
 		res := tool.Execute(toolCtx, in)
-		content := trimForModel(res.Content, a.cfg.Tools.MaxOutputChars)
+		content := trimForModel(res.Content, a.config().Tools.MaxOutputChars)
 		if content == "" {
 			content = "(tool produced no output)"
 		}
@@ -898,7 +915,7 @@ func (a *Agent) executeTools(
 		// What the model sees may be fenced as untrusted; what the UI shows stays
 		// raw. Errors are our own messages, so they are never fenced.
 		modelContent := content
-		if !res.IsError && a.cfg.Agent.WrapUntrustedOutput && untrustedTool(call.Name) {
+		if !res.IsError && a.config().Agent.WrapUntrustedOutput && untrustedTool(call.Name) {
 			modelContent = wrapUntrusted(call.Name, content)
 		}
 
@@ -933,7 +950,7 @@ func (a *Agent) executeTools(
 		run(i, call)
 	}
 
-	parallel := a.cfg.Model.ParallelToolCall && len(calls) > 1
+	parallel := a.config().Model.ParallelToolCall && len(calls) > 1
 	if parallel {
 		var wg sync.WaitGroup
 		sem := make(chan struct{}, maxParallelTools)
@@ -958,12 +975,12 @@ func (a *Agent) executeTools(
 const maxParallelTools = 4
 
 func (a *Agent) toolTimeout(name string) time.Duration {
-	if secs, ok := a.cfg.Tools.Timeouts[name]; ok && secs > 0 {
+	if secs, ok := a.config().Tools.Timeouts[name]; ok && secs > 0 {
 		return time.Duration(secs) * time.Second
 	}
 	switch name {
 	case "terminal":
-		return time.Duration(maxInt(a.cfg.Terminal.Timeout, 60)) * time.Second
+		return time.Duration(maxInt(a.config().Terminal.Timeout, 60)) * time.Second
 	case "process":
 		// process(wait) intentionally blocks for at most 30 seconds. Leave margin
 		// for scheduling and JSON serialization so the tool can return its state.
@@ -984,14 +1001,14 @@ func (a *Agent) toolTimeout(name string) time.Duration {
 func (a *Agent) subAgentFor(parent Request) tools.SubAgent {
 	return func(ctx context.Context, sub tools.SubAgentRequest) (string, error) {
 		depth := parent.Depth + 1
-		if maxDepth := a.cfg.Delegation.MaxDepth; maxDepth > 0 && depth > maxDepth {
+		if maxDepth := a.config().Delegation.MaxDepth; maxDepth > 0 && depth > maxDepth {
 			return "", fmt.Errorf("maximum delegation depth (%d) reached", maxDepth)
 		}
 
 		// A top-level sub-agent may run in its own process, so a crash cannot
 		// take the parent down. Nested delegation stays in-process to avoid a
 		// fork storm; file-backed findings/intel/sessions flow either way.
-		if a.cfg.Delegation.Subprocess && depth == 1 {
+		if a.config().Delegation.Subprocess && depth == 1 {
 			_, untrack := trackSubAgent(sub.Role, sub.Prompt, parent.SessionID)
 			defer untrack()
 			return a.runSubprocess(ctx, sub)
@@ -1107,7 +1124,7 @@ func (a *Agent) runSubprocess(ctx context.Context, sub tools.SubAgentRequest) (s
 }
 
 func (a *Agent) guardrailTripped(toolCalls int, emit Emit) bool {
-	g := a.cfg.Guardrails
+	g := a.config().Guardrails
 	if g.WarningsEnabled && g.WarnAfter > 0 && toolCalls == g.WarnAfter {
 		_ = emit(Event{Type: EventNotice, Message: fmt.Sprintf("%d tool calls in this turn", toolCalls)})
 	}

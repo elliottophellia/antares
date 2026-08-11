@@ -38,7 +38,7 @@ func TestExecuteToolsRecoversFromPanic(t *testing.T) {
 	cfg := config.Default()
 	cfg.Model.ParallelToolCall = true
 
-	a := &Agent{cfg: cfg}
+	a := agentWithConfig(cfg)
 
 	byName := map[string]tools.Tool{
 		"panic_tool": panicTool{},
@@ -100,7 +100,7 @@ func TestExecuteToolsSerialRecoversFromPanic(t *testing.T) {
 	cfg := config.Default()
 	cfg.Model.ParallelToolCall = false
 
-	a := &Agent{cfg: cfg}
+	a := agentWithConfig(cfg)
 
 	byName := map[string]tools.Tool{
 		"panic_tool": panicTool{},

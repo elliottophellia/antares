@@ -15,6 +15,11 @@ import (
 var (
 	mu     sync.RWMutex
 	loaded *Config
+	// saveMu serialises writes to the config file. Concurrent saves (e.g. a
+	// rapid run of model switches, or a model switch overlapping a raw config
+	// save) would otherwise race on the temp file and the rename, corrupting
+	// what lands on disk.
+	saveMu sync.Mutex
 )
 
 // Load reads defaults, merges the profile YAML file, then applies env overrides.
@@ -69,16 +74,28 @@ func Get() *Config {
 	return c
 }
 
-// Save writes the config to the active profile file and refreshes the cache.
-func Save(cfg *Config) error {
+func SaveAt(path string, cfg *Config) error {
 	normalize(cfg)
-	if err := writeFile(ConfigFile(), cfg); err != nil {
+	return SaveNormalizedAt(path, cfg)
+}
+
+// SaveNormalizedAt writes an already-normalized config without mutating it
+// further. Callers that hand the same *Config to another goroutine (for
+// example, a live model switch that publishes the config to the agent and then
+// persists it in the background) MUST normalize synchronously and use this, so
+// the background write never mutates a struct another goroutine is reading.
+func SaveNormalizedAt(path string, cfg *Config) error {
+	if err := writeFile(path, cfg); err != nil {
 		return err
 	}
 	mu.Lock()
 	loaded = cfg
 	mu.Unlock()
 	return nil
+}
+
+func Save(cfg *Config) error {
+	return SaveAt(ConfigFile(), cfg)
 }
 
 // Raw returns the on-disk YAML text for the active profile.
@@ -107,7 +124,8 @@ func SaveRaw(text string) error {
 }
 
 func writeFile(path string, cfg *Config) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
 	}
 	out, err := yaml.Marshal(cfg)
@@ -115,11 +133,33 @@ func writeFile(path string, cfg *Config) error {
 		return err
 	}
 	header := "# Antares configuration\n# Docs: https://github.com/enowdev/antares\n"
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, append([]byte(header), out...), 0o600); err != nil {
+
+	// Serialise writes so two concurrent saves cannot interleave, and use a
+	// unique temp file so a rename can never pick up another writer's partial
+	// contents.
+	saveMu.Lock()
+	defer saveMu.Unlock()
+
+	tmp, err := os.CreateTemp(dir, ".config-*.yaml.tmp")
+	if err != nil {
 		return err
 	}
-	return os.Rename(tmp, path)
+	tmpName := tmp.Name()
+	// Best-effort cleanup if we fail before the rename.
+	defer func() { _ = os.Remove(tmpName) }()
+
+	if _, err := tmp.Write(append([]byte(header), out...)); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Chmod(0o600); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmpName, path)
 }
 
 // loadDotEnv populates process env from a KEY=VALUE file without overwriting
@@ -226,6 +266,12 @@ func applyEnv(c *Config) {
 		c.Providers[name] = p
 	}
 }
+
+// Normalize applies the same defaulting and cleanup that a save would, without
+// writing anything. Callers that publish a config to other goroutines and then
+// persist it in the background use this to normalize up front, so the async
+// write does not mutate a shared struct. See SaveNormalizedAt.
+func Normalize(c *Config) { normalize(c) }
 
 func normalize(c *Config) {
 	if c.Providers == nil {

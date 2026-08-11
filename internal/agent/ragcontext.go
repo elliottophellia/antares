@@ -113,7 +113,7 @@ const conversationCollection = "conversations"
 // returns "" when RAG is off, the query is empty, or nothing relevant comes
 // back. Best-effort: any error yields no block rather than failing the turn.
 func (a *Agent) autoContext(ctx context.Context, req Request, sess *store.Session) string {
-	if a.rag == nil || !a.cfg.RAG.AutoContext || req.Platform == "subagent" {
+	if a.rag == nil || !a.config().RAG.AutoContext || req.Platform == "subagent" {
 		return ""
 	}
 	query := strings.TrimSpace(req.Message)
@@ -137,7 +137,7 @@ func (a *Agent) autoContext(ctx context.Context, req Request, sess *store.Sessio
 	// Per-user memory: when enabled, fold in what is known about the specific
 	// person so the agent can recall topics tied to them. Placed first so their
 	// own history outranks the shared collections for the same budget.
-	if a.cfg.RAG.PerUser && req.UserID != "" {
+	if a.config().RAG.PerUser && req.UserID != "" {
 		if uc := rag.UserCollection(req.Platform, req.UserID); uc != "" {
 			sources = append([]source{{collection: uc, label: "about this user"}}, sources...)
 		}
@@ -208,7 +208,7 @@ func (a *Agent) autoContext(ctx context.Context, req Request, sess *store.Sessio
 // indexTurn stores a finished exchange in the conversation collection so it can
 // be recalled later. It runs in the background and never blocks or fails a turn.
 func (a *Agent) indexTurn(sess *store.Session, userMsg, reply string) {
-	if a.rag == nil || !a.cfg.RAG.AutoContext {
+	if a.rag == nil || !a.config().RAG.AutoContext {
 		return
 	}
 	userMsg = strings.TrimSpace(userMsg)
@@ -250,7 +250,7 @@ func (a *Agent) indexTurn(sess *store.Session, userMsg, reply string) {
 // recall topics and facts tied to them. Gated on rag.per_user. Runs in the
 // background and never blocks or fails a turn.
 func (a *Agent) indexUserTurn(req Request, userMsg, reply string) {
-	if a.rag == nil || !a.cfg.RAG.PerUser || req.UserID == "" {
+	if a.rag == nil || !a.config().RAG.PerUser || req.UserID == "" {
 		return
 	}
 	collection := rag.UserCollection(req.Platform, req.UserID)

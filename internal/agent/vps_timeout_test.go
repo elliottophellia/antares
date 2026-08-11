@@ -8,7 +8,7 @@ import (
 )
 
 func TestVPSToolTimeoutExceedsMaxCommandTimeout(t *testing.T) {
-	a := &Agent{cfg: config.Default()}
+	a := agentWithConfig(config.Default())
 	for _, name := range []string{"vps_run", "vps_upload", "vps_download"} {
 		got := a.toolTimeout(name)
 		// Tools allow timeout_seconds up to 900; the agent envelope must not

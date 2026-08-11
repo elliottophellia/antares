@@ -19,7 +19,7 @@ import (
 
 // buildSystemPrompt assembles identity, environment, memory, and tool guidance.
 func (a *Agent) buildSystemPrompt(ctx context.Context, req Request, sess *store.Session, active []tools.Tool) string {
-	cfg := a.cfg
+	cfg := a.config()
 	var b strings.Builder
 
 	b.WriteString("You are ")
@@ -353,7 +353,7 @@ func (a *Agent) methodologyBlock(sessionID string) string {
 
 // memoryBlock renders stored memories, bounded by the configured char limit.
 func (a *Agent) memoryBlock(ctx context.Context, req Request, sess *store.Session) string {
-	limit := a.cfg.Memory.MemoryCharLimit
+	limit := a.config().Memory.MemoryCharLimit
 	if limit <= 0 {
 		limit = 12000
 	}
@@ -399,7 +399,7 @@ func hasTool(list []tools.Tool, name string) bool {
 
 // resolveTools picks the tool set for this run, honouring platform overrides.
 func (a *Agent) resolveTools(req Request) []tools.Tool {
-	cfg := a.cfg
+	cfg := a.config()
 	toolset := req.Toolset
 	if toolset == "" {
 		if v, ok := cfg.Tools.Platform[req.Platform]; ok && v != "" {

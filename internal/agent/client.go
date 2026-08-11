@@ -25,7 +25,7 @@ func (a *Agent) newClient(modelOverride, sessionID string) (client llm.Client, m
 	// a deliberately chosen model is honoured exactly.
 	entries := []llm.FallbackEntry{{Client: primary, Model: model}}
 	if modelOverride == "" {
-		for _, spec := range a.cfg.Model.Fallback {
+		for _, spec := range a.config().Model.Fallback {
 			spec = strings.TrimSpace(spec)
 			if spec == "" {
 				continue
@@ -43,7 +43,7 @@ func (a *Agent) newClient(modelOverride, sessionID string) (client llm.Client, m
 
 // resolveClient builds one provider adapter for a model spec.
 func (a *Agent) resolveClient(modelOverride, sessionID string) (client llm.Client, model, provider string, err error) {
-	cfg := a.cfg
+	cfg := a.config()
 	model = firstNonEmpty(modelOverride, cfg.Model.Default)
 	provider = cfg.Model.Provider
 	if modelOverride != "" {
@@ -86,7 +86,7 @@ func (a *Agent) resolveClient(modelOverride, sessionID string) (client llm.Clien
 		Headers: p.Headers, Timeout: timeout, ProviderID: id,
 		Retries:    retries,
 		APIVersion: p.APIVersion, Region: p.Region,
-		SessionID:  sessionID,
+		SessionID: sessionID,
 	})
 	if err != nil {
 		return nil, "", "", err
@@ -97,7 +97,7 @@ func (a *Agent) resolveClient(modelOverride, sessionID string) (client llm.Clien
 // newAuxClient returns the auxiliary model used for summarisation and other
 // background work, falling back to the main model.
 func (a *Agent) newAuxClient(sessionID string) (llm.Client, string, string, error) {
-	if aux := strings.TrimSpace(a.cfg.Model.Auxiliary); aux != "" {
+	if aux := strings.TrimSpace(a.config().Model.Auxiliary); aux != "" {
 		return a.newClient(aux, sessionID)
 	}
 	return a.newClient("", sessionID)
@@ -140,7 +140,7 @@ func (a *Agent) Probe(ctx context.Context) (bool, string) {
 // If the list is empty, the provider's /models endpoint is queried live.
 // A live fetch that fails still yields any manual list rather than nothing.
 func (a *Agent) Models(ctx context.Context, providerID string) ([]llm.ModelInfo, error) {
-	id, p := a.cfg.ResolveProvider(providerID)
+	id, p := a.config().ResolveProvider(providerID)
 
 	// Curated whitelist: skip live catalog entirely.
 	if len(p.Models) > 0 {

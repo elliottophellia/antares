@@ -35,7 +35,9 @@ func (readingTool) Execute(context.Context, tools.Input) tools.Result {
 func agentWithMode(mode string) *Agent {
 	cfg := config.Default()
 	cfg.Tools.ApprovalMode = mode
-	return &Agent{cfg: cfg, active: map[string]context.CancelFunc{}}
+	a := agentWithConfig(cfg)
+	a.active = map[string]context.CancelFunc{}
+	return a
 }
 
 func TestAutoModeRunsEverything(t *testing.T) {

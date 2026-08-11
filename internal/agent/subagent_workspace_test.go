@@ -13,7 +13,7 @@ import (
 
 func TestPrepareSubAgentWorkspaceInheritsParentProject(t *testing.T) {
 	project := t.TempDir()
-	a := &Agent{cfg: &config.Config{Agent: config.Agent{Workspace: "/global/antares-workspace"}}}
+	a := agentWithConfig(&config.Config{Agent: config.Agent{Workspace: "/global/antares-workspace"}})
 
 	workspace, projectDir, wt := a.prepareSubAgentWorkspace(
 		context.Background(),
@@ -34,7 +34,7 @@ func TestPrepareSubAgentWorkspaceInheritsParentProject(t *testing.T) {
 
 func TestPrepareSubAgentWorkspaceIsolationFailureKeepsParentProject(t *testing.T) {
 	project := t.TempDir() // deliberately not a git repository
-	a := &Agent{cfg: &config.Config{Agent: config.Agent{Workspace: "/global/antares-workspace"}}}
+	a := agentWithConfig(&config.Config{Agent: config.Agent{Workspace: "/global/antares-workspace"}})
 
 	workspace, projectDir, wt := a.prepareSubAgentWorkspace(
 		context.Background(),
@@ -69,7 +69,7 @@ func TestPrepareSubAgentWorkspaceIsolatesParentProject(t *testing.T) {
 	runGit("add", "README.md")
 	runGit("commit", "-q", "-m", "initial")
 
-	a := &Agent{cfg: &config.Config{Agent: config.Agent{Workspace: "/global/antares-workspace"}}}
+	a := agentWithConfig(&config.Config{Agent: config.Agent{Workspace: "/global/antares-workspace"}})
 	workspace, projectDir, wt := a.prepareSubAgentWorkspace(
 		context.Background(),
 		Request{ProjectDir: project, Workspace: project},

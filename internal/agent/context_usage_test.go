@@ -17,7 +17,7 @@ func TestContextWindowForPrefersActiveModelMetadata(t *testing.T) {
 	}
 	cfg.Providers["custom"] = p
 
-	a := &Agent{cfg: cfg}
+	a := agentWithConfig(cfg)
 	if got := a.contextWindowFor("cb-kimi-k3"); got != 256000 {
 		t.Fatalf("contextWindowFor() = %d, want 256000", got)
 	}

@@ -2,6 +2,7 @@ package server
 
 import (
 	"errors"
+	"log/slog"
 	"net/http"
 	"os"
 	"sort"
@@ -240,6 +241,9 @@ func (s *Server) handleModelList(w http.ResponseWriter, r *http.Request) {
 // show everything at once — pick any model and /model/set switches provider and
 // model together, so there is no separate "switch provider" step.
 func (s *Server) handleModelListAll(w http.ResponseWriter, r *http.Request) {
+	if s.requireDashboardPassword(w, r) {
+		return
+	}
 	cfg := s.config()
 
 	// Which providers are worth calling: a stored key, a set key-env, or local.
@@ -357,14 +361,18 @@ func (s *Server) handleModelSet(w http.ResponseWriter, r *http.Request) {
 			cfg.ClearInlineModelCredentials()
 		}
 	}
-	if err := config.Save(cfg); err != nil {
-		writeError(w, http.StatusInternalServerError, err)
-		return
-	}
-	if err := s.applyReload(); err != nil {
-		writeError(w, http.StatusInternalServerError, err)
-		return
-	}
+	// Normalize synchronously BEFORE publishing the pointer to the agent, so the
+	// background save never mutates a struct the agent is concurrently reading
+	// during a live turn. The goroutine then only marshals and writes bytes.
+	config.Normalize(cfg)
+	s.agent.SetConfig(cfg)
+	s.SetConfig(cfg)
+	savePath := config.ConfigFile()
+	go func(c *config.Config, path string) {
+		if err := config.SaveNormalizedAt(path, c); err != nil {
+			slog.Warn("async config save failed after model switch", "error", err)
+		}
+	}(cfg, savePath)
 	writeJSON(w, http.StatusOK, map[string]string{"model": body.Model, "provider": cfg.Model.Provider})
 }
 

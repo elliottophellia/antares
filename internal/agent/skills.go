@@ -73,7 +73,7 @@ func (a skillAdapter) MarkUsed(name string) { a.m.MarkUsed(name) }
 
 // skillLibrary exposes the manager to tools, or nil when skills are off.
 func (a *Agent) skillLibrary() tools.SkillLibrary {
-	if a.skills == nil || !a.cfg.Skills.Enabled {
+	if a.skills == nil || !a.config().Skills.Enabled {
 		return nil
 	}
 	return skillAdapter{m: a.skills}
