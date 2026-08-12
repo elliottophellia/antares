@@ -416,13 +416,21 @@ func emitCursorEvent(in Input, event cursor.StreamEvent) {
 			redactCursorString(event.ToolName, secret) + " " +
 			redactCursorString(event.Status, secret)
 	}
-	runes := []rune(chunk)
-	if len(runes) > 2000 {
-		chunk = string(runes[:2000]) + "…"
-	}
+	message = boundCursorProgress(message)
+	chunk = boundCursorProgress(chunk)
 	if in.Emit != nil {
 		in.Emit(Progress{Tool: "cursor_agent", Message: message, Chunk: chunk})
 	}
+}
+
+func boundCursorProgress(value string) string {
+	const maxRunes = 2000
+	value = strings.ToValidUTF8(value, "\uFFFD")
+	runes := []rune(value)
+	if len(runes) > maxRunes {
+		return string(runes[:maxRunes]) + "…"
+	}
+	return value
 }
 
 func cursorAgentStatusResult(

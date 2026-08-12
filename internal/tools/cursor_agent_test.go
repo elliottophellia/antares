@@ -503,6 +503,82 @@ func TestCursorAgentWaitStreamsBoundedProgressAndFinalMetadata(t *testing.T) {
 	}
 }
 
+func TestCursorAgentWaitBoundsAndNormalizesEveryProgressField(t *testing.T) {
+	invalidAndLong := strings.Repeat("界", 10) + string([]byte{0xff}) + strings.Repeat("界", 2100)
+	longToolName := strings.Repeat("tool", 600)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/agents/bc-one":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"id": "bc-one", "status": "RUNNING",
+				"url": "https://cursor.com/agents/bc-one", "latestRunId": "run-one",
+			})
+		case "/v1/agents/bc-one/runs/run-one/stream":
+			w.Header().Set("Content-Type", "text/event-stream")
+			_, _ = io.WriteString(w, "event: ")
+			_, _ = w.Write([]byte(invalidAndLong))
+			_, _ = io.WriteString(w, "\ndata: {}\n\n")
+			_, _ = io.WriteString(w, "event: assistant\ndata: {\"text\":\"")
+			_, _ = w.Write([]byte(invalidAndLong))
+			_, _ = io.WriteString(w, "\"}\n\n")
+			writeCursorSSE(w, "tool_call", map[string]any{"name": longToolName, "status": "running"})
+			writeCursorSSE(w, "result", map[string]any{
+				"runId": "run-one", "status": "FINISHED", "text": "fixed",
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	var progress []Progress
+	got := (cursorAgentStatusTool{}).Execute(
+		context.Background(),
+		cursorToolTestInput(cursorToolTestConfig(srv.URL), `{"agent_id":"bc-one","wait":true}`, &progress),
+	)
+	if got.IsError {
+		t.Fatalf("wait result = %+v", got)
+	}
+	if len(progress) != 4 {
+		t.Fatalf("progress = %#v, want event/assistant/tool/result", progress)
+	}
+
+	var boundedMessages, boundedChunks int
+	for i, update := range progress {
+		for field, value := range map[string]string{
+			"message": update.Message,
+			"chunk":   update.Chunk,
+		} {
+			if !utf8.ValidString(value) {
+				t.Errorf("progress[%d].%s is invalid UTF-8", i, field)
+			}
+			if gotRunes := utf8.RuneCountInString(value); gotRunes > 2001 {
+				t.Errorf("progress[%d].%s has %d runes, want at most 2001", i, field, gotRunes)
+			}
+			if strings.HasSuffix(value, "…") {
+				if gotRunes := utf8.RuneCountInString(value); gotRunes != 2001 {
+					t.Errorf("progress[%d].%s has %d bounded runes, want 2001", i, field, gotRunes)
+				}
+				if field == "message" {
+					boundedMessages++
+				} else {
+					boundedChunks++
+				}
+			}
+		}
+	}
+	if boundedMessages != 2 {
+		t.Errorf("bounded messages = %d, want oversized event and tool messages", boundedMessages)
+	}
+	if boundedChunks != 1 {
+		t.Errorf("bounded chunks = %d, want oversized assistant chunk", boundedChunks)
+	}
+	if !strings.Contains(progress[0].Message, "\uFFFD") ||
+		!strings.Contains(progress[1].Chunk, "\uFFFD") {
+		t.Fatal("invalid UTF-8 was not normalized with replacement runes")
+	}
+}
+
 func TestCursorAgentTimeoutPreservesRecoverableIDsWithoutCancel(t *testing.T) {
 	var cancelCalls atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
