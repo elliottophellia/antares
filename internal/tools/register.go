@@ -35,6 +35,8 @@ func init() {
 		askUserTool{},
 		scheduleTool{},
 		diagnosticsTool{},
+		cursorAgentTool{},
+		cursorAgentStatusTool{},
 		// Native OSINT reconnaissance toolset.
 		osintDNSTool{}, osintDorksTool{}, osintWhoisTool{}, osintIPTool{}, osintUsernameTool{},
 		osintGithubTool{}, osintEmailTool{}, osintBreachTool{}, osintReputationTool{},

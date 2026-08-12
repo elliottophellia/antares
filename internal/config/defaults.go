@@ -72,6 +72,8 @@ func Default() *Config {
 				"terminal": 300, "web_fetch": 60, "web_search": 30,
 				// VPS tools allow up to 900s per call; keep the agent envelope above that.
 				"vps_run": 960, "vps_upload": 960, "vps_download": 960,
+				// Cursor's provider wait defaults to 900s; leave envelope/serialization margin.
+				"cursor_agent": 960, "cursor_agent_status": 960,
 			},
 			WebSearch: WebSearch{Provider: "browser", MaxResults: 8},
 			Browser: Browser{
