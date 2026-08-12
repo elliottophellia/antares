@@ -14,6 +14,16 @@ import (
 	"github.com/enowdev/antares/internal/cursor"
 )
 
+// hermeticCursorBaseURL is a syntactically valid, public, non-loopback HTTPS
+// URL whose host is an IP literal. validateProviderBaseURL parses an IP
+// literal directly (net.ParseIP) instead of resolving it via DNS, so tests
+// that pass this as base_url never touch the network or depend on the
+// resolver — the injected cursorFactory below handles all "connection"
+// behavior. Real requests never leave the process either way: production
+// code only calls Me/Models through the (fake, in tests) metadata client, and
+// never opens a socket to this address.
+const hermeticCursorBaseURL = "https://8.8.8.8"
+
 // fakeCursorMetadata is the injectable metadata-client double used across
 // these tests. Both calls return the same err, mirroring the brief's shape.
 type fakeCursorMetadata struct {
@@ -114,7 +124,7 @@ func TestConnectCursorPreservesActiveModel(t *testing.T) {
 	s.reloadFn = func() error { return nil }
 
 	req := httptest.NewRequest(http.MethodPost, "/api/providers/cursor/key",
-		strings.NewReader(`{"api_key":"synthetic-key"}`))
+		strings.NewReader(`{"api_key":"synthetic-key","base_url":"`+hermeticCursorBaseURL+`"}`))
 	req.SetPathValue("id", "cursor")
 	req.Header.Set("Authorization", "Bearer test-token")
 	rec := httptest.NewRecorder()
@@ -345,7 +355,7 @@ func TestSetProviderKeyCursorAuthErrorDoesNotLeakKey(t *testing.T) {
 		}}, nil
 	}
 
-	body := `{"api_key":"` + secret + `"}`
+	body := `{"api_key":"` + secret + `","base_url":"` + hermeticCursorBaseURL + `"}`
 	r := httptest.NewRequest(http.MethodPost, "/api/providers/cursor/key", strings.NewReader(body))
 	r.SetPathValue("id", "cursor")
 	r.Header.Set("Authorization", "Bearer test-token")
@@ -387,7 +397,7 @@ func TestSetProviderKeyCursorTransportErrorMapsTo502(t *testing.T) {
 	}
 
 	r := httptest.NewRequest(http.MethodPost, "/api/providers/cursor/key",
-		strings.NewReader(`{"api_key":"synthetic-key"}`))
+		strings.NewReader(`{"api_key":"synthetic-key","base_url":"`+hermeticCursorBaseURL+`"}`))
 	r.SetPathValue("id", "cursor")
 	r.Header.Set("Authorization", "Bearer test-token")
 	rec := httptest.NewRecorder()
@@ -408,7 +418,7 @@ func TestSetProviderKeyCursorSavesOnlyAfterBothCallsSucceed(t *testing.T) {
 	}
 
 	r := httptest.NewRequest(http.MethodPost, "/api/providers/cursor/key",
-		strings.NewReader(`{"api_key":"synthetic-key"}`))
+		strings.NewReader(`{"api_key":"synthetic-key","base_url":"`+hermeticCursorBaseURL+`"}`))
 	r.SetPathValue("id", "cursor")
 	r.Header.Set("Authorization", "Bearer test-token")
 	rec := httptest.NewRecorder()
@@ -437,5 +447,194 @@ func TestSetProviderKeyCursorSavesOnlyAfterBothCallsSucceed(t *testing.T) {
 	}
 	if saved.Providers["cursor"].APIKey == "synthetic-key" {
 		t.Fatal("credential was saved despite the models call failing")
+	}
+}
+
+// ---- Fix round 1: additional isolation guards ------------------------------
+
+// TestModelSetRejectsCursorProvider guards /api/model/set: an agent
+// integration (Cursor) can never become the active chat model, in memory or
+// on disk, regardless of which config value (model or provider) triggers it.
+func TestModelSetRejectsCursorProvider(t *testing.T) {
+	s := newCursorTestServer(t, func(cfg *config.Config) {
+		cfg.Model.Provider = "openrouter"
+		cfg.Model.Default = "openai/gpt-5"
+	})
+
+	r := httptest.NewRequest(http.MethodPost, "/api/model/set",
+		strings.NewReader(`{"model":"composer-2","provider":"cursor"}`))
+	r.Header.Set("Authorization", "Bearer test-token")
+	rec := httptest.NewRecorder()
+	s.handleModelSet(rec, r)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d body=%s, want 400", rec.Code, rec.Body.String())
+	}
+
+	// Both the in-memory pointer and the on-disk file must be untouched.
+	memCfg := s.config()
+	if memCfg.Model.Provider != "openrouter" || memCfg.Model.Default != "openai/gpt-5" {
+		t.Fatalf("in-memory config mutated: %+v", memCfg.Model)
+	}
+	saved, err := config.Reload()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if saved.Model.Provider != "openrouter" || saved.Model.Default != "openai/gpt-5" {
+		t.Fatalf("on-disk config mutated: %+v", saved.Model)
+	}
+}
+
+// TestSetupTestRejectsCursorProvider guards POST /api/setup/test: it must
+// fail before the generic llm.New call, with an actionable message pointing
+// at the dedicated Cursor connection flow rather than llm.New's own
+// "cursor-agent is an agent integration" guard text.
+func TestSetupTestRejectsCursorProvider(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("ANTARES_HOME", home)
+	cfg := config.Default()
+	if err := config.SaveAt(config.ConfigFile(), cfg); err != nil {
+		t.Fatal(err)
+	}
+	s := &Server{cfg: cfg}
+
+	body := `{"provider":"cursor","api_key":"synthetic-key"}`
+	r := httptest.NewRequest(http.MethodPost, "/api/setup/test", strings.NewReader(body))
+	r.RemoteAddr = "127.0.0.1:1234"
+	rec := httptest.NewRecorder()
+	s.handleSetupTest(rec, r)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d body=%s, want 400", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "/api/providers/cursor/key") {
+		t.Fatalf("response missing actionable pointer to the Cursor connection flow: %s", rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), "cursor_agent tool") {
+		t.Fatal("handleSetupTest reached the generic llm.New guard instead of failing earlier")
+	}
+}
+
+// TestModelListRejectsCursorProvider guards GET /api/model/list: it must fail
+// before the generic agent.Models -> llm.New path, even when Cursor has a
+// resolved key (which would otherwise pass the existing needs_key check and
+// reach the generic path).
+func TestModelListRejectsCursorProvider(t *testing.T) {
+	s := newCursorTestServer(t, func(cfg *config.Config) {
+		p := cfg.Providers["cursor"]
+		p.APIKey = "synthetic-key"
+		cfg.Providers["cursor"] = p
+	})
+
+	r := httptest.NewRequest(http.MethodGet, "/api/model/list?provider=cursor", nil)
+	rec := httptest.NewRecorder()
+	s.handleModelList(rec, r)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+
+	var body struct {
+		Models     []any  `json:"models"`
+		Capability string `json:"capability"`
+		Error      string `json:"error"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body.Capability != "agent" {
+		t.Fatalf("capability = %q, want agent (body=%s)", body.Capability, rec.Body.String())
+	}
+	if len(body.Models) != 0 {
+		t.Fatalf("models = %+v, want empty", body.Models)
+	}
+	if !strings.Contains(body.Error, "/api/providers/cursor/models") {
+		t.Fatalf("error = %q, missing actionable pointer", body.Error)
+	}
+	if strings.Contains(rec.Body.String(), "cursor_agent tool") {
+		t.Fatal("handleModelList reached the generic agent.Models -> llm.New path")
+	}
+}
+
+// TestProviderModelInfoSkipsCursorProvider guards GET
+// /api/providers/{id}/model-info: it must fail before agent.Models. A curated
+// Models whitelist proves this deterministically — if the generic path ran,
+// agent.Models would return the whitelist entry (no live call needed) and
+// this handler would report found:true; the capability guard must prevent
+// that regardless of the whitelist's contents.
+func TestProviderModelInfoSkipsCursorProvider(t *testing.T) {
+	s := newCursorTestServer(t, func(cfg *config.Config) {
+		p := cfg.Providers["cursor"]
+		p.APIKey = "synthetic-key"
+		p.Models = []string{"composer-2"}
+		cfg.Providers["cursor"] = p
+	})
+
+	r := httptest.NewRequest(http.MethodGet, "/api/providers/cursor/model-info?id=composer-2", nil)
+	r.SetPathValue("id", "cursor")
+	rec := httptest.NewRecorder()
+	s.handleProviderModelInfo(rec, r)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+
+	var body struct {
+		Found bool `json:"found"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body.Found {
+		t.Fatal("handleProviderModelInfo reached the generic agent.Models path (curated whitelist matched)")
+	}
+}
+
+// TestAddProviderModelRejectsCursorProvider guards POST
+// /api/providers/{id}/model: Cursor has no manual model whitelist to append
+// to — its catalogue is discovered live via /api/providers/{id}/models.
+func TestAddProviderModelRejectsCursorProvider(t *testing.T) {
+	s := newCursorTestServer(t, nil)
+
+	r := httptest.NewRequest(http.MethodPost, "/api/providers/cursor/model",
+		strings.NewReader(`{"model":"composer-2"}`))
+	r.SetPathValue("id", "cursor")
+	r.Header.Set("Authorization", "Bearer test-token")
+	rec := httptest.NewRecorder()
+	s.handleAddProviderModel(rec, r)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d body=%s, want 400", rec.Code, rec.Body.String())
+	}
+
+	saved, err := config.Reload()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(saved.Providers["cursor"].Models) != 0 {
+		t.Fatalf("cursor gained a manual model entry: %+v", saved.Providers["cursor"].Models)
+	}
+}
+
+// TestDeleteProviderModelRejectsCursorProvider mirrors
+// TestAddProviderModelRejectsCursorProvider for the delete path.
+func TestDeleteProviderModelRejectsCursorProvider(t *testing.T) {
+	s := newCursorTestServer(t, func(cfg *config.Config) {
+		p := cfg.Providers["cursor"]
+		p.Models = []string{"composer-2"}
+		cfg.Providers["cursor"] = p
+	})
+
+	r := httptest.NewRequest(http.MethodDelete, "/api/providers/cursor/model/composer-2", nil)
+	r.SetPathValue("id", "cursor")
+	r.SetPathValue("model", "composer-2")
+	r.Header.Set("Authorization", "Bearer test-token")
+	rec := httptest.NewRecorder()
+	s.handleDeleteProviderModel(rec, r)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d body=%s, want 400", rec.Code, rec.Body.String())
+	}
+
+	saved, err := config.Reload()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(saved.Providers["cursor"].Models) != 1 {
+		t.Fatalf("cursor's manual model entry was mutated despite the guard: %+v", saved.Providers["cursor"].Models)
 	}
 }

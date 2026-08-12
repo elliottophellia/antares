@@ -233,6 +233,15 @@ func (s *Server) handleSetupTest(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, errors.New("unknown provider"))
 		return
 	}
+	// Agent integrations (Cursor) are not chat-model providers: fail before
+	// the generic llm.New call below, and point at the dedicated flow rather
+	// than the setup wizard's "test connection" step.
+	if chosen.Capability == "agent" {
+		writeError(w, http.StatusBadRequest, fmt.Errorf(
+			"%s is an agent integration; connect it via POST /api/providers/%s/key and browse its models via GET /api/providers/%s/models",
+			chosen.ID, chosen.ID, chosen.ID))
+		return
+	}
 
 	baseURL := firstNonEmpty(body.BaseURL, chosen.BaseURL)
 	if baseURL != "" {

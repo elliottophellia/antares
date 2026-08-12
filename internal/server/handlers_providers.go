@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 	"time"
@@ -21,6 +22,13 @@ func (s *Server) handleProviderModelInfo(w http.ResponseWriter, r *http.Request)
 	modelID := strings.TrimSpace(r.URL.Query().Get("id"))
 	if modelID == "" {
 		writeError(w, http.StatusBadRequest, errors.New("a model id is required"))
+		return
+	}
+	// Agent integrations (Cursor) are not chat-model providers: fail before
+	// the generic agent.Models -> llm.New path. This handler's contract is a
+	// silent fallback (found:false), so no network call is needed either way.
+	if providers.CapabilityOf(s.config(), id) == providers.CapabilityAgent {
+		writeJSON(w, http.StatusOK, map[string]any{"found": false})
 		return
 	}
 	models, err := s.agent.Models(r.Context(), id)
@@ -156,6 +164,15 @@ func (s *Server) handleAddProviderModel(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
+	// Agent integrations (Cursor) do not curate a manual model whitelist —
+	// their catalogue is discovered live via GET /api/providers/{id}/models.
+	// Reject before any config mutation, matching the same boundary as
+	// /api/model/set and /api/model/list.
+	if providers.CapabilityOf(cfg, id) == providers.CapabilityAgent {
+		writeError(w, http.StatusBadRequest, fmt.Errorf(
+			"%s is an agent integration; its models are discovered via GET /api/providers/%s/models", id, id))
+		return
+	}
 	if cfg.Providers == nil {
 		cfg.Providers = map[string]config.Provider{}
 	}
@@ -201,6 +218,13 @@ func (s *Server) handleDeleteProviderModel(w http.ResponseWriter, r *http.Reques
 	cfg, err := config.Reload()
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	// Same boundary as handleAddProviderModel: Cursor has no manual model
+	// whitelist to delete from.
+	if providers.CapabilityOf(cfg, id) == providers.CapabilityAgent {
+		writeError(w, http.StatusBadRequest, fmt.Errorf(
+			"%s is an agent integration; its models are discovered via GET /api/providers/%s/models", id, id))
 		return
 	}
 	p := cfg.Providers[id]

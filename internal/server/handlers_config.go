@@ -2,6 +2,7 @@ package server
 
 import (
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
@@ -213,10 +214,22 @@ func (s *Server) handleModelOptions(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleModelList(w http.ResponseWriter, r *http.Request) {
 	provider := r.URL.Query().Get("provider")
+	cfg := s.config()
 
 	// Calling a provider we know has no credential just turns a known state
 	// into an opaque 401. Report the missing key instead.
-	id, p := s.config().ResolveProvider(provider)
+	id, p := cfg.ResolveProvider(provider)
+	// Agent integrations (Cursor) are not chat-model providers: fail before
+	// the generic agent.Models -> llm.New path, and point the caller at the
+	// dedicated discovery endpoint instead of a 401/500 from the guard below.
+	if providers.CapabilityOf(cfg, id) == providers.CapabilityAgent {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"models": []any{}, "provider": id, "capability": "agent",
+			"error": fmt.Sprintf(
+				"%s is an agent integration; browse its models via GET /api/providers/%s/models.", id, id),
+		})
+		return
+	}
 	if p.APIKey == "" && !isLocalEndpoint(p.BaseURL) {
 		writeJSON(w, http.StatusOK, map[string]any{
 			"models": []any{}, "needs_key": true, "provider": id,
@@ -356,6 +369,17 @@ func (s *Server) handleModelSet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	prevProvider := cfg.Model.Provider
+	resultProvider := prevProvider
+	if body.Provider != "" {
+		resultProvider = body.Provider
+	}
+	// An agent integration (Cursor) can never become the active chat model —
+	// checked before any mutation, memory swap, or disk write below.
+	if providers.CapabilityOf(cfg, resultProvider) == providers.CapabilityAgent {
+		writeError(w, http.StatusBadRequest,
+			fmt.Errorf("%q is an agent integration and cannot be the active model", resultProvider))
+		return
+	}
 	cfg.Model.Default = body.Model
 	if body.Provider != "" {
 		cfg.Model.Provider = body.Provider
