@@ -142,6 +142,18 @@ tools:
 Tools declare whether they mutate. `read_file` does not; `write_file`,
 `terminal`, and `browser` do.
 
+## Cursor Cloud Agents
+
+`cursor_agent` delegates coding work to a configured Cursor Cloud Agent. It can
+start a run, follow up on an existing agent, or request cancellation. Starting,
+following up, and cancelling are always approval-gated because they create or
+change remote work.
+
+`cursor_agent_status` reads a run snapshot or waits for progress without
+approval. Use it to inspect an agent/run returned by `cursor_agent`, rather
+than repeatedly starting new work. Both tools are available when the Cursor
+agent integration has a `CURSOR_API_KEY`; see [Configuration](configuration.md).
+
 ## Limits
 
 ```yaml

@@ -88,6 +88,26 @@ release. A model family Antares does not recognise defaults to the OpenAI
 format, which is correct for the GLM, Kimi, DeepSeek, MiMo, GPT, Grok and
 Hunyuan families it currently serves.
 
+### Cursor Cloud Agents
+
+Cursor is an agent integration, not a primary Antares model provider. Configure
+the deployment-owned key through the environment:
+
+```yaml
+providers:
+  cursor:
+    kind: cursor-agent
+    base_url: https://api.cursor.com
+    api_key_env: CURSOR_API_KEY
+    enabled: true
+    timeout_seconds: 900
+```
+
+`CURSOR_API_KEY` works with the built-in Cursor entry without writing a key to
+YAML. One deployment key and its quota are shared by every user who can invoke
+the Cursor tools. Repository-backed runs use the repository state available to
+Cursor, so unpushed local changes are not included.
+
 `model.auxiliary` is worth setting. Titles, compaction summaries, verification,
 and goal judging all use it, and a small model does those as well as a large one
 for a fraction of the cost.
@@ -100,6 +120,7 @@ OPENAI_API_KEY=…
 OPENROUTER_API_KEY=…
 OPENCODE_API_KEY=…
 GEMINI_API_KEY=…
+CURSOR_API_KEY=…
 ```
 
 ## Storage
