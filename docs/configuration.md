@@ -103,10 +103,13 @@ providers:
     timeout_seconds: 900
 ```
 
-`CURSOR_API_KEY` works with the built-in Cursor entry without writing a key to
-YAML. One deployment key and its quota are shared by every user who can invoke
-the Cursor tools. Repository-backed runs use the repository state available to
-Cursor, so unpushed local changes are not included.
+Cursor is a built-in cloud-only agent integration. Existing configuration and
+providers need no migration and retain their current LLM behavior. The default
+Cursor entry is enabled but disconnected; it becomes usable only when Antares
+resolves its key. `CURSOR_API_KEY` works with that entry without writing a key
+to YAML. One deployment key and its quota are shared by every user who can
+invoke the Cursor tools. Repository-backed runs use the repository state
+available to Cursor, so unpushed local changes are not included.
 
 `model.auxiliary` is worth setting. Titles, compaction summaries, verification,
 and goal judging all use it, and a small model does those as well as a large one

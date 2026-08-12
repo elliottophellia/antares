@@ -147,12 +147,16 @@ Tools declare whether they mutate. `read_file` does not; `write_file`,
 `cursor_agent` delegates coding work to a configured Cursor Cloud Agent. It can
 start a run, follow up on an existing agent, or request cancellation. Starting,
 following up, and cancelling are always approval-gated because they create or
-change remote work.
+change remote work. It defaults to `wait: true`. With `wait: false`, it returns
+the agent ID, run ID, and Cursor URL immediately; use `cursor_agent_status`
+later instead of busy-polling.
 
-`cursor_agent_status` reads a run snapshot or waits for progress without
-approval. Use it to inspect an agent/run returned by `cursor_agent`, rather
-than repeatedly starting new work. Both tools are available when the Cursor
-agent integration has a `CURSOR_API_KEY`; see [Configuration](configuration.md).
+`cursor_agent_status` is read-only and needs no approval. It defaults to
+`wait: false` and returns one snapshot; `wait: true` streams until terminal
+status. Cancelling local waiting does not cancel the remote Cursor run. Use the
+status tool to inspect an agent/run returned by `cursor_agent`, rather than
+repeatedly starting new work. Both tools are available when the Cursor agent
+integration has a `CURSOR_API_KEY`; see [Configuration](configuration.md).
 
 ## Limits
 
