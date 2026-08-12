@@ -12,11 +12,9 @@ import (
 
 func TestMethodologyBlockEmptyUntilEngagement(t *testing.T) {
 	dir := t.TempDir()
-	ag := &Agent{
-		cfg:      config.Default(),
-		intel:    engagement.NewStore(filepath.Join(dir, "intel")),
-		findings: findings.NewStore(filepath.Join(dir, "findings")),
-	}
+	ag := agentWithConfig(config.Default())
+	ag.intel = engagement.NewStore(filepath.Join(dir, "intel"))
+	ag.findings = findings.NewStore(filepath.Join(dir, "findings"))
 	// No intel recorded yet: an ordinary session must see nothing.
 	if block := ag.methodologyBlock("sess-1"); block != "" {
 		t.Fatalf("expected empty block before any engagement, got %q", block)

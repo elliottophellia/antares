@@ -27,7 +27,7 @@ type toolFailure struct {
 // the background so it never slows a turn. This is how antares "grows": next
 // time, the lesson is injected into the prompt (see lessonsBlock).
 func (a *Agent) learnFromErrors(ctx context.Context, userMsg, reply string, failures []toolFailure) {
-	if len(failures) == 0 || a.db == nil || !a.cfg.Memory.Enabled {
+	if len(failures) == 0 || a.db == nil || !a.config().Memory.Enabled {
 		return
 	}
 	client, model, _, err := a.newAuxClient("")
@@ -96,7 +96,7 @@ func (a *Agent) recentLessons(ctx context.Context, n int) string {
 // lessonsBlock renders learned lessons for the system prompt, so the agent
 // applies past corrections and does not repeat the same mistakes.
 func (a *Agent) lessonsBlock(ctx context.Context) string {
-	if a.db == nil || !a.cfg.Memory.Enabled {
+	if a.db == nil || !a.config().Memory.Enabled {
 		return ""
 	}
 	items, err := a.db.ListMemories(ctx, "global", "", 60)

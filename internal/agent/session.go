@@ -35,9 +35,9 @@ func (a *Agent) resolveSession(ctx context.Context, req *Request) (*store.Sessio
 		Platform:  platform,
 		ChannelID: req.ChannelID,
 		UserID:    req.UserID,
-		Model:     firstNonEmpty(req.Model, a.cfg.Model.Default),
-		Provider:  a.cfg.Model.Provider,
-		Workspace: firstNonEmpty(req.Workspace, a.cfg.Agent.Workspace),
+		Model:     firstNonEmpty(req.Model, a.config().Model.Default),
+		Provider:  a.config().Model.Provider,
+		Workspace: firstNonEmpty(req.Workspace, a.config().Agent.Workspace),
 		Meta:      store.Meta{},
 	}
 	// A project session binds to a chosen folder: the workspace becomes the
@@ -263,7 +263,7 @@ func (a *Agent) maybeTitle(ctx context.Context, sess *store.Session, userMsg, re
 		return
 	}
 	title := ""
-	if a.cfg.Agent.SmartTitles {
+	if a.config().Agent.SmartTitles {
 		title = a.llmTitle(ctx, userMsg, reply)
 	}
 	if title == "" {

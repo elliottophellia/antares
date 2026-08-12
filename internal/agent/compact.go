@@ -19,8 +19,8 @@ import (
 // sane fallback. It mirrors the window maybeCompact governs, so the UI's
 // "context full" bar agrees with compaction.
 func (a *Agent) contextWindowFor(model string) int {
-	if a.cfg != nil {
-		for _, p := range a.cfg.Providers {
+	if a.config() != nil {
+		for _, p := range a.config().Providers {
 			if m, ok := p.ModelMeta[model]; ok && m.ContextWindow > 0 {
 				return m.ContextWindow
 			}
@@ -29,8 +29,8 @@ func (a *Agent) contextWindowFor(model string) int {
 	if w := providers.ContextWindow(model); w > 0 {
 		return w
 	}
-	if a.cfg != nil && a.cfg.Model.ContextWindow > 0 {
-		return a.cfg.Model.ContextWindow
+	if a.config() != nil && a.config().Model.ContextWindow > 0 {
+		return a.config().Model.ContextWindow
 	}
 	return 128000
 }
@@ -40,7 +40,7 @@ func (a *Agent) contextWindowFor(model string) int {
 // summary is persisted on the session so the next turn does not re-run a
 // multi-minute summarise over thousands of raw messages.
 func (a *Agent) maybeCompact(ctx context.Context, history []llm.Message, system, model string, tools []llm.Tool, emit Emit, sess *store.Session) []llm.Message {
-	cfg := a.cfg.Compression
+	cfg := a.config().Compression
 	if !cfg.Enabled || len(history) < 8 {
 		return history
 	}
@@ -89,9 +89,13 @@ func (a *Agent) maybeCompact(ctx context.Context, history []llm.Message, system,
 
 	summary, err := a.summarise(ctx, middle)
 	if err != nil {
-		slog.Warn("context compaction failed; dropping oldest turns instead", "error", err)
-		// Fall back to truncation so the turn can still proceed.
-		return append(append([]llm.Message{}, head...), tail...)
+		slog.Warn("context compaction failed; pruning oversized tool outputs instead of dropping history", "error", err)
+		// Fall back to pruning oversized tool results in the middle section so
+		// the turn can still proceed without losing all mid-task context.
+		// Dropping the entire middle (head+tail only) would silently erase
+		// the conversation between protectFirst and protectLast.
+		pruned := a.prunedToolResults(middle)
+		return append(append([]llm.Message{}, head...), append(pruned, tail...)...)
 	}
 
 	compacted := make([]llm.Message, 0, len(head)+len(tail)+1)
@@ -261,7 +265,7 @@ Write in the same language the user used.
 
 // prunedToolResults shrinks large tool outputs that are far from the tail.
 func (a *Agent) prunedToolResults(history []llm.Message) []llm.Message {
-	cfg := a.cfg.Compression
+	cfg := a.config().Compression
 	minChars := cfg.ProactivePruneMinChars
 	if minChars <= 0 {
 		return history

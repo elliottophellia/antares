@@ -13,8 +13,10 @@ import (
 	"log/slog"
 	"os"
 	"os/exec"
+	"runtime/debug"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/enowdev/antares/internal/board"
@@ -105,6 +107,12 @@ type Request struct {
 	Platform  string
 	UserID    string
 	ChannelID string
+	// UserName is the sender's platform handle (e.g. Discord username), and
+	// UserDisplayName the friendliest name to address them by (server nickname
+	// or display name). Both are shown to the model so it knows who it is
+	// talking to; empty on surfaces without a distinct user (the CLI).
+	UserName        string
+	UserDisplayName string
 	// Toolset overrides the configured toolset for this run.
 	Toolset string
 	// Model overrides the configured model for this run.
@@ -158,7 +166,10 @@ type Result struct {
 
 // Agent owns the shared services a run needs.
 type Agent struct {
-	cfg           *config.Config
+	// cfg is swapped atomically: a live model/config switch (SetConfig) races
+	// with the many goroutines that read the config during a turn, so the
+	// pointer must be published and read atomically. Read it via a.config().
+	cfg           atomic.Pointer[config.Config]
 	db            store.Store
 	reg           *tools.Registry
 	shell         *tools.ShellManager
@@ -187,8 +198,8 @@ type Agent struct {
 
 // New builds an agent.
 func New(cfg *config.Config, db store.Store, reg *tools.Registry, shell *tools.ShellManager, ragProvider tools.RAGProvider) *Agent {
-	return &Agent{
-		cfg: cfg, db: db, reg: reg, shell: shell, rag: ragProvider,
+	a := &Agent{
+		db: db, reg: reg, shell: shell, rag: ragProvider,
 		checks:   checkpoint.NewStore(config.Path("checkpoints")),
 		roles:    roles.NewRegistry(nil),
 		findings: findings.NewStore(config.Path("findings")),
@@ -199,13 +210,26 @@ func New(cfg *config.Config, db store.Store, reg *tools.Registry, shell *tools.S
 		bgAct:    newBgActivity(),
 		active:   map[string]context.CancelFunc{},
 	}
+	a.cfg.Store(cfg)
+	return a
 }
 
-// Config exposes the live configuration.
-func (a *Agent) Config() *config.Config { return a.cfg }
+// config returns the live configuration, read atomically so a concurrent
+// SetConfig (a live model/config switch) cannot tear the pointer.
+func (a *Agent) config() *config.Config { return a.cfg.Load() }
 
-// SetConfig swaps in a reloaded configuration.
-func (a *Agent) SetConfig(cfg *config.Config) { a.cfg = cfg }
+// Config exposes the live configuration.
+func (a *Agent) Config() *config.Config { return a.cfg.Load() }
+
+// SetConfig swaps in a reloaded configuration. The pointer is published
+// atomically; callers that need a stable view for a whole operation should
+// snapshot it once via config() rather than re-reading across steps.
+func (a *Agent) SetConfig(cfg *config.Config) {
+	if cfg == nil {
+		return
+	}
+	a.cfg.Store(cfg)
+}
 
 // SetRAG swaps the retrieval provider after a config change.
 func (a *Agent) SetRAG(p tools.RAGProvider) { a.rag = p }
@@ -258,7 +282,7 @@ func (a *Agent) Run(ctx context.Context, req Request, emit Emit) (*Result, error
 	if emit == nil {
 		emit = func(Event) error { return nil }
 	}
-	cfg := a.cfg
+	cfg := a.config()
 
 	sess, err := a.resolveSession(ctx, &req)
 	if err != nil {
@@ -370,7 +394,7 @@ func (a *Agent) Run(ctx context.Context, req Request, emit Emit) (*Result, error
 	// Sub2API Antigravity treats a tool literally named "web_search" as Google's
 	// built-in search and rejects mixing it with functionDeclarations. Rename
 	// only on the wire for those routes; execution still resolves to web_search.
-	_, prov := a.cfg.ResolveProvider(providerName)
+	_, prov := a.config().ResolveProvider(providerName)
 	toolSpecs, byName = sanitizeToolsForProvider(toolSpecs, byName, providerName, prov.BaseURL)
 
 	systemPrompt := a.buildSystemPrompt(ctx, req, sess, activeTools)
@@ -384,16 +408,18 @@ func (a *Agent) Run(ctx context.Context, req Request, emit Emit) (*Result, error
 	}
 
 	var (
-		total      llm.Usage
-		lastReply  string
-		turn       int
-		toolCalls  int
-		verified   int
-		judged     int
-		usedTodo   bool          // the model kept a task list this run
-		todoNudges int           // times we pushed it to finish open tasks
-		grContinue int           // times the tool-call guardrail was extended for open tasks
-		failures   []toolFailure // errored tool calls, for post-turn learning
+		total              llm.Usage
+		lastReply          string
+		turn               int
+		toolCalls          int
+		totalToolCalls     int // all tool calls across grContinue resets, never reset
+		verified           int
+		judged             int
+		usedTodo           bool          // the model kept a task list this run
+		todoNudges         int           // times we pushed it to finish open tasks
+		grContinue         int           // times the tool-call guardrail was extended for open tasks
+		emptyResponseCount int           // consecutive empty model responses, capped to prevent loops
+		failures           []toolFailure // errored tool calls, for post-turn learning
 	)
 	repeats := newRepeatTracker(cfg.Agent.RepeatLimit)
 	todoOpenPrev := -1 // open task count at the last nudge, to detect no progress
@@ -429,6 +455,9 @@ func (a *Agent) Run(ctx context.Context, req Request, emit Emit) (*Result, error
 		}
 
 		resp, err := a.callModel(runCtx, client, llmReq, cfg.Streaming.Enabled, emit)
+		if err == nil {
+			err = validateToolCallArguments(resp)
+		}
 		// A transient provider glitch (e.g. truncated/malformed tool_call
 		// arguments — "please retry") can slip past the client's own retry once
 		// tokens have streamed. Retry the whole turn here, telling the UI to
@@ -441,10 +470,17 @@ func (a *Agent) Run(ctx context.Context, req Request, emit Emit) (*Result, error
 			case <-time.After(time.Duration(att+1) * 800 * time.Millisecond):
 			}
 			resp, err = a.callModel(runCtx, client, llmReq, cfg.Streaming.Enabled, emit)
+			if err == nil {
+				err = validateToolCallArguments(resp)
+			}
 		}
 		if err != nil {
 			if errors.Is(err, context.Canceled) {
 				_ = emit(Event{Type: EventNotice, Message: "interrupted"})
+				break
+			}
+			if errors.Is(err, context.DeadlineExceeded) {
+				_ = emit(Event{Type: EventNotice, Message: "timed out"})
 				break
 			}
 			// Run owns the terminal events so callers never double-report.
@@ -482,6 +518,7 @@ func (a *Agent) Run(ctx context.Context, req Request, emit Emit) (*Result, error
 		}
 		if resp.Content != "" {
 			lastReply = resp.Content
+			emptyResponseCount = 0
 		}
 
 		if len(resp.ToolCalls) == 0 {
@@ -513,6 +550,18 @@ func (a *Agent) Run(ctx context.Context, req Request, emit Emit) (*Result, error
 					continue
 				}
 			}
+			// The model returned no text and no tool calls. Rather than silently
+			// stopping, surface a notice and nudge it to try again. A hard cap
+			// prevents an infinite empty-response loop.
+			if resp.Content == "" && emptyResponseCount < 3 {
+				emptyResponseCount++
+				_ = emit(Event{Type: EventNotice, Message: "model returned an empty response — retrying"})
+				history = append(history, llm.Message{
+					Role:    llm.RoleUser,
+					Content: "Your previous response was empty. Please provide a response or use a tool to make progress.",
+				})
+				continue
+			}
 			break
 		}
 
@@ -522,6 +571,14 @@ func (a *Agent) Run(ctx context.Context, req Request, emit Emit) (*Result, error
 			}
 		}
 		toolCalls += len(resp.ToolCalls)
+		totalToolCalls += len(resp.ToolCalls)
+		if g := a.config().Guardrails; g.HardStopEnabled && g.AbsoluteMaxToolCalls > 0 && totalToolCalls >= g.AbsoluteMaxToolCalls {
+			_ = emit(Event{Type: EventNotice, Message: fmt.Sprintf(
+				"absolute tool-call ceiling reached (%d calls) — stopping", totalToolCalls)})
+			lastReply = fmt.Sprintf("I reached the absolute tool-call limit of %d and stopped. %s",
+				g.AbsoluteMaxToolCalls, lastReply)
+			break
+		}
 		if a.guardrailTripped(toolCalls, emit) {
 			// The tool-call budget is a loop backstop, not a task deadline. When
 			// there is still work on the todo list, extend it instead of stopping
@@ -616,10 +673,35 @@ func (a *Agent) Run(ctx context.Context, req Request, emit Emit) (*Result, error
 		// Fold this exchange into the conversation memory so later turns and
 		// sessions can recall it. Non-blocking, best-effort.
 		a.indexTurn(sess, req.Message, lastReply)
+		// When per-user RAG is on, also distil what this turn reveals about the
+		// gateway sender into their own collection.
+		a.indexUserTurn(req, req.Message, lastReply)
 	}
 	_ = emit(Event{Type: EventDone})
 
 	return &Result{SessionID: sess.ID, Reply: lastReply, Turns: turn, Usage: total}, nil
+}
+
+// validateToolCallArguments catches provider streams that finish with a
+// truncated JSON argument payload. Without this check the malformed call reaches
+// the tool, fails Bind with unexpected EOF, and consumes the turn instead of
+// using the existing provider-glitch retry path.
+func validateToolCallArguments(resp *llm.Response) error {
+	if resp == nil {
+		return nil
+	}
+	for i := range resp.ToolCalls {
+		call := &resp.ToolCalls[i]
+		if strings.TrimSpace(call.Arguments) == "" {
+			call.Arguments = "{}"
+			continue
+		}
+		var args map[string]any
+		if err := json.Unmarshal([]byte(call.Arguments), &args); err != nil {
+			return fmt.Errorf("malformed tool_call arguments for %s: %w", call.Name, err)
+		}
+	}
+	return nil
 }
 
 // callModel runs one completion, streaming when enabled.
@@ -643,7 +725,7 @@ func (a *Agent) callModel(ctx context.Context, client llm.Client, req llm.Reques
 		case llm.EventText:
 			return emit(Event{Type: EventText, Delta: ev.Delta})
 		case llm.EventReasoning:
-			if a.cfg.Display.ShowReasoning {
+			if a.config().Display.ShowReasoning {
 				return emit(Event{Type: EventReasoning, Delta: ev.Delta})
 			}
 		}
@@ -743,7 +825,7 @@ func (a *Agent) executeTools(
 
 		workspace := sess.Workspace
 		if workspace == "" {
-			workspace = a.cfg.Agent.Workspace
+			workspace = a.config().Agent.Workspace
 		}
 		// A project session confines writes to the project folder plus the
 		// antares workspace, while allowing reads anywhere. Empty for an
@@ -751,7 +833,7 @@ func (a *Agent) executeTools(
 		var writeRoots []string
 		if pd, _ := sess.Meta["project_dir"].(string); strings.TrimSpace(pd) != "" {
 			writeRoots = []string{pd}
-			if aw := a.cfg.Agent.Workspace; aw != "" && aw != pd {
+			if aw := a.config().Agent.Workspace; aw != "" && aw != pd {
 				writeRoots = append(writeRoots, aw)
 			}
 		}
@@ -771,7 +853,7 @@ func (a *Agent) executeTools(
 			},
 			AskUser: a.askBridge(sess.ID, safeEmit),
 			Deps: &tools.Deps{
-				Config: a.cfg, Store: a.db, RAG: a.rag, Shell: a.shell,
+				Config: a.config(), Store: a.db, RAG: a.rag, Shell: a.shell,
 				Sub: a.subAgentFor(req), Tasks: a.backgroundFor(req), Skills: a.skillLibrary(),
 				SocialBrowser: a.socialBrowser,
 				Checkpoint: func(sessionID, path, tool string) {
@@ -808,7 +890,7 @@ func (a *Agent) executeTools(
 
 		start := time.Now()
 		res := tool.Execute(toolCtx, in)
-		content := trimForModel(res.Content, a.cfg.Tools.MaxOutputChars)
+		content := trimForModel(res.Content, a.config().Tools.MaxOutputChars)
 		if content == "" {
 			content = "(tool produced no output)"
 		}
@@ -833,7 +915,7 @@ func (a *Agent) executeTools(
 		// What the model sees may be fenced as untrusted; what the UI shows stays
 		// raw. Errors are our own messages, so they are never fenced.
 		modelContent := content
-		if !res.IsError && a.cfg.Agent.WrapUntrustedOutput && untrustedTool(call.Name) {
+		if !res.IsError && a.config().Agent.WrapUntrustedOutput && untrustedTool(call.Name) {
 			modelContent = wrapUntrusted(call.Name, content)
 		}
 
@@ -844,7 +926,31 @@ func (a *Agent) executeTools(
 		_ = safeEmit(Event{Type: EventToolResult, ID: call.ID, Name: call.Name, Content: content, IsError: res.IsError})
 	}
 
-	parallel := a.cfg.Model.ParallelToolCall && len(calls) > 1
+	// recoverRun wraps run() with panic recovery so a panicking tool cannot
+	// deadlock wg.Wait() (parallel) or kill the turn without a user-visible
+	// error (serial). The panic is logged, surfaced as an error tool result,
+	// and the model gets a chance to recover.
+	recoverRun := func(i int, call llm.ToolCall) {
+		defer func() {
+			if r := recover(); r != nil {
+				slog.Error("tool panicked", "tool", call.Name, "panic", r, "stack", string(debug.Stack()))
+				outcomes[i] = toolOutcome{
+					message: llm.Message{
+						Role: llm.RoleTool, ToolCallID: call.ID, Name: call.Name,
+						Content: fmt.Sprintf("Tool %q panicked: %v", call.Name, r),
+					},
+					isError: true,
+				}
+				_ = safeEmit(Event{
+					Type: EventToolResult, ID: call.ID, Name: call.Name,
+					Content: outcomes[i].message.Content, IsError: true,
+				})
+			}
+		}()
+		run(i, call)
+	}
+
+	parallel := a.config().Model.ParallelToolCall && len(calls) > 1
 	if parallel {
 		var wg sync.WaitGroup
 		sem := make(chan struct{}, maxParallelTools)
@@ -854,14 +960,14 @@ func (a *Agent) executeTools(
 				defer wg.Done()
 				sem <- struct{}{}
 				defer func() { <-sem }()
-				run(i, call)
+				recoverRun(i, call)
 			}(i, call)
 		}
 		wg.Wait()
 		return outcomes
 	}
 	for i, call := range calls {
-		run(i, call)
+		recoverRun(i, call)
 	}
 	return outcomes
 }
@@ -869,12 +975,12 @@ func (a *Agent) executeTools(
 const maxParallelTools = 4
 
 func (a *Agent) toolTimeout(name string) time.Duration {
-	if secs, ok := a.cfg.Tools.Timeouts[name]; ok && secs > 0 {
+	if secs, ok := a.config().Tools.Timeouts[name]; ok && secs > 0 {
 		return time.Duration(secs) * time.Second
 	}
 	switch name {
 	case "terminal":
-		return time.Duration(maxInt(a.cfg.Terminal.Timeout, 60)) * time.Second
+		return time.Duration(maxInt(a.config().Terminal.Timeout, 60)) * time.Second
 	case "process":
 		// process(wait) intentionally blocks for at most 30 seconds. Leave margin
 		// for scheduling and JSON serialization so the tool can return its state.
@@ -895,14 +1001,14 @@ func (a *Agent) toolTimeout(name string) time.Duration {
 func (a *Agent) subAgentFor(parent Request) tools.SubAgent {
 	return func(ctx context.Context, sub tools.SubAgentRequest) (string, error) {
 		depth := parent.Depth + 1
-		if maxDepth := a.cfg.Delegation.MaxDepth; maxDepth > 0 && depth > maxDepth {
+		if maxDepth := a.config().Delegation.MaxDepth; maxDepth > 0 && depth > maxDepth {
 			return "", fmt.Errorf("maximum delegation depth (%d) reached", maxDepth)
 		}
 
 		// A top-level sub-agent may run in its own process, so a crash cannot
 		// take the parent down. Nested delegation stays in-process to avoid a
 		// fork storm; file-backed findings/intel/sessions flow either way.
-		if a.cfg.Delegation.Subprocess && depth == 1 {
+		if a.config().Delegation.Subprocess && depth == 1 {
 			_, untrack := trackSubAgent(sub.Role, sub.Prompt, parent.SessionID)
 			defer untrack()
 			return a.runSubprocess(ctx, sub)
@@ -1018,7 +1124,7 @@ func (a *Agent) runSubprocess(ctx context.Context, sub tools.SubAgentRequest) (s
 }
 
 func (a *Agent) guardrailTripped(toolCalls int, emit Emit) bool {
-	g := a.cfg.Guardrails
+	g := a.config().Guardrails
 	if g.WarningsEnabled && g.WarnAfter > 0 && toolCalls == g.WarnAfter {
 		_ = emit(Event{Type: EventNotice, Message: fmt.Sprintf("%d tool calls in this turn", toolCalls)})
 	}

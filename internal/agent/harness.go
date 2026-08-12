@@ -2,9 +2,7 @@ package agent
 
 import (
 	"context"
-	"crypto/sha256"
 	"encoding/base64"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -101,8 +99,7 @@ func (r *repeatTracker) record(calls []llm.ToolCall) []string {
 			// tool bounds every wait and terminal jobs have explicit cancellation.
 			continue
 		}
-		sum := sha256.Sum256([]byte(c.Name + "\x00" + normaliseArgs(c.Arguments)))
-		key := hex.EncodeToString(sum[:8])
+		key := repeatKey(c)
 		r.seen[key]++
 		if r.seen[key] == r.limit {
 			tripped = append(tripped, c.Name)
@@ -154,6 +151,31 @@ func normaliseArgs(raw string) string {
 	return string(b)
 }
 
+// repeatKey builds the fingerprint for a tool call. For write_file and
+// edit_file the key uses only the tool name and the target path — not the
+// full arguments — so repeated writes to the same file with different
+// content are recognised as the same stuck call. Other tools use the full
+// normalised arguments as before.
+func repeatKey(c llm.ToolCall) string {
+	switch c.Name {
+	case "write_file", "edit_file":
+		var args struct {
+			Path string `json:"path"`
+		}
+		if json.Unmarshal([]byte(c.Arguments), &args) == nil && args.Path != "" {
+			return c.Name + "\x00" + args.Path
+		}
+	case "vps_upload":
+		var args struct {
+			RemotePath string `json:"remote_path"`
+		}
+		if json.Unmarshal([]byte(c.Arguments), &args) == nil && args.RemotePath != "" {
+			return c.Name + "\x00" + args.RemotePath
+		}
+	}
+	return c.Name + "\x00" + normaliseArgs(c.Arguments)
+}
+
 // ---- verification ------------------------------------------------------------
 
 // verdict is what the critic says about a finished reply.
@@ -177,7 +199,7 @@ or
 // verify asks a cheap model whether the request was actually satisfied. It
 // returns nil when verification is off, unavailable, or the reply passes.
 func (a *Agent) verify(ctx context.Context, request, reply string, transcript []llm.Message) *verdict {
-	if !a.cfg.Agent.VerifyReplies || strings.TrimSpace(reply) == "" {
+	if !a.config().Agent.VerifyReplies || strings.TrimSpace(reply) == "" {
 		return nil
 	}
 	client, model, _, err := a.newAuxClient("")
@@ -468,7 +490,7 @@ func todoContinueMessage(open int) string {
 // a single segment's budget — enough for a long multi-step task — while still
 // preventing a genuine runaway tool loop from running unbounded. agent.max_turns
 // remains the absolute backstop.
-const maxGuardrailContinues = 9
+const maxGuardrailContinues = 4
 
 // guardrailContinueMessage is injected when the per-segment tool-call budget is
 // reached but the todo list still has open items: keep working rather than stop.
@@ -496,7 +518,7 @@ func (a *Agent) followUp(
 		return ""
 	}
 
-	maxChecks := a.cfg.Agent.VerifyMax
+	maxChecks := a.config().Agent.VerifyMax
 	if maxChecks <= 0 {
 		maxChecks = 2
 	}
@@ -514,7 +536,7 @@ func (a *Agent) followUp(
 	}
 	maxIter := goal.Max
 	if maxIter <= 0 {
-		maxIter = a.cfg.Agent.GoalMaxIterations
+		maxIter = a.config().Agent.GoalMaxIterations
 	}
 	if maxIter <= 0 {
 		maxIter = 10
@@ -649,7 +671,7 @@ func (a *Agent) Panel(ctx context.Context, question string, models []string, emi
 		return "", nil, errors.New("ask something")
 	}
 	if len(models) == 0 {
-		models = a.cfg.Model.Panel
+		models = a.config().Model.Panel
 	}
 	if len(models) == 0 {
 		return "", nil, errors.New("no panel is configured — set model.panel to two or more model ids")
@@ -868,7 +890,7 @@ var nowFunc = time.Now
 // set, otherwise the default model — which fails cleanly if that model has no
 // eyes.
 func (a *Agent) describeImage(ctx context.Context, data []byte, mime, question string) (string, error) {
-	model := strings.TrimSpace(a.cfg.Model.Vision)
+	model := strings.TrimSpace(a.config().Model.Vision)
 	client, resolved, _, err := a.newClient(model, "")
 	if err != nil {
 		return "", err
@@ -900,7 +922,7 @@ func (a *Agent) describeImage(ctx context.Context, data []byte, mime, question s
 // audioClient builds a raw (unwrapped) client that supports the audio endpoints.
 // Audio needs an OpenAI-compatible provider; anything else returns a clear error.
 func (a *Agent) audioClient() (llm.AudioClient, error) {
-	id, p := a.cfg.ResolveProvider(a.cfg.Model.Provider)
+	id, p := a.config().ResolveProvider(a.config().Model.Provider)
 	client, err := llm.New(llm.Options{
 		Kind: p.Kind, BaseURL: p.BaseURL, APIKey: p.APIKey,
 		Headers: p.Headers, ProviderID: id, Timeout: 2 * time.Minute,
@@ -922,9 +944,9 @@ func (a *Agent) speak(ctx context.Context, text, voice string) ([]byte, string, 
 		return nil, "", err
 	}
 	if voice == "" {
-		voice = firstNonEmpty(a.cfg.Model.Voice, "alloy")
+		voice = firstNonEmpty(a.config().Model.Voice, "alloy")
 	}
-	return ac.Speak(ctx, a.cfg.Model.TTS, voice, "mp3", text)
+	return ac.Speak(ctx, a.config().Model.TTS, voice, "mp3", text)
 }
 
 // transcribe turns speech audio into text.
@@ -933,5 +955,5 @@ func (a *Agent) transcribe(ctx context.Context, filename string, audio []byte) (
 	if err != nil {
 		return "", err
 	}
-	return ac.Transcribe(ctx, a.cfg.Model.STT, filename, audio)
+	return ac.Transcribe(ctx, a.config().Model.STT, filename, audio)
 }

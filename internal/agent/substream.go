@@ -166,4 +166,3 @@ func subEmit(id string, inner func(Event) error) func(Event) error {
 		return nil
 	}
 }
-

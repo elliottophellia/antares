@@ -79,7 +79,7 @@ const approvalTimeout = 5 * time.Minute
 // checkApproval decides whether a call may proceed. It returns an error result
 // to hand back to the model when it may not.
 func (a *Agent) checkApproval(ctx context.Context, call llm.ToolCall, tool tools.Tool, sessionID string, emit Emit) *tools.Result {
-	mode := strings.ToLower(strings.TrimSpace(a.cfg.Tools.ApprovalMode))
+	mode := strings.ToLower(strings.TrimSpace(a.config().Tools.ApprovalMode))
 	if mode == "" {
 		mode = "auto"
 	}

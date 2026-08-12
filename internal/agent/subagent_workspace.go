@@ -25,14 +25,14 @@ func (a *Agent) prepareSubAgentWorkspace(ctx context.Context, parent Request, su
 			workspace = parentProject
 		}
 	} else if workspace == "" {
-		workspace = firstNonEmpty(parent.Workspace, a.cfg.Agent.Workspace)
+		workspace = firstNonEmpty(parent.Workspace, a.config().Agent.Workspace)
 	}
 
 	if !sub.Isolate {
 		return workspace, projectDir, nil
 	}
 
-	base := firstNonEmpty(sub.Workspace, parentProject, parent.Workspace, a.cfg.Agent.Workspace)
+	base := firstNonEmpty(sub.Workspace, parentProject, parent.Workspace, a.config().Agent.Workspace)
 	w, err := worktree.Create(ctx, config.Expand(base), firstNonEmpty(sub.Role, "sub"))
 	if err != nil {
 		slog.Warn("worktree isolation unavailable; using inherited workspace", "workspace", base, "error", err)

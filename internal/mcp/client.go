@@ -356,6 +356,10 @@ func (c *Client) Close() error { return c.transport.Close() }
 //   - sendMu serialises request/response pairs (stdio MCP is half-duplex).
 //   - mu protects closed/stdin so Close can mark the transport dead and kill the
 //     child without waiting for a hung RPC to finish writing.
+//   - pendingMu protects the id→channel map so the background reader can
+//     dispatch responses by request ID. A per-call context cancels only the
+//     in-flight read, so a single timeout does NOT permanently kill the
+//     transport for the rest of the session.
 //
 // Previously send held one mutex for the entire RPC duration. If the child hung
 // (e.g. IDA Pro MCP waiting on a dead IDA RPC port), Close/Refresh blocked
@@ -366,12 +370,28 @@ type stdioTransport struct {
 	stdin  io.WriteCloser
 	stdout *bufio.Reader
 
-	sendMu sync.Mutex // serialises send/notify request cycles
-	mu     sync.Mutex // protects closed + stdin write against Close
-	closed bool
+	sendMu   sync.Mutex // serialises send/notify request cycles
+	mu       sync.Mutex // protects closed + stdin write against Close
+	closed   bool
 	waitOnce sync.Once
 	waitErr  error
+
+	pendingMu  sync.Mutex
+	pending    map[int64]chan *rpcResponse // id → per-call response channel
+	readerOnce sync.Once                   // starts the background reader once
+	readerDone chan struct{}               // closed when the background reader exits
+	// timeouts counts consecutive calls that ended on ctx.Done with no reply.
+	// A single timeout no longer tears the transport down (a slow call must not
+	// kill a healthy server), but a child that has genuinely wedged would
+	// otherwise make every future call wait the full timeout forever. After
+	// maxConsecutiveTimeouts the transport self-closes so the next caller fails
+	// fast and the process is reaped. Any successful reply resets it to zero.
+	timeouts int
 }
+
+// maxConsecutiveTimeouts is how many back-to-back ctx.Done timeouts a stdio
+// transport tolerates before deciding the child is wedged and closing itself.
+const maxConsecutiveTimeouts = 3
 
 func newStdioTransport(cfg ServerConfig) (transport, error) {
 	if strings.TrimSpace(cfg.Command) == "" {
@@ -406,7 +426,13 @@ func newStdioTransport(cfg ServerConfig) (transport, error) {
 		}
 	}()
 
-	t := &stdioTransport{cmd: cmd, stdin: stdin, stdout: bufio.NewReaderSize(stdout, 1<<20)}
+	t := &stdioTransport{
+		cmd:        cmd,
+		stdin:      stdin,
+		stdout:     bufio.NewReaderSize(stdout, 1<<20),
+		pending:    map[int64]chan *rpcResponse{},
+		readerDone: make(chan struct{}),
+	}
 	// Reap the child if it exits on its own so it never sits as a zombie until
 	// the next Close/Refresh. Wait is idempotent via waitOnce.
 	go func() { _ = t.reap() }()
@@ -420,6 +446,69 @@ func (t *stdioTransport) reap() error {
 		}
 	})
 	return t.waitErr
+}
+
+// startReader launches the background reader goroutine once. It reads
+// newline-delimited JSON-RPC frames from stdout and dispatches them by
+// request ID to the pending channel registered by send(). Frames with an
+// unknown ID (stale replies from cancelled/timed-out calls) are discarded.
+// The goroutine exits on EOF or read error, closing readerDone so send()
+// can surface the failure to any in-flight or future call.
+func (t *stdioTransport) startReader() {
+	t.readerOnce.Do(func() {
+		go func() {
+			defer close(t.readerDone)
+			for {
+				line, err := t.stdout.ReadBytes('\n')
+				if err != nil {
+					t.failPending(err)
+					return
+				}
+				line = bytes.TrimSpace(line)
+				if len(line) == 0 {
+					continue
+				}
+				var resp rpcResponse
+				if err := json.Unmarshal(line, &resp); err != nil {
+					continue
+				}
+				if resp.ID == nil {
+					continue // notification
+				}
+				t.pendingMu.Lock()
+				ch, ok := t.pending[*resp.ID]
+				if ok {
+					delete(t.pending, *resp.ID)
+				}
+				t.pendingMu.Unlock()
+				if ok {
+					// Non-blocking against a caller that already returned on
+					// ctx.Done; the channel is buffered(1) for the live case.
+					select {
+					case ch <- &resp:
+					default:
+					}
+				}
+				// Unknown IDs (stale/cancelled replies) are silently discarded.
+			}
+		}()
+	})
+}
+
+// failPending delivers an error to every waiting caller and clears the map.
+func (t *stdioTransport) failPending(err error) {
+	t.pendingMu.Lock()
+	for id, ch := range t.pending {
+		// Non-blocking: the caller may have already returned on ctx.Done and
+		// stopped reading. The channel is buffered(1), so a live caller still
+		// receives this; an abandoned one must not wedge the reader goroutine.
+		select {
+		case ch <- &rpcResponse{Error: &rpcError{Message: err.Error()}}:
+		default:
+		}
+		delete(t.pending, id)
+	}
+	t.pendingMu.Unlock()
 }
 
 func (t *stdioTransport) send(ctx context.Context, req rpcRequest) (*rpcResponse, error) {
@@ -438,45 +527,49 @@ func (t *stdioTransport) send(ctx context.Context, req rpcRequest) (*rpcResponse
 		return nil, err
 	}
 
-	// Skip any notification the server interleaves before our response.
-	// Do NOT hold mu while waiting: Close must be able to kill the child so a
-	// hung tools/call (dead IDA backend, wedged proxy, …) unblocks.
-	type result struct {
-		resp *rpcResponse
-		err  error
+	// Register a per-call response channel keyed by request ID, then start
+	// (or reuse) the single background reader. On ctx.Done the entry is
+	// removed so any late reply is discarded by ID mismatch — the transport
+	// stays alive for subsequent calls.
+	ch := make(chan *rpcResponse, 1)
+	t.pendingMu.Lock()
+	if t.pending == nil {
+		t.pending = map[int64]chan *rpcResponse{}
 	}
-	ch := make(chan result, 1)
-	go func() {
-		for {
-			line, err := t.stdout.ReadBytes('\n')
-			if err != nil {
-				ch <- result{err: err}
-				return
-			}
-			line = bytes.TrimSpace(line)
-			if len(line) == 0 {
-				continue
-			}
-			var resp rpcResponse
-			if err := json.Unmarshal(line, &resp); err != nil {
-				continue
-			}
-			if resp.ID == nil {
-				continue // notification
-			}
-			ch <- result{resp: &resp}
-			return
-		}
+	t.pending[req.ID] = ch
+	t.pendingMu.Unlock()
+	t.startReader()
+
+	// Ensure the entry is cleaned up no matter how we exit.
+	defer func() {
+		t.pendingMu.Lock()
+		delete(t.pending, req.ID)
+		t.pendingMu.Unlock()
 	}()
 
 	select {
 	case <-ctx.Done():
-		// Tear down the child so the reader goroutine unblocks on EOF and the
-		// next send cannot talk to a half-dead process with a stolen reply.
-		_ = t.Close()
+		// One timeout does not tear the transport down — a slow call must not
+		// kill a healthy server, and any late reply is discarded by ID mismatch.
+		// But a child that has genuinely wedged would make every future call
+		// wait the full timeout; after enough consecutive timeouts, close the
+		// transport so the next caller fails fast and the process is reaped.
+		t.pendingMu.Lock()
+		t.timeouts++
+		wedged := t.timeouts >= maxConsecutiveTimeouts
+		t.pendingMu.Unlock()
+		if wedged {
+			_ = t.Close()
+		}
 		return nil, ctx.Err()
+	case <-t.readerDone:
+		// The background reader exited (EOF, child died). Surface the failure.
+		return nil, fmt.Errorf("mcp connection lost")
 	case r := <-ch:
-		return r.resp, r.err
+		t.pendingMu.Lock()
+		t.timeouts = 0
+		t.pendingMu.Unlock()
+		return r, nil
 	}
 }
 

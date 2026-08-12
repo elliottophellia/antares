@@ -138,7 +138,10 @@ type gatewayPayload struct {
 type dcAuthor struct {
 	ID       string `json:"id"`
 	Username string `json:"username"`
-	Bot      bool   `json:"bot"`
+	// GlobalName is the account-wide display name (the new Discord name shown
+	// when there is no per-server nickname). Empty for legacy accounts.
+	GlobalName string `json:"global_name"`
+	Bot        bool   `json:"bot"`
 }
 
 type dcMessage struct {
@@ -154,9 +157,11 @@ type dcMessage struct {
 	ReferencedMessage *struct {
 		Author dcAuthor `json:"author"`
 	} `json:"referenced_message"`
-	// Member is present on guild messages and carries the sender's role ids.
+	// Member is present on guild messages and carries the sender's role ids and
+	// per-server nickname.
 	Member *struct {
 		Roles []string `json:"roles"`
+		Nick  string   `json:"nick"`
 	} `json:"member"`
 }
 
@@ -385,6 +390,7 @@ type dcInteraction struct {
 	Member *struct {
 		User  dcAuthor `json:"user"`
 		Roles []string `json:"roles"`
+		Nick  string   `json:"nick"`
 	} `json:"member"`
 	User *dcAuthor `json:"user"`
 	Data struct {
@@ -423,12 +429,16 @@ func (d *Discord) handleInteraction(ctx context.Context, it dcInteraction) {
 	}
 
 	var roles []string
+	nick := ""
 	if it.Member != nil {
 		roles = it.Member.Roles
+		nick = it.Member.Nick
 	}
 	msg := InboundMessage{
 		Platform: "discord", ChannelID: it.ChannelID, GuildID: it.GuildID,
-		UserID: author.ID, UserName: author.Username, Roles: roles, Text: line,
+		UserID: author.ID, UserName: author.Username,
+		DisplayName: discordDisplayName(nick, author.GlobalName, author.Username),
+		Roles:       roles, Text: line,
 		IsDirect: it.GuildID == "", MessageID: it.ID,
 	}
 
@@ -472,6 +482,38 @@ func (d *Discord) appID() string {
 	return d.selfID
 }
 
+// discordDisplayName picks the friendliest name for a sender: the per-server
+// nickname, else the account-wide display name, else the username. Trimmed;
+// returns "" only when all three are empty.
+func discordDisplayName(nick, globalName, username string) string {
+	for _, n := range []string{nick, globalName, username} {
+		if s := strings.TrimSpace(n); s != "" {
+			return s
+		}
+	}
+	return ""
+}
+
+// messageAddressesBot reports whether a guild message is aimed at the bot: it
+// mentions the bot as a user (in the parsed mentions array, or via a raw <@id>
+// in the content, which happens when the mentions array lags), or it is a reply
+// to one of the bot's own messages. text is the message content; selfID is the
+// bot's user id.
+func messageAddressesBot(m dcMessage, text, selfID string) bool {
+	for _, u := range m.Mentions {
+		if u.ID == selfID {
+			return true
+		}
+	}
+	if strings.Contains(text, "<@"+selfID+">") || strings.Contains(text, "<@!"+selfID+">") {
+		return true
+	}
+	if m.ReferencedMessage != nil && m.ReferencedMessage.Author.ID == selfID {
+		return true
+	}
+	return false
+}
+
 // handleMessage authorises and answers one Discord message.
 func (d *Discord) handleMessage(ctx context.Context, m dcMessage) {
 	d.mu.RLock()
@@ -485,27 +527,25 @@ func (d *Discord) handleMessage(ctx context.Context, m dcMessage) {
 
 	isDirect := m.GuildID == ""
 	if !isDirect {
-		// In a guild the bot answers only when addressed: mentioned as a user
-		// (in the parsed mentions or via a raw <@id> in the content, which can
-		// happen when the mentions array lags), or replied to.
-		addressed := false
-		for _, u := range m.Mentions {
-			if u.ID == selfID {
-				addressed = true
-				break
-			}
+		// A binding with reply_mode "always" makes the bot answer every message
+		// in its channel, not only ones that address it. Resolve the most
+		// specific binding for this channel and honour that mode; with no binding
+		// (or mode "mention") the bot stays addressed-only, as before.
+		var binding *config.Binding
+		if cfg := d.mgr.config(); cfg != nil {
+			binding = ResolveBinding(cfg.Gateway.Bindings, "discord", m.GuildID, m.ChannelID)
 		}
-		if !addressed && (strings.Contains(text, "<@"+selfID+">") || strings.Contains(text, "<@!"+selfID+">")) {
-			addressed = true
-		}
-		if !addressed && m.ReferencedMessage != nil && m.ReferencedMessage.Author.ID == selfID {
-			addressed = true
-		}
-		if !addressed {
-			// Un-addressed group chatter: ignore silently, no log — a busy
-			// channel would otherwise flood the log.
+		alwaysReply := binding != nil && strings.EqualFold(strings.TrimSpace(binding.ReplyMode), "always")
+
+		addressed := messageAddressesBot(m, text, selfID)
+		if !addressed && !alwaysReply {
+			// Un-addressed group chatter in a mention-only channel: ignore
+			// silently, no log — a busy channel would otherwise flood the log.
 			return
 		}
+		// Strip the mention tokens whether or not they were required, so an
+		// "always" channel that still @-mentions the bot does not leave the raw
+		// <@id> in the text handed to the agent.
 		text = strings.TrimSpace(strings.NewReplacer(
 			"<@"+selfID+">", "", "<@!"+selfID+">", "",
 		).Replace(text))
@@ -527,12 +567,15 @@ func (d *Discord) handleMessage(ctx context.Context, m dcMessage) {
 	}
 
 	var roles []string
+	nick := ""
 	if m.Member != nil {
 		roles = m.Member.Roles
+		nick = m.Member.Nick
 	}
 	msg := InboundMessage{
 		Platform: "discord", ChannelID: m.ChannelID, GuildID: m.GuildID, UserID: m.Author.ID,
-		UserName: m.Author.Username, Roles: roles, Text: text, IsDirect: isDirect, MessageID: m.ID,
+		UserName: m.Author.Username, DisplayName: discordDisplayName(nick, m.Author.GlobalName, m.Author.Username),
+		Roles: roles, Text: text, IsDirect: isDirect, MessageID: m.ID,
 	}
 
 	// Pairing (and its code) is a DM-only handshake. In a server, access is
@@ -578,23 +621,18 @@ func (d *Discord) handleMessage(ctx context.Context, m dcMessage) {
 	if strings.TrimSpace(reply) == "" {
 		return
 	}
-	if e := d.sendReply(ctx, m.ChannelID, reply, kind); e != nil {
+	// Reply to the triggering message (message_reference) so in a busy channel
+	// it is unambiguous whom the bot is answering. Only the first chunk carries
+	// the reference — Discord shows one quoted message per reply, and repeating
+	// it on every continuation chunk would be noise.
+	if e := d.sendReply(ctx, m.ChannelID, reply, kind, m.ID); e != nil {
 		slog.Warn("discord: send failed", "error", e)
 	}
 }
 
 // Send posts a message and returns its id.
 func (d *Discord) Send(ctx context.Context, r Reply) (string, error) {
-	payload := map[string]any{
-		"content": truncateDC(r.Text),
-		// Never ping @everyone or roles from agent output.
-		"allowed_mentions": map[string]any{"parse": []string{"users"}},
-	}
-	if r.ReplyTo != "" {
-		payload["message_reference"] = map[string]any{
-			"message_id": r.ReplyTo, "fail_if_not_exists": false,
-		}
-	}
+	payload := discordMessagePayload(r.Text, r.ReplyTo)
 
 	var result struct {
 		ID string `json:"id"`
@@ -634,25 +672,30 @@ func embedColor(k embedKind) int {
 // 2000; an embed description allows up to 4096.
 const embedLimit = 4000
 
-// sendReply renders a reply according to the channel's configured style:
-// "plain" (a normal message) or "embed" (a coloured card, the default).
-func (d *Discord) sendReply(ctx context.Context, channelID, text string, kind embedKind) error {
+// sendReply renders the agent's answer in the channel's configured style —
+// "plain" (a normal message) or "embed" (a coloured card, the default) — and,
+// when replyTo is set, sends it as a Discord reply to that message. The reply
+// reference lands on the first chunk only.
+func (d *Discord) sendReply(ctx context.Context, channelID, text string, kind embedKind, replyTo string) error {
 	if strings.EqualFold(d.cfg.ReplyStyle, "plain") {
-		return d.sendPlain(ctx, channelID, text)
+		return d.sendPlain(ctx, channelID, text, replyTo)
 	}
-	return d.sendEmbeds(ctx, channelID, text, kind)
+	return d.sendEmbeds(ctx, channelID, text, kind, replyTo)
 }
 
 // sendPlain posts the reply as ordinary messages. Discord renders the first
 // line beside the author name, so a leading zero-width space + newline pushes
 // the content onto its own line under the name. Only the first chunk needs it.
-func (d *Discord) sendPlain(ctx context.Context, channelID, text string) error {
+func (d *Discord) sendPlain(ctx context.Context, channelID, text, replyTo string) error {
 	chunks := splitForDiscord(text)
 	for i, chunk := range chunks {
+		r := Reply{ChannelID: channelID, Text: chunk}
 		if i == 0 {
 			chunk = "​\n" + chunk
+			r.Text = chunk
+			r.ReplyTo = replyTo // reference only the first chunk
 		}
-		if _, err := d.Send(ctx, Reply{ChannelID: channelID, Text: chunk}); err != nil {
+		if _, err := d.Send(ctx, r); err != nil {
 			return err
 		}
 	}
@@ -662,20 +705,44 @@ func (d *Discord) sendPlain(ctx context.Context, channelID, text string) error {
 // sendEmbeds posts a reply as one or more coloured embeds. Long text is split
 // on the embed limit (without cutting fenced code blocks apart); each part is
 // its own embed so the whole answer keeps the same colour.
-func (d *Discord) sendEmbeds(ctx context.Context, channelID, text string, kind embedKind) error {
-	for _, part := range splitForEmbed(text) {
-		payload := map[string]any{
-			"embeds": []map[string]any{{
-				"description": part,
-				"color":       embedColor(kind),
-			}},
-			"allowed_mentions": map[string]any{"parse": []string{"users"}},
+func (d *Discord) sendEmbeds(ctx context.Context, channelID, text string, kind embedKind, replyTo string) error {
+	for i, part := range splitForEmbed(text) {
+		// Reference the triggering message on the first chunk only.
+		ref := ""
+		if i == 0 {
+			ref = replyTo
 		}
+		payload := discordMessagePayload("", ref)
+		payload["embeds"] = []map[string]any{{
+			"description": part,
+			"color":       embedColor(kind),
+		}}
 		if err := d.rest(ctx, "POST", "/channels/"+channelID+"/messages", payload, nil); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// discordMessagePayload builds the JSON body for a message send. content is set
+// only when non-empty (embed sends fill "embeds" themselves). When replyTo is
+// set the message becomes a reply to it and pings that author (replied_user);
+// @everyone and role pings from agent output are always suppressed.
+func discordMessagePayload(content, replyTo string) map[string]any {
+	allowed := map[string]any{"parse": []string{"users"}}
+	payload := map[string]any{"allowed_mentions": allowed}
+	if content != "" {
+		payload["content"] = truncateDC(content)
+	}
+	if replyTo != "" {
+		payload["message_reference"] = map[string]any{
+			"message_id": replyTo, "fail_if_not_exists": false,
+		}
+		// Discord suppresses the reply ping once allowed_mentions is set
+		// explicitly, so opt back in.
+		allowed["replied_user"] = true
+	}
+	return payload
 }
 
 // splitForEmbed breaks text on the embed limit, keeping fenced code blocks

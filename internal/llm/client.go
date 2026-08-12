@@ -100,6 +100,10 @@ func newBase(o Options) (Client, error) {
 		}
 		return &openAIClient{opts: o, vendor: "copilot",
 			copilot: &copilotTokenSource{ghToken: o.APIKey, client: o.HTTPClient}}, nil
+	case "opencode", "opencode-go", "opencode-zen", "zen":
+		// OpenCode serves Anthropic-format and OpenAI-format models from one
+		// base URL; the adapter routes per model. See opencode.go.
+		return newOpenCode(o)
 	case "codex", "responses", "openai-responses":
 		if o.BaseURL == "" {
 			o.BaseURL = "https://api.openai.com/v1"

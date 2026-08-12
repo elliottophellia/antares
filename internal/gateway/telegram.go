@@ -205,7 +205,9 @@ func (t *Telegram) handleMessage(ctx context.Context, m tgMessage) {
 	msg := InboundMessage{
 		Platform: "telegram", ChannelID: chatID, UserID: userID,
 		UserName: firstNonEmpty(m.From.Username, m.From.FirstName),
-		Text:     text, IsDirect: isDirect,
+		// Telegram's first name is the friendliest way to address someone.
+		DisplayName: firstNonEmpty(m.From.FirstName, m.From.Username),
+		Text:        text, IsDirect: isDirect,
 		MessageID: strconv.FormatInt(m.MessageID, 10),
 	}
 
@@ -301,7 +303,7 @@ func (t *Telegram) builtinCommand(ctx context.Context, msg InboundMessage, text 
 		}
 		return fmt.Sprintf("Status: %s\nPairing code: %s", p.Status, p.Code), true
 	case "new":
-		if err := t.mgr.db.DeleteKV(ctx, sessionKey("telegram", msg.ChannelID)); err != nil {
+		if err := t.mgr.db.DeleteKV(ctx, GatewaySessionKey(t.mgr.config(), msg)); err != nil {
 			slog.Debug("telegram: cannot clear session", "error", err)
 		}
 		return "Started a fresh session.", true
@@ -383,7 +385,17 @@ func firstNonEmpty(vals ...string) string {
 	return ""
 }
 
-// sessionKey maps a platform channel to its persistent session id.
-func sessionKey(platform, channel string) string {
-	return "gateway_session:" + platform + ":" + channel
+// GatewaySessionKey maps an inbound message to the KV key that holds its
+// persistent session id. In a group channel with group_sessions_per_user set
+// (the default), the sender's user id is folded in so each person gets their
+// own conversation rather than sharing one channel-wide thread; a DM is already
+// 1:1 so its key stays per-channel. Every place that reads, writes, or clears a
+// gateway session must use this so a per-user session and its /new both target
+// the same key.
+func GatewaySessionKey(cfg *config.Config, msg InboundMessage) string {
+	base := "gateway_session:" + msg.Platform + ":" + msg.ChannelID
+	if !msg.IsDirect && cfg != nil && cfg.GroupSessionsPerUser && msg.UserID != "" {
+		return base + ":" + msg.UserID
+	}
+	return base
 }

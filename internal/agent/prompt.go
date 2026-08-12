@@ -19,7 +19,7 @@ import (
 
 // buildSystemPrompt assembles identity, environment, memory, and tool guidance.
 func (a *Agent) buildSystemPrompt(ctx context.Context, req Request, sess *store.Session, active []tools.Tool) string {
-	cfg := a.cfg
+	cfg := a.config()
 	var b strings.Builder
 
 	b.WriteString("You are ")
@@ -76,6 +76,20 @@ help them now — do not block them.
 		fmt.Fprintf(&b, "- Host: %s\n", host)
 	}
 	fmt.Fprintf(&b, "- Channel: %s\n", firstNonEmpty(req.Platform, "web"))
+	// Who the agent is talking to. On a chat platform the display name lets it
+	// address the person by their nickname (the earlier "I can't see your nick"
+	// answer was because this was never provided), and the id disambiguates two
+	// people with the same name in a busy channel.
+	if name := firstNonEmpty(req.UserDisplayName, req.UserName); name != "" {
+		if req.UserID != "" {
+			fmt.Fprintf(&b, "- Talking to: %s (%s user id %s)\n", name, firstNonEmpty(req.Platform, "user"), req.UserID)
+		} else {
+			fmt.Fprintf(&b, "- Talking to: %s\n", name)
+		}
+		if req.UserName != "" && !strings.EqualFold(req.UserName, name) {
+			fmt.Fprintf(&b, "- Their username: %s\n", req.UserName)
+		}
+	}
 	fmt.Fprintf(&b, "- Terminal backend: %s\n", cfg.Terminal.Backend)
 	if req.Platform == "discord" {
 		b.WriteString("- You are answering in Discord. Discord Markdown works: **bold**, *italics*, " +
@@ -340,7 +354,7 @@ func (a *Agent) methodologyBlock(sessionID string) string {
 
 // memoryBlock renders stored memories, bounded by the configured char limit.
 func (a *Agent) memoryBlock(ctx context.Context, req Request, sess *store.Session) string {
-	limit := a.cfg.Memory.MemoryCharLimit
+	limit := a.config().Memory.MemoryCharLimit
 	if limit <= 0 {
 		limit = 12000
 	}
@@ -386,7 +400,7 @@ func hasTool(list []tools.Tool, name string) bool {
 
 // resolveTools picks the tool set for this run, honouring platform overrides.
 func (a *Agent) resolveTools(req Request) []tools.Tool {
-	cfg := a.cfg
+	cfg := a.config()
 	toolset := req.Toolset
 	if toolset == "" {
 		if v, ok := cfg.Tools.Platform[req.Platform]; ok && v != "" {

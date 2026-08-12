@@ -68,7 +68,8 @@ func TestLoadHistoryAppliesPersistedCompact(t *testing.T) {
 		{ID: "6", SessionID: "s1", Seq: 6, Role: store.RoleUser, Content: "continue"},
 		{ID: "7", SessionID: "s1", Seq: 7, Role: store.RoleAssistant, Content: "ok"},
 	}}
-	a := &Agent{cfg: config.Default(), db: db}
+	a := agentWithConfig(config.Default())
+	a.db = db
 	hist, err := a.loadHistory(context.Background(), sess, Request{})
 	if err != nil {
 		t.Fatal(err)
@@ -99,8 +100,8 @@ func TestLoadHistoryAppliesPersistedCompact(t *testing.T) {
 }
 
 func TestMaybeCompactSkipsWhenUnderThreshold(t *testing.T) {
-	a := &Agent{cfg: config.Default()}
-	a.cfg.Model.ContextWindow = 200000
+	a := agentWithConfig(config.Default())
+	a.config().Model.ContextWindow = 200000
 	hist := []llm.Message{
 		{Role: llm.RoleUser, Content: "hi"},
 		{Role: llm.RoleAssistant, Content: "hello"},

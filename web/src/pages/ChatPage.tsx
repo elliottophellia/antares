@@ -251,6 +251,36 @@ const SUGGESTION_KEYS: MessageKey[] = [
   'chat.suggest4',
 ]
 
+// The "resume where I left off" pointer. Stored in sessionStorage, not
+// localStorage, so it is PER-TAB: two tabs can sit on different sessions at
+// once, and each still survives a refresh of that tab. In localStorage the
+// pointer was shared, so opening a second tab on "/" always resumed the first
+// tab's session. Wrapped so a Safari private-mode throw can never break a send.
+const LAST_SESSION_KEY = 'antares:last-session'
+const lastSession = {
+  get(): string | null {
+    try {
+      return sessionStorage.getItem(LAST_SESSION_KEY)
+    } catch {
+      return null
+    }
+  },
+  set(id: string) {
+    try {
+      sessionStorage.setItem(LAST_SESSION_KEY, id)
+    } catch {
+      /* private mode / storage disabled — resume is best-effort */
+    }
+  },
+  clear() {
+    try {
+      sessionStorage.removeItem(LAST_SESSION_KEY)
+    } catch {
+      /* ignore */
+    }
+  },
+}
+
 /** Composer ↑/↓ recall — most recent first, de-duped consecutive, capped. */
 const INPUT_HISTORY_KEY = 'antares:composer-history'
 const INPUT_HISTORY_MAX = 50
@@ -344,6 +374,13 @@ export default function ChatPage() {
     if (r) localStorage.setItem('antares:reasoning', r)
     else localStorage.removeItem('antares:reasoning')
   }, [])
+  // Per-chat model override, chosen via the picker in the composer. Kept in a
+  // ref so the stream request closure always reads the latest selection.
+  const [activeModel, setActiveModel] = useState('')
+  const activeModelRef = useRef('')
+  useEffect(() => {
+    activeModelRef.current = activeModel
+  }, [activeModel])
   // Project session: the folder this chat is bound to. Chosen on a NEW chat and
   // sent with the first message; once the session exists it is fixed (locked).
   const [projectDir, setProjectDir] = useState('')
@@ -492,6 +529,10 @@ export default function ChatPage() {
   }, [sessionId])
   const virtuosoRef = useRef<VirtuosoHandle>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+  // Where the list opens. Captured once per mount: Virtuoso treats this as the
+  // initial anchor, so recomputing it from messages.length on every render
+  // re-anchors the list mid-stream and fights followOutput.
+  const initialIndexRef = useRef(0)
 
   // A streaming turn emits hundreds of tiny events. Queue them for one render,
   // grouping by message first so flushing is O(messages + patches), not
@@ -566,14 +607,14 @@ export default function ChatPage() {
   // arrives with state.fresh set, which skips the resume and forgets it.
   useEffect(() => {
     if (sessionId) {
-      localStorage.setItem('antares:last-session', sessionId)
+      lastSession.set(sessionId)
       return
     }
     if (location.state?.fresh) {
-      localStorage.removeItem('antares:last-session')
+      lastSession.clear()
       return
     }
-    const last = localStorage.getItem('antares:last-session')
+    const last = lastSession.get()
     if (last) navigate(`/c/${last}`, { replace: true })
     // Only when the route id changes, not on every render.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -861,7 +902,11 @@ export default function ChatPage() {
     get<SessionDetail>(`/sessions/${sessionId}`)
       .then((d) => {
         if (cancelled) return
-        setMessages(hydrate(d))
+        const restored = hydrate(d)
+        // Open a restored transcript at its newest message. Set before the list
+        // mounts (it is still `loading`), so Virtuoso reads the final value once.
+        initialIndexRef.current = Math.max(0, restored.length - 1)
+        setMessages(restored)
         setTitle(d.session.title || t('chat.conversation'))
         setProjectDir(d.session.meta?.project_dir ?? '')
         // Restore the context gauge from persisted usage: the last turn's input
@@ -885,8 +930,8 @@ export default function ChatPage() {
         // to a session that was deleted). Forget it and drop to a fresh chat
         // instead of getting stuck on a blank, dead url.
         if (e instanceof ApiError && e.status === 404) {
-          if (localStorage.getItem('antares:last-session') === sessionId) {
-            localStorage.removeItem('antares:last-session')
+          if (lastSession.get() === sessionId) {
+            lastSession.clear()
           }
           setMessages([])
           setTitle('')
@@ -950,7 +995,7 @@ export default function ChatPage() {
           case 'new':
           case 'clear':
             stop()
-            localStorage.removeItem('antares:last-session')
+            lastSession.clear()
             setMessages([])
             setTitle('')
             setApprovals([])
@@ -1048,6 +1093,9 @@ export default function ChatPage() {
         message,
         images: attached,
         role,
+        // Per-chat model override; omitted when unset so the server falls
+        // back to the configured default.
+        ...(activeModelRef.current ? { model: activeModelRef.current } : {}),
         // Per-turn reasoning override; omitted when unset so the server falls
         // back to the configured default.
         ...(reasoning ? { reasoning_effort: reasoning } : {}),
@@ -1099,7 +1147,7 @@ export default function ChatPage() {
               // Point the url at the real session (and remember it so the hydrate
               // the navigation triggers does not overwrite the live messages).
               localSessionRef.current = id
-              localStorage.setItem('antares:last-session', id)
+              lastSession.set(id)
               navigate(`/c/${id}`, { replace: true })
             }
           }
@@ -1321,9 +1369,43 @@ export default function ChatPage() {
     setInput(value)
   }, [historyPos])
 
+  // Virtuoso's `components` must keep a stable identity. Declared inline it was a
+  // fresh object — and a fresh Footer component type — on every render, so the
+  // list unmounted and remounted the footer on each streaming tick, resizing the
+  // scroller under itself. Footer reads live values through refs so the component
+  // type never has to change.
+  const approvalsRef = useRef(approvals)
+  approvalsRef.current = approvals
+  const errorRef = useRef(error)
+  errorRef.current = error
+  // Re-render the footer when its contents actually change (not per token).
+  const footerTick = `${approvals.map((a) => `${a.id}:${a.decided ?? ''}`).join(',')}|${error ?? ''}`
+  const virtuosoComponents = useMemo(
+    () => ({
+      Footer: () => (
+        <div className="mx-auto w-full max-w-3xl space-y-5 px-4 pb-6 sm:px-6">
+          {approvalsRef.current.map((a) => (
+            <ApprovalCard
+              key={a.id}
+              approval={a}
+              onDecided={(id, decision) =>
+                setApprovals((prev) =>
+                  prev.map((x) => (x.id === id ? { ...x, decided: decision } : x)),
+                )
+              }
+            />
+          ))}
+          {errorRef.current ? <ErrorBanner message={errorRef.current} /> : null}
+        </div>
+      ),
+    }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [footerTick],
+  )
+
   const newChat = () => {
     stop()
-    localStorage.removeItem('antares:last-session')
+    lastSession.clear()
     setMessages([])
     setTitle('')
     // Keep the remembered role for the new chat instead of resetting to default.
@@ -1364,7 +1446,7 @@ export default function ChatPage() {
         roleSlot={
           <div className="flex min-w-0 items-center gap-1.5">
             <RolePicker value={role} onChange={pickRole} compact />
-            <ModelPicker />
+            <ModelPicker onModelChange={setActiveModel} />
             <ReasoningPicker value={reasoning} onChange={pickReasoning} compact />
             <ProjectPicker
               value={projectDir}
@@ -1524,15 +1606,25 @@ export default function ChatPage() {
         </div>
       ) : (
         // Virtualised transcript: only on-screen messages are in the DOM, so a
-        // very long session stays light. followOutput="auto" keeps it pinned to
-        // the newest message only while the user is at the bottom — scroll up
-        // and it stops, scroll back and it resumes.
+        // very long session stays light. followOutput keeps it pinned to the
+        // newest message only while the user is at the bottom — scroll up and it
+        // stops, scroll back and it resumes.
+        //
+        // followOutput is `true`, not "auto": "auto" scrolls only *after* it has
+        // re-measured, so while a message is streaming (its height grows on every
+        // token) the list plays catch-up — measure, scroll, content grows, measure
+        // again — which reads as the viewport juddering near the bottom.
+        //
+        // initialTopMostItemIndex is deliberately NOT derived from messages.length
+        // here: it only defines the *initial* position, but recomputing it on every
+        // render re-anchors the list mid-stream. See initialIndexRef.
         <Virtuoso
           ref={virtuosoRef}
           className="min-h-0 flex-1"
           data={messages}
-          followOutput="auto"
-          initialTopMostItemIndex={Math.max(0, messages.length - 1)}
+          followOutput={true}
+          initialTopMostItemIndex={initialIndexRef.current}
+          components={virtuosoComponents}
           computeItemKey={(_, m) => m.id}
           itemContent={(_, m) => (
             <div className="mx-auto w-full min-w-0 max-w-3xl overflow-x-clip px-4 sm:px-6">
@@ -1549,39 +1641,31 @@ export default function ChatPage() {
               </div>
             </div>
           )}
-          components={{
-            Footer: () => (
-              <div className="mx-auto w-full max-w-3xl space-y-5 px-4 pb-6 sm:px-6">
-                {approvals.map((a) => (
-                  <ApprovalCard
-                    key={a.id}
-                    approval={a}
-                    onDecided={(id, decision) =>
-                      setApprovals((prev) =>
-                        prev.map((x) => (x.id === id ? { ...x, decided: decision } : x)),
-                      )
-                    }
-                  />
-                ))}
-                {streaming ? (
-                  <StreamingIndicator
-                    turn={live.turn}
-                    tool={live.tool}
-                    waiting={live.waiting}
-                    notice={live.notice}
-                  />
-                ) : null}
-                {error ? <ErrorBanner message={error} /> : null}
-              </div>
-            ),
-          }}
         />
       )}
 
       {/* Floating composer: sits close to the last message rather than pinned
-          against the very bottom edge of the viewport. */}
+          against the very bottom edge of the viewport.
+
+          The streaming indicator lives here, OUTSIDE the virtualised list. Its
+          height changes every second (the elapsed-seconds counter, and notice /
+          tool labels of varying length). Inside the list that turned every tick
+          into a resize the scroller had to correct for, which is what made the
+          viewport judder while pinned to the bottom. */}
       <div className="bg-gradient-to-t from-background via-background to-transparent px-4 pt-3 pb-[max(1.5rem,env(safe-area-inset-bottom))] sm:px-6 sm:pb-[max(2rem,env(safe-area-inset-bottom))]">
-        <div className="mx-auto w-full max-w-3xl">{composerCard(true)}</div>
+        <div className="mx-auto w-full max-w-3xl">
+          {streaming ? (
+            <div className="pb-2">
+              <StreamingIndicator
+                turn={live.turn}
+                tool={live.tool}
+                waiting={live.waiting}
+                notice={live.notice}
+              />
+            </div>
+          ) : null}
+          {composerCard(true)}
+        </div>
       </div>
       </div>
 
@@ -1976,8 +2060,12 @@ export function StreamingIndicator({
  * that into hundreds of React nodes freezes the tab ("Page Unresponsive").
  * Plain pre-wrap text in a height-capped scroller is one DOM node, cheap to
  * open, and matches how thinking logs are meant to be read.
+ *
+ * Memoised for the same reason as ToolCallCard: on a message that grows to many
+ * segments during one streaming turn, only the changed segment should re-render.
+ * `text` is a primitive, so memo compares by value and finished blocks are free.
  */
-function ReasoningBlock({ text }: { text: string }) {
+const ReasoningBlock = memo(function ReasoningBlock({ text }: { text: string }) {
   const { t } = useI18n()
   const [open, setOpen] = useState(false)
   // Defer mounting the body to the next frame so the click paints first and
@@ -2021,7 +2109,17 @@ function ReasoningBlock({ text }: { text: string }) {
       ) : null}
     </div>
   )
-}
+})
+
+// A plain-text segment. Memoised so it is skipped when an unrelated segment on
+// the same message changes during streaming.
+const TextSegment = memo(function TextSegment({ text }: { text: string }) {
+  return (
+    <div className="text-[13px] leading-relaxed">
+      <Markdown content={text} />
+    </div>
+  )
+})
 
 // Memoised: a streaming turn mutates only the last message, but setMessages
 // hands a new array each token. Without memo every bubble in a long transcript
@@ -2156,11 +2254,7 @@ export const MessageBubble = memo(function MessageBubble({
               }
               return <ToolCallCard key={seg.call.id} call={seg.call} />
             }
-            return (
-              <div key={`t${i}`} className="text-[13px] leading-relaxed">
-                <Markdown content={seg.text} />
-              </div>
-            )
+            return <TextSegment key={`t${i}`} text={seg.text} />
           })
         : // Fallback for any message that predates the timeline model.
           <>

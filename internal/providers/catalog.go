@@ -52,6 +52,10 @@ var catalog = []Info{
 		[]string{"deepseek-chat", "deepseek-reasoner"}},
 	{"zai", "Z.ai GLM (Coding Plan)", "anthropic", "ZAI_API_KEY", "https://api.z.ai/api/anthropic/v1", true,
 		[]string{"glm-5.2", "glm-4.7", "glm-4.6"}},
+	// OpenCode's /models endpoint is live and unauthenticated, so the picker
+	// fetches the current catalogue; these are only the starting suggestions.
+	{"opencode", "OpenCode Go (Zen)", "opencode", "OPENCODE_API_KEY", "https://opencode.ai/zen/go/v1", true,
+		[]string{"glm-5.2", "kimi-k3", "deepseek-v4-pro", "minimax-m3", "qwen3.8-max"}},
 	{"ollama", "Ollama (local)", "openai-compatible", "", "http://localhost:11434/v1", false,
 		[]string{"llama3.1", "qwen2.5"}},
 }

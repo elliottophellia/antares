@@ -169,6 +169,12 @@ func (r *Registry) All() []Tool {
 // Resolve expands a toolset name plus explicit enable/disable lists into the
 // concrete tools handed to the model.
 func (r *Registry) Resolve(toolset string, enabled, disabled []string) []Tool {
+	// "none" means a tool-free turn: honour it literally, ignoring the enable
+	// list and the MCP opt-out below. (An explicit enable list alongside "none"
+	// is contradictory; treat the named set as authoritative and give no tools.)
+	if strings.TrimSpace(toolset) == "none" {
+		return nil
+	}
 	want := map[string]bool{}
 	for _, n := range ExpandToolset(toolset) {
 		want[n] = true
@@ -226,6 +232,11 @@ func (r *Registry) Resolve(toolset string, enabled, disabled []string) []Tool {
 
 // Toolsets are named groupings mirroring the platform toolset config.
 var Toolsets = map[string][]string{
+	// "none" gives the agent no tools at all — a pure chat/LLM turn. It is a
+	// registered empty set (not an unknown name, which would fall back to
+	// "default"), and Resolve special-cases it to also skip the otherwise
+	// opt-out MCP tools, so "no tools" really means none.
+	"none":    {},
 	"minimal": {"read_file", "list_files", "grep", "todo"},
 	"coding": {
 		"read_file", "read_document", "write_file", "edit_file", "list_files", "glob", "grep",
