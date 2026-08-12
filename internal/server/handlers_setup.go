@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/enowdev/antares/internal/config"
+	"github.com/enowdev/antares/internal/cursor"
 	"github.com/enowdev/antares/internal/llm"
 	"github.com/enowdev/antares/internal/store"
 )
@@ -29,6 +30,11 @@ type setupProvider struct {
 	Local   bool     `json:"local"`
 	Models  []string `json:"models,omitempty"`
 	HasKey  bool     `json:"has_key"`
+	// Capability distinguishes chat-model providers ("llm") from agent
+	// integrations ("agent", e.g. Cursor). Only "llm" providers are eligible
+	// for initial onboarding and the active model — see setupProviderCatalogue,
+	// handleSetupStatus, and handleSetupComplete.
+	Capability string `json:"capability"`
 	// KeyLabel overrides the "API key" label (e.g. "Service account JSON").
 	KeyLabel string `json:"key_label,omitempty"`
 	// Note is an extra line shown under the form (e.g. how creds are supplied).
@@ -137,13 +143,27 @@ func setupProviderCatalogue(cfg *config.Config) []setupProvider {
 			ID: "custom", Label: "Something else", Kind: "openai-compatible",
 			Hint: "Any OpenAI-compatible endpoint.",
 		},
+		{
+			ID: "cursor", Label: "Cursor Cloud Agents", Kind: "cursor-agent",
+			Capability: "agent",
+			Hint:       "Delegate coding tasks to durable Cursor Cloud Agents.",
+			KeyHint:    "crsr_…", KeyURL: "https://cursor.com/dashboard/api",
+			BaseURL: "https://api.cursor.com",
+			Note:    "This deployment key and Cursor quota are shared by users allowed to invoke Cursor tools.",
+		},
 	}
 	for i := range out {
-		if p, ok := cfg.Providers[out[i].ID]; ok {
-			out[i].HasKey = p.APIKey != ""
-			if p.BaseURL != "" {
-				out[i].BaseURL = p.BaseURL
-			}
+		if out[i].Capability == "" {
+			out[i].Capability = "llm"
+		}
+		// Resolve through cfg.ResolveProvider so an env-supplied credential
+		// (api_key_env, or ANTARES_PROVIDER_<NAME>_API_KEY) reports has_key
+		// just like a stored one — the dashboard should not tell an operator
+		// to "connect" a provider that is already usable via the environment.
+		_, resolved := cfg.ResolveProvider(out[i].ID)
+		out[i].HasKey = strings.TrimSpace(resolved.APIKey) != ""
+		if resolved.BaseURL != "" {
+			out[i].BaseURL = resolved.BaseURL
 		}
 	}
 	return out
@@ -161,6 +181,17 @@ func NeedsSetup(cfg *config.Config) bool {
 func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 	cfg := s.config()
 	home, _ := os.UserHomeDir()
+	// Onboarding only ever picks a chat-model provider: agent integrations
+	// (Cursor) are connected later, from Settings, and must never appear in
+	// the first-run picker.
+	catalogue := setupProviderCatalogue(cfg)
+	visible := make([]setupProvider, 0, len(catalogue))
+	for _, p := range catalogue {
+		if p.Capability == "agent" {
+			continue
+		}
+		visible = append(visible, p)
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"needs_setup": NeedsSetup(cfg),
 		"model":       cfg.Model.Default,
@@ -168,7 +199,7 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 		"workspace":   cfg.Agent.Workspace,
 		"home":        home,
 		"config_path": configPath(),
-		"providers":   setupProviderCatalogue(cfg),
+		"providers":   visible,
 		"database":    cfg.Database.Driver,
 	})
 }
@@ -327,6 +358,14 @@ func (s *Server) handleSetupComplete(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, errors.New("unknown provider"))
 		return
 	}
+	// Agent integrations (Cursor) are not chat-model providers: initial setup
+	// must pick an active model, which an agent capability cannot serve. This
+	// check runs before any config mutation below.
+	if chosen.Capability == "agent" {
+		writeError(w, http.StatusBadRequest,
+			errors.New("this provider is an agent integration and cannot be used for initial setup"))
+		return
+	}
 
 	baseURL := firstNonEmpty(body.BaseURL, chosen.BaseURL)
 	if baseURL != "" {
@@ -439,6 +478,25 @@ func (s *Server) handleSetupComplete(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// verifyCursorProvider checks a Cursor credential the same way Settings
+// verifies any other provider: confirm identity, then fetch the model
+// catalogue. Both must succeed before the caller persists anything.
+func (s *Server) verifyCursorProvider(
+	ctx context.Context,
+	baseURL, apiKey string,
+) (*cursor.ModelCatalog, error) {
+	client, err := s.newCursorMetadataClient(cursor.Options{
+		BaseURL: baseURL, APIKey: apiKey,
+	})
+	if err != nil {
+		return nil, err
+	}
+	if _, err := client.Me(ctx); err != nil {
+		return nil, err
+	}
+	return client.Models(ctx)
+}
+
 // handleSetProviderKey verifies a credential and stores it in one step, so a
 // provider can be connected from wherever the user noticed it was missing
 // rather than sending them to hunt through Settings.
@@ -497,6 +555,45 @@ func (s *Server) handleSetProviderKey(w http.ResponseWriter, r *http.Request) {
 	// Bedrock takes its credentials from the AWS environment, so no key here.
 	if key == "" && entry.Kind != "bedrock" && !isLocalEndpoint(baseURL) {
 		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": "An API key is required."})
+		return
+	}
+
+	// Cursor is an agent integration, not a chat-model provider: verify it
+	// through the metadata client rather than the generic llm.New path (which
+	// deliberately refuses "cursor-agent" — see llm.New), and never touch
+	// cfg.Model on success.
+	if chosen.Capability == "agent" {
+		ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+		defer cancel()
+		catalog, err := s.verifyCursorProvider(ctx, baseURL, key)
+		if err != nil {
+			if cursor.IsAuthError(err) {
+				writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": err.Error()})
+				return
+			}
+			writeJSON(w, http.StatusBadGateway, map[string]any{
+				"ok": false, "error": "The provider could not be reached or returned an invalid response: " + err.Error(),
+			})
+			return
+		}
+
+		entry.APIKey = key
+		entry.BaseURL = baseURL
+		entry.Enabled = true
+		if entry.Label == "" {
+			entry.Label = chosen.Label
+		}
+		cfg.Providers[id] = entry
+
+		if err := config.Save(cfg); err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+		if err := s.applyReload(); err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "models": len(catalog.Items)})
 		return
 	}
 

@@ -1,11 +1,14 @@
 package server
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/enowdev/antares/internal/config"
+	"github.com/enowdev/antares/internal/cursor"
 	"github.com/enowdev/antares/internal/providers"
 )
 
@@ -37,6 +40,67 @@ func (s *Server) handleProviderModelInfo(w http.ResponseWriter, r *http.Request)
 		}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"found": false})
+}
+
+// handleProviderModels returns the live model catalogue for an
+// agent-capability provider (Cursor). It never touches cfg.Model and never
+// aggregates into /api/model/list-all — that isolation is what lets Cursor
+// carry its own model picker without disturbing the active chat model.
+func (s *Server) handleProviderModels(w http.ResponseWriter, r *http.Request) {
+	if s.requireDashboardPassword(w, r) {
+		return
+	}
+	id := r.PathValue("id")
+	cfg := s.config()
+	if providers.CapabilityOf(cfg, id) != providers.CapabilityAgent {
+		writeError(w, http.StatusBadRequest,
+			errors.New("this provider does not expose a dedicated model endpoint"))
+		return
+	}
+
+	_, p := cfg.ResolveProvider(id)
+	key := strings.TrimSpace(p.APIKey)
+	if key == "" {
+		// No resolved credential: report the need without making a network call.
+		writeJSON(w, http.StatusOK, map[string]any{"models": []any{}, "needs_key": true})
+		return
+	}
+
+	client, err := s.newCursorMetadataClient(cursor.Options{BaseURL: p.BaseURL, APIKey: key})
+	if err != nil {
+		writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+
+	catalog, err := client.Models(ctx)
+	if err != nil {
+		if cursor.IsAuthError(err) {
+			writeJSON(w, http.StatusOK, map[string]any{"models": []any{}, "error": err.Error()})
+			return
+		}
+		writeError(w, http.StatusBadGateway, err)
+		return
+	}
+
+	type modelOut struct {
+		ID          string                  `json:"id"`
+		Name        string                  `json:"name"`
+		Description string                  `json:"description"`
+		Parameters  []cursor.ModelParameter `json:"parameters"`
+	}
+	out := make([]modelOut, 0, len(catalog.Items))
+	for _, m := range catalog.Items {
+		params := m.Parameters
+		if params == nil {
+			params = []cursor.ModelParameter{}
+		}
+		out = append(out, modelOut{
+			ID: m.ID, Name: m.DisplayName, Description: m.Description, Parameters: params,
+		})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"models": out})
 }
 
 // handleContextWindow reports the active model's token budget, so the composer's
