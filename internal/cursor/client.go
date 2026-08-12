@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 type Options struct {
@@ -138,9 +139,7 @@ func (c *Client) decodeAPIError(resp *http.Response) error {
 		apiErr.Code = strings.ReplaceAll(apiErr.Code, c.apiKey, "[REDACTED]")
 		apiErr.Message = strings.ReplaceAll(apiErr.Message, c.apiKey, "[REDACTED]")
 	}
-	if len(apiErr.Message) > 240 {
-		apiErr.Message = apiErr.Message[:240]
-	}
+	apiErr.Message = truncateRunes(apiErr.Message, 240)
 
 	if ra := resp.Header.Get("Retry-After"); ra != "" {
 		if secs, err := strconv.Atoi(ra); err == nil {
@@ -154,6 +153,20 @@ func (c *Client) decodeAPIError(resp *http.Response) error {
 	}
 
 	return apiErr
+}
+
+func truncateRunes(s string, maxRunes int) string {
+	if utf8.RuneCountInString(s) <= maxRunes {
+		return s
+	}
+	count := 0
+	for i := range s {
+		if count == maxRunes {
+			return s[:i]
+		}
+		count++
+	}
+	return s
 }
 
 func IsAuthError(err error) bool {

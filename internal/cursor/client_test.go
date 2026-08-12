@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 )
 
 func TestMeAndModelsUseBearerAndDecodeCatalog(t *testing.T) {
@@ -95,5 +96,32 @@ func TestAPIErrorClassificationAndRetryAfter(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestAPIErrorMessageTruncatedOnRuneBoundary(t *testing.T) {
+	longMsg := strings.Repeat("a", 239) + "é" + strings.Repeat("é", 10)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+		body, _ := json.Marshal(map[string]string{"message": longMsg})
+		_, _ = w.Write(body)
+	}))
+	defer srv.Close()
+
+	client, _ := New(Options{BaseURL: srv.URL, APIKey: "synthetic-key", HTTPClient: srv.Client()})
+	_, err := client.Me(context.Background())
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	msg := err.Error()
+	if !utf8.ValidString(msg) {
+		t.Fatalf("invalid UTF-8: %q", msg)
+	}
+	if got := utf8.RuneCountInString(msg); got != 240 {
+		t.Fatalf("rune count = %d, want 240", got)
+	}
+	want := strings.Repeat("a", 239) + "é"
+	if msg != want {
+		t.Fatalf("message = %q, want %q", msg, want)
 	}
 }
