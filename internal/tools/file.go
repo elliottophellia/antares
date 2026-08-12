@@ -190,9 +190,15 @@ func (readFileTool) Execute(_ context.Context, in Input) Result {
 		return Errorf("%s appears to be a binary file (%d bytes)", args.Path, fi.Size())
 	}
 
-	normalized := strings.ReplaceAll(string(data), "\r\n", "\n")
-	// Lone CR (classic Mac) must also split, or the file displays as one line.
-	normalized = strings.ReplaceAll(normalized, "\r", "\n")
+	normalized := strings.ReplaceAll(string(data), "\r", "\n")
+	if fileEOL(string(data)) != "\r" {
+		// Only a genuinely CR-terminated (classic Mac) file splits on a lone
+		// CR. In an LF or CRLF file a bare CR is data — a control character
+		// inside a string literal, say — and splitting on it would number the
+		// displayed lines differently from the file's real lines, handing the
+		// model an anchor that edit_file then cannot find.
+		normalized = strings.ReplaceAll(string(data), "\r\n", "\n")
+	}
 	lines := strings.Split(normalized, "\n")
 	offset := args.Offset
 	if offset <= 0 {
@@ -543,6 +549,10 @@ func resolveEditMatch(content, oldIn, newIn string) (oldString, newString string
 type lineSpan struct{ start, end int }
 
 func lineSpans(content string) []lineSpan {
+	// A lone CR terminates a line only in a genuinely CR-based file. Anywhere
+	// else it is data, and treating it as a break here would number lines
+	// differently from what read_file displayed to the model.
+	crIsTerminator := fileEOL(content) == "\r"
 	var spans []lineSpan
 	start := 0
 	i := 0
@@ -553,12 +563,18 @@ func lineSpans(content string) []lineSpan {
 			i++
 			start = i
 		case '\r':
-			spans = append(spans, lineSpan{start, i})
 			if i+1 < len(content) && content[i+1] == '\n' {
+				spans = append(spans, lineSpan{start, i})
 				i += 2
-			} else {
-				i++
+				start = i
+				continue
 			}
+			if !crIsTerminator {
+				i++
+				continue
+			}
+			spans = append(spans, lineSpan{start, i})
+			i++
 			start = i
 		default:
 			i++
@@ -582,6 +598,17 @@ func spliceAdjacentInsertion(content, oldIn, newIn string) (string, bool) {
 	oldNorm := toEOL(oldIn, "\n")
 	newNorm := toEOL(newIn, "\n")
 	if oldNorm == "" || strings.Contains(oldNorm, "\n") {
+		return "", false
+	}
+	// A NUMBER| line-prefix paste must never reach the fuzzy path. The anchor
+	// carries the prefix, so its token set still scores high against the real
+	// line, and the inserted text would be written to the file WITH its "13|"
+	// prefix while the tool reported success. Exact matching handles prefixed
+	// pastes properly via stripReadFileLinePrefixes; guessing must not.
+	if prefixed, total := readFileLinePrefixCounts(oldIn); prefixed > 0 && total > 0 {
+		return "", false
+	}
+	if prefixed, total := readFileLinePrefixCounts(newIn); prefixed > 0 && total > 0 {
 		return "", false
 	}
 
@@ -612,6 +639,28 @@ func spliceAdjacentInsertion(content, oldIn, newIn string) (string, bool) {
 	if bestIdx < 0 || best < 0.78 || (second >= 0 && best-second < 0.12) {
 		return "", false
 	}
+	// Token overlap alone is not enough to claim "this is the same line,
+	// lightly reworded". Sibling rows of one table share almost every token by
+	// construction, so a deleted anchor row scores 0.8+ against a surviving row
+	// while the runner-up (a heading, a paragraph) sits far below and clears
+	// the margin gate too.
+	//
+	// Edit distance does not separate those cases either: "2026-02-01" vs
+	// "2026-03-01" is a one-character difference, exactly like a typo. What
+	// actually distinguishes them is WHICH characters differ. Digits are a
+	// line's identifying detail — dates, ids, versions, counts — and a
+	// rewording never changes them, while a different row almost always does.
+	// Requiring identical digits admits the abbreviations this recovery exists
+	// for and rejects the sibling-row confusion that silently corrupts files.
+	anchor := content[spans[bestIdx].start:spans[bestIdx].end]
+	if digitsOfLine(oldNorm) != digitsOfLine(anchor) {
+		return "", false
+	}
+	// Belt and braces: even with matching digits, the line must still be a
+	// light edit rather than a wholesale rewrite.
+	if !nearEditDistance(oldNorm, anchor, 0.34) {
+		return "", false
+	}
 
 	insert = toEOL(insert, fileEOL(content))
 	sp := spans[bestIdx]
@@ -619,6 +668,74 @@ func spliceAdjacentInsertion(content, oldIn, newIn string) (string, bool) {
 		return content[:sp.end] + insert + content[sp.end:], true
 	}
 	return content[:sp.start] + insert + content[sp.start:], true
+}
+
+// digitsOfLine returns just the digits of s, in order. Two renderings of the
+// same line keep the same digits; two different rows of one table almost never
+// do.
+func digitsOfLine(s string) string {
+	out := make([]byte, 0, 16)
+	for i := 0; i < len(s); i++ {
+		if s[i] >= '0' && s[i] <= '9' {
+			out = append(out, s[i])
+		}
+	}
+	return string(out)
+}
+
+// nearEditDistance reports whether b is within maxRatio of a's length in
+// Levenshtein distance — i.e. b looks like a lightly edited a rather than a
+// different line that merely reuses the same vocabulary. Long lines are capped
+// so the O(n*m) table stays small on an error-recovery path.
+func nearEditDistance(a, b string, maxRatio float64) bool {
+	const cap = 512
+	if len(a) > cap {
+		a = a[:cap]
+	}
+	if len(b) > cap {
+		b = b[:cap]
+	}
+	if a == b {
+		return true
+	}
+	longest := len(a)
+	if len(b) > longest {
+		longest = len(b)
+	}
+	if longest == 0 {
+		return false
+	}
+	budget := int(float64(longest) * maxRatio)
+	// A length gap alone can already exceed the budget; skip the table then.
+	if diff := len(a) - len(b); diff > budget || -diff > budget {
+		return false
+	}
+
+	prev := make([]int, len(b)+1)
+	cur := make([]int, len(b)+1)
+	for j := range prev {
+		prev[j] = j
+	}
+	for i := 1; i <= len(a); i++ {
+		cur[0] = i
+		for j := 1; j <= len(b); j++ {
+			cost := 1
+			if a[i-1] == b[j-1] {
+				cost = 0
+			}
+			del, ins, sub := prev[j]+1, cur[j-1]+1, prev[j-1]+cost
+			best := del
+			if ins < best {
+				best = ins
+			}
+			if sub < best {
+				best = sub
+			}
+			cur[j] = best
+		}
+		prev, cur = cur, prev
+	}
+	return prev[len(b)] <= budget
 }
 
 func editLineSimilarity(a, b string) float64 {
