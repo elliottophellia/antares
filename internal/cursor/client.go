@@ -106,6 +106,70 @@ func (c *Client) Models(ctx context.Context) (*ModelCatalog, error) {
 	return &out, nil
 }
 
+func (c *Client) CreateAgent(ctx context.Context, in CreateAgentRequest) (*CreateAgentResponse, error) {
+	if strings.TrimSpace(in.Prompt.Text) == "" {
+		return nil, fmt.Errorf("cursor: prompt text is required")
+	}
+	var out CreateAgentResponse
+	if err := c.doJSON(ctx, http.MethodPost, "/v1/agents", in, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+func (c *Client) CreateRun(ctx context.Context, agentID string, in CreateRunRequest) (*Run, error) {
+	if strings.TrimSpace(agentID) == "" {
+		return nil, fmt.Errorf("cursor: agentID is required")
+	}
+	if strings.TrimSpace(in.Prompt.Text) == "" {
+		return nil, fmt.Errorf("cursor: prompt text is required")
+	}
+	var out CreateRunResponse
+	path := "/v1/agents/" + url.PathEscape(agentID) + "/runs"
+	if err := c.doJSON(ctx, http.MethodPost, path, in, &out); err != nil {
+		return nil, err
+	}
+	return &out.Run, nil
+}
+
+func (c *Client) GetAgent(ctx context.Context, agentID string) (*Agent, error) {
+	if strings.TrimSpace(agentID) == "" {
+		return nil, fmt.Errorf("cursor: agentID is required")
+	}
+	var out Agent
+	path := "/v1/agents/" + url.PathEscape(agentID)
+	if err := c.doJSON(ctx, http.MethodGet, path, nil, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+func (c *Client) GetRun(ctx context.Context, agentID, runID string) (*Run, error) {
+	if strings.TrimSpace(agentID) == "" {
+		return nil, fmt.Errorf("cursor: agentID is required")
+	}
+	if strings.TrimSpace(runID) == "" {
+		return nil, fmt.Errorf("cursor: runID is required")
+	}
+	var out Run
+	path := "/v1/agents/" + url.PathEscape(agentID) + "/runs/" + url.PathEscape(runID)
+	if err := c.doJSON(ctx, http.MethodGet, path, nil, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+func (c *Client) CancelRun(ctx context.Context, agentID, runID string) error {
+	if strings.TrimSpace(agentID) == "" {
+		return fmt.Errorf("cursor: agentID is required")
+	}
+	if strings.TrimSpace(runID) == "" {
+		return fmt.Errorf("cursor: runID is required")
+	}
+	path := "/v1/agents/" + url.PathEscape(agentID) + "/runs/" + url.PathEscape(runID) + "/cancel"
+	return c.doJSON(ctx, http.MethodPost, path, nil, nil)
+}
+
 func (c *Client) decodeAPIError(resp *http.Response) error {
 	const maxBody = 64 << 10
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxBody))
