@@ -5,6 +5,7 @@ package providers
 
 import (
 	"os"
+	"strings"
 
 	"github.com/enowdev/antares/internal/config"
 )
@@ -18,6 +19,34 @@ type Info struct {
 	BaseURL  string
 	NeedsKey bool
 	Models   []string
+}
+
+type Capability string
+
+const (
+	CapabilityLLM   Capability = "llm"
+	CapabilityAgent Capability = "agent"
+)
+
+func CapabilityForKind(kind string) Capability {
+	if strings.EqualFold(strings.TrimSpace(kind), "cursor-agent") {
+		return CapabilityAgent
+	}
+	return CapabilityLLM
+}
+
+func (i Info) Capability() Capability { return CapabilityForKind(i.Kind) }
+
+func CapabilityOf(cfg *config.Config, id string) Capability {
+	if info, ok := For(id); ok {
+		return info.Capability()
+	}
+	if cfg != nil {
+		if p, ok := cfg.Providers[id]; ok {
+			return CapabilityForKind(p.Kind)
+		}
+	}
+	return CapabilityLLM
 }
 
 // contextWindows records the true context window (in tokens) for models whose
@@ -58,6 +87,8 @@ var catalog = []Info{
 		[]string{"glm-5.2", "kimi-k3", "deepseek-v4-pro", "minimax-m3", "qwen3.8-max"}},
 	{"ollama", "Ollama (local)", "openai-compatible", "", "http://localhost:11434/v1", false,
 		[]string{"llama3.1", "qwen2.5"}},
+	{"cursor", "Cursor Cloud Agents", "cursor-agent", "CURSOR_API_KEY",
+		"https://api.cursor.com", true, nil},
 }
 
 // Catalog returns the well-known providers, in display order.
@@ -96,15 +127,15 @@ func Connected(cfg *config.Config, id string) bool {
 	return false
 }
 
-// Activate records credentials (when a key is given), makes the provider the
-// active one, and points the default model at it when the current one doesn't
-// belong to it. It mutates cfg but does not persist — the caller saves.
-func Activate(cfg *config.Config, id, key string) {
+// Connect records credentials (when a key is given) and configures a provider.
+// It mutates cfg but does not persist — the caller saves.
+func Connect(cfg *config.Config, id, key string) (Info, bool) {
 	if cfg.Providers == nil {
 		cfg.Providers = map[string]config.Provider{}
 	}
+	info, known := For(id)
 	p := cfg.Providers[id]
-	if info, ok := For(id); ok {
+	if known {
 		if p.Kind == "" {
 			p.Kind = info.Kind
 		}
@@ -139,11 +170,23 @@ func Activate(cfg *config.Config, id, key string) {
 	}
 	p.Enabled = true
 	cfg.Providers[id] = p
+	return info, known
+}
 
+// Activate records credentials (when a key is given), makes an LLM provider the
+// active one, and points the default model at it when the current one doesn't
+// belong to it. It mutates cfg but does not persist — the caller saves.
+func Activate(cfg *config.Config, id, key string) bool {
+	_, _ = Connect(cfg, id, key)
+	if CapabilityOf(cfg, id) == CapabilityAgent {
+		return false
+	}
 	cfg.Model.Provider = id
+	p := cfg.Providers[id]
 	if !contains(p.Models, cfg.Model.Default) && len(p.Models) > 0 {
 		cfg.Model.Default = p.Models[0]
 	}
+	return true
 }
 
 func contains(list []string, s string) bool {

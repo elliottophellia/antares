@@ -44,6 +44,10 @@ func Default() *Config {
 			"custom": {
 				Kind: "custom", Label: "Custom endpoint", Enabled: false, TimeoutSecs: 300,
 			},
+			"cursor": {
+				Kind: "cursor-agent", Label: "Cursor Cloud Agents", Enabled: true,
+				BaseURL: "https://api.cursor.com", APIKeyEnv: "CURSOR_API_KEY", TimeoutSecs: 900,
+			},
 		},
 		Database: Database{
 			Driver: "sqlite", DSN: filepath.Join(Home(), "antares.db"),
@@ -129,7 +133,7 @@ func Default() *Config {
 		Display: Display{
 			ToolProgress: true, ShowReasoning: true,
 			MaxLiveReasoningChars: 48_000,
-			Theme: "system", Skin: "antares", Language: "auto", InterimAssistant: true,
+			Theme:                 "system", Skin: "antares", Language: "auto", InterimAssistant: true,
 		},
 		Logging: Logging{Level: "info", File: filepath.Join(Home(), "logs", "antares.log")},
 		MCP:     MCP{Enabled: true, Servers: map[string]MCPServer{}},
