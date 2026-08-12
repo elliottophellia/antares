@@ -155,8 +155,14 @@ func TestAPIErrorClassificationAndRetryAfter(t *testing.T) {
 			if !IsStatus(err, status) {
 				t.Fatalf("status %d classified as %v", status, err)
 			}
-			if status == 429 && !IsRateLimit(err) {
-				t.Fatalf("429 not classified as rate limit: %v", err)
+			if status == 429 {
+				if !IsRateLimit(err) {
+					t.Fatalf("429 not classified as rate limit: %v", err)
+				}
+				var apiErr *APIError
+				if !errors.As(err, &apiErr) || apiErr.RetryAfter != 7*time.Second {
+					t.Fatalf("RetryAfter = %v, want 7s", apiErr)
+				}
 			}
 		})
 	}
