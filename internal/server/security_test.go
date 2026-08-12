@@ -2,12 +2,49 @@ package server
 
 import (
 	"context"
+	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
 	"github.com/enowdev/antares/internal/config"
 )
+
+type staticIPResolver map[string][]net.IP
+
+func (r staticIPResolver) LookupIP(_ context.Context, network, host string) ([]net.IP, error) {
+	ips, ok := r[network+" "+host]
+	if !ok {
+		return nil, &net.DNSError{Err: "not found", Name: host, IsNotFound: true}
+	}
+	out := make([]net.IP, len(ips))
+	copy(out, ips)
+	return out, nil
+}
+
+func synthesizeRFC6052(t *testing.T, prefix net.IP, bits int, v4 net.IP) net.IP {
+	t.Helper()
+	p := prefix.To16()
+	v := v4.To4()
+	if p == nil || v == nil {
+		t.Fatalf("invalid synthesis input: prefix=%v v4=%v", prefix, v4)
+	}
+	out := make(net.IP, net.IPv6len)
+	if bits == 96 {
+		copy(out[:12], p[:12])
+		copy(out[12:], v)
+		return out
+	}
+	compact := make([]byte, 15)
+	prefixBytes := bits / 8
+	copy(compact[:prefixBytes], p[:prefixBytes])
+	copy(compact[prefixBytes:prefixBytes+net.IPv4len], v)
+	copy(out[:8], compact[:8])
+	out[8] = 0
+	copy(out[9:], compact[8:])
+	return out
+}
 
 func TestQueryTokenAllowlist(t *testing.T) {
 	for _, tc := range []struct {
@@ -68,6 +105,58 @@ func TestRequestIsLoopback(t *testing.T) {
 		if got := requestIsLoopback(r); got != tc.want {
 			t.Errorf("requestIsLoopback(%q) = %v, want %v", tc.remote, got, tc.want)
 		}
+	}
+}
+
+func TestExtractRFC6052IPv4SupportsEveryPrefixLength(t *testing.T) {
+	prefix := net.ParseIP("fd00:aa:bb:2090::")
+	want := net.ParseIP("54.158.233.194")
+	for _, bits := range []int{32, 40, 48, 56, 64, 96} {
+		t.Run(fmt.Sprintf("/%d", bits), func(t *testing.T) {
+			synth := synthesizeRFC6052(t, prefix, bits, want)
+			got, ok := extractRFC6052IPv4(synth, bits)
+			if !ok || !got.Equal(want) {
+				t.Fatalf("extractRFC6052IPv4(%s, %d) = %v, %v; want %s, true",
+					synth, bits, got, ok, want)
+			}
+		})
+	}
+}
+
+func TestExtractRFC6052IPv4RejectsInvalidFormat(t *testing.T) {
+	ip := synthesizeRFC6052(t, net.ParseIP("fd00:aa:bb:2090::"), 64, net.ParseIP("54.158.233.194"))
+	ip[8] = 1
+	for _, tc := range []struct {
+		ip   net.IP
+		bits int
+	}{
+		{ip: ip, bits: 64},
+		{ip: net.ParseIP("54.158.233.194"), bits: 96},
+		{ip: net.ParseIP("2001:db8::1"), bits: 72},
+	} {
+		if _, ok := extractRFC6052IPv4(tc.ip, tc.bits); ok {
+			t.Fatalf("extractRFC6052IPv4(%s, %d) accepted invalid format", tc.ip, tc.bits)
+		}
+	}
+}
+
+func TestDiscoverNAT64PrefixesUsesIPv4OnlyARPA(t *testing.T) {
+	prefix := net.ParseIP("fd00:aa:bb:2090::")
+	resolver := staticIPResolver{
+		"ip6 ipv4only.arpa": {
+			synthesizeRFC6052(t, prefix, 96, net.ParseIP("192.0.0.170")),
+			synthesizeRFC6052(t, prefix, 96, net.ParseIP("192.0.0.171")),
+		},
+	}
+	prefixes, err := discoverNAT64Prefixes(context.Background(), resolver)
+	if err != nil {
+		t.Fatalf("discoverNAT64Prefixes: %v", err)
+	}
+	if len(prefixes) != 1 || prefixes[0].bits != 96 {
+		t.Fatalf("prefixes = %+v, want one /96 prefix", prefixes)
+	}
+	if !prefixMatches(prefix, prefixes[0].network, 96) {
+		t.Fatalf("prefix network = %s, want %s/96", prefixes[0].network, prefix)
 	}
 }
 

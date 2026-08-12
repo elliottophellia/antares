@@ -161,3 +161,88 @@ func providerIPBlocked(ip net.IP) bool {
 	}
 	return false
 }
+
+var rfc6052PrefixLengths = [...]int{32, 40, 48, 56, 64, 96}
+
+func validRFC6052PrefixLength(bits int) bool {
+	for _, candidate := range rfc6052PrefixLengths {
+		if bits == candidate {
+			return true
+		}
+	}
+	return false
+}
+
+func extractRFC6052IPv4(ip net.IP, prefixBits int) (net.IP, bool) {
+	v6 := ip.To16()
+	if v6 == nil || ip.To4() != nil || !validRFC6052PrefixLength(prefixBits) {
+		return nil, false
+	}
+	// RFC 6052 reserves bits 64-71 as the zero-valued "u" octet.
+	if v6[8] != 0 {
+		return nil, false
+	}
+	if prefixBits == 96 {
+		return net.IPv4(v6[12], v6[13], v6[14], v6[15]), true
+	}
+	compact := make([]byte, 15)
+	copy(compact[:8], v6[:8])
+	copy(compact[8:], v6[9:])
+	offset := prefixBits / 8
+	return net.IPv4(
+		compact[offset],
+		compact[offset+1],
+		compact[offset+2],
+		compact[offset+3],
+	), true
+}
+
+type providerIPResolver interface {
+	LookupIP(context.Context, string, string) ([]net.IP, error)
+}
+
+type nat64Prefix struct {
+	network net.IP
+	bits    int
+}
+
+func prefixMatches(ip, network net.IP, bits int) bool {
+	left, right := ip.To16(), network.To16()
+	if left == nil || right == nil {
+		return false
+	}
+	mask := net.CIDRMask(bits, 128)
+	return left.Mask(mask).Equal(right.Mask(mask))
+}
+
+func isIPv4OnlyWKA(ip net.IP) bool {
+	return ip.Equal(net.IPv4(192, 0, 0, 170)) || ip.Equal(net.IPv4(192, 0, 0, 171))
+}
+
+func discoverNAT64Prefixes(ctx context.Context, resolver providerIPResolver) ([]nat64Prefix, error) {
+	ips, err := resolver.LookupIP(ctx, "ip6", "ipv4only.arpa")
+	if err != nil {
+		return nil, err
+	}
+	seen := map[string]bool{}
+	var out []nat64Prefix
+	for _, ip := range ips {
+		for _, bits := range rfc6052PrefixLengths {
+			embedded, ok := extractRFC6052IPv4(ip, bits)
+			if !ok || !isIPv4OnlyWKA(embedded) {
+				continue
+			}
+			mask := net.CIDRMask(bits, 128)
+			network := append(net.IP(nil), ip.To16().Mask(mask)...)
+			key := fmt.Sprintf("%d:%x", bits, []byte(network))
+			if !seen[key] {
+				seen[key] = true
+				out = append(out, nat64Prefix{network: network, bits: bits})
+			}
+		}
+	}
+	if len(out) == 0 {
+		return nil, errors.New("DNS64 prefix discovery returned no RFC 6052 prefix")
+	}
+	return out, nil
+}
