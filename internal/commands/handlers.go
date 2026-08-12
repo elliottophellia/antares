@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/enowdev/antares/internal/config"
+	"github.com/enowdev/antares/internal/providers"
 	"github.com/enowdev/antares/internal/store"
 )
 
@@ -171,6 +172,12 @@ func cmdProvider(_ context.Context, d Deps, in Input) (Result, error) {
 	}
 	if _, ok := next.Providers[in.Args]; !ok {
 		return Result{}, fmt.Errorf("no provider named %q is configured", in.Args)
+	}
+	if providers.CapabilityOf(next, in.Args) == providers.CapabilityAgent {
+		return Result{Output: fmt.Sprintf(
+			"`%s` is an agent integration, not a chat model provider; use the cursor_agent tool.",
+			in.Args,
+		)}, nil
 	}
 	next.Model.Provider = in.Args
 	if err := config.Save(next); err != nil {

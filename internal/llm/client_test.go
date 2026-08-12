@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -145,5 +146,18 @@ func TestStreamingTimeoutTracksInactivityInsteadOfTotalDuration(t *testing.T) {
 	}
 	if text != "onetwothreefour" {
 		t.Fatalf("text = %q, want %q", text, "onetwothreefour")
+	}
+}
+
+func TestNewRejectsCursorAgentKind(t *testing.T) {
+	_, err := New(Options{Kind: "cursor-agent", BaseURL: "https://api.cursor.com"})
+	if err == nil || !strings.Contains(err.Error(), "cursor_agent") {
+		t.Fatalf("cursor-agent error = %v", err)
+	}
+}
+
+func TestNewAllowsUnknownProviderKinds(t *testing.T) {
+	if _, err := New(Options{Kind: "future-compatible", BaseURL: "https://example.invalid/v1"}); err != nil {
+		t.Fatalf("unknown provider kind rejected: %v", err)
 	}
 }

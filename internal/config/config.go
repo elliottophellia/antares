@@ -106,9 +106,9 @@ type Model struct {
 	Panel []string `yaml:"panel" json:"panel"`
 }
 
-// Provider is one configured LLM endpoint.
+// Provider is one configured external AI service.
 type Provider struct {
-	Kind        string            `yaml:"kind" json:"kind"` // openai-compatible|anthropic|openai|gemini|custom
+	Kind        string            `yaml:"kind" json:"kind"` // openai-compatible|anthropic|openai|gemini|custom|cursor-agent
 	BaseURL     string            `yaml:"base_url" json:"base_url"`
 	APIKey      string            `yaml:"api_key" json:"api_key"`
 	APIKeyEnv   string            `yaml:"api_key_env" json:"api_key_env"`

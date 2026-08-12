@@ -259,11 +259,20 @@ func (m *Model) openProviderPicker() {
 // connect one that is not yet set up.
 func (m *Model) selectProvider(id string) {
 	if providers.Connected(m.cfg, id) {
+		if providers.CapabilityOf(m.cfg, id) == providers.CapabilityAgent {
+			m.setStatus(id + " agent integration is connected")
+			m.pushSystem("Use the cursor_agent tool to run Cursor Cloud Agents.")
+			return
+		}
 		m.activateProvider(id, "")
 		return
 	}
 	info, ok := providers.For(id)
 	if !ok {
+		if providers.CapabilityOf(m.cfg, id) == providers.CapabilityAgent {
+			m.pushSystem("Use the cursor_agent tool to run this agent integration.")
+			return
+		}
 		m.activateProvider(id, "") // unknown/custom provider — just switch to it
 		return
 	}
@@ -284,6 +293,14 @@ func (m *Model) selectProvider(id string) {
 
 // activateProvider connects/switches to a provider and persists the change.
 func (m *Model) activateProvider(id, key string) {
+	if providers.CapabilityOf(m.cfg, id) == providers.CapabilityAgent {
+		providers.Connect(m.cfg, id, key)
+		m.saveConfig()
+		m.setStatus("connected " + id + " agent integration")
+		m.pushSystem("Connected to " + id + ". Active model remains " + m.cfg.Model.Default +
+			" (" + m.cfg.Model.Provider + "). Use the cursor_agent tool.")
+		return
+	}
 	providers.Activate(m.cfg, id, key)
 	m.saveConfig()
 	if key != "" {

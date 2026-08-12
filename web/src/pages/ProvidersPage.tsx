@@ -12,6 +12,7 @@ import {
   Trash,
 } from '@phosphor-icons/react'
 import { del, get, post } from '@/lib/api'
+import { agentModelsErrorText, isAgentProvider, providerModelsPath, type ProviderCapability } from '@/lib/providerCapabilities'
 import { useApi } from '@/lib/hooks'
 import { useI18n } from '@/lib/i18n'
 import { cn } from '@/lib/utils'
@@ -40,6 +41,7 @@ interface ProviderInfo {
   local: boolean
   base_url: string
   active: boolean
+  capability: ProviderCapability
   hint?: string
   key_hint?: string
   key_url?: string
@@ -159,7 +161,8 @@ function ProvidersTab({ onOpenModels }: { onOpenModels: () => void }) {
                           <span className="min-w-0 flex-1 truncate text-sm font-medium">
                             {providerName(p.label)}
                           </span>
-                          {p.active ? <Badge>{t('models.activeNow')}</Badge> : null}
+                          {isAgentProvider(p) ? <Badge variant="outline">{t('providers.agentIntegration')}</Badge> : null}
+                          {p.active && !isAgentProvider(p) ? <Badge>{t('models.activeNow')}</Badge> : null}
                         </div>
                         <span className="mt-0.5 block truncate font-mono text-[10px] text-muted-foreground">
                           {p.base_url || p.kind}
@@ -243,6 +246,19 @@ interface AllModel {
   context_window: number
 }
 
+interface AgentModel {
+  id: string
+  name: string
+  description?: string
+  parameters?: unknown[]
+}
+
+interface AgentModelsResponse {
+  models: AgentModel[]
+  needs_key?: boolean
+  error?: string
+}
+
 /**
  * Manage one provider in a modal: credentials, its models (add/remove with an
  * auto-fetched context window), and advanced settings. Each section saves to
@@ -273,9 +289,12 @@ function ProviderModal({
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string>()
 
-  // Models added to this provider (from the combined list, filtered to it).
-  const modelsState = useApi<{ models: AllModel[] }>('/model/list-all')
-  const myModels = (modelsState.data?.models ?? []).filter((m) => m.provider === p.id)
+  // Both hooks must run for every provider; the irrelevant endpoint is disabled.
+  const agentOnly = isAgentProvider(p)
+  const agentModelsState = useApi<AgentModelsResponse>(providerModelsPath(p))
+  const llmModelsState = useApi<{ models: AllModel[] }>(agentOnly ? null : '/model/list-all')
+  const myModels = (llmModelsState.data?.models ?? []).filter((m) => m.provider === p.id)
+  const agentModelsError = agentModelsErrorText(agentModelsState.data, agentModelsState.error)
   const [newModel, setNewModel] = useState('')
   const [newCtx, setNewCtx] = useState('')
   const [ctxAuto, setCtxAuto] = useState(false)
@@ -344,7 +363,7 @@ function ProviderModal({
       setNewModel('')
       setNewCtx('')
       setCtxAuto(false)
-      modelsState.reload()
+      llmModelsState.reload()
       onChanged()
     } finally {
       setModelBusy(false)
@@ -353,7 +372,7 @@ function ProviderModal({
 
   const removeModel = async (id: string) => {
     await del(`/providers/${encodeURIComponent(p.id)}/model/${encodeURIComponent(id)}`)
-    modelsState.reload()
+    llmModelsState.reload()
     onChanged()
   }
 
@@ -387,7 +406,7 @@ function ProviderModal({
       <DialogContent>
         <DialogHeader>
           <DialogTitle>{providerName(p.label)}</DialogTitle>
-          <DialogDescription>{t('providers.manageDesc')}</DialogDescription>
+          <DialogDescription>{agentOnly ? t('providers.agentManageDesc') : t('providers.manageDesc')}</DialogDescription>
         </DialogHeader>
 
         <div className="flex gap-1 border-b border-border pb-2">
@@ -452,61 +471,88 @@ function ProviderModal({
 
           {section === 'models' ? (
             <>
-              <div className="space-y-1.5 rounded-[var(--radius-sm)] border border-border p-3">
-                <Label>{t('providers.addModel')}</Label>
-                <div className="flex flex-col gap-2 sm:flex-row">
-                  <Input
-                    value={newModel}
-                    onChange={(e) => {
-                      setNewModel(e.target.value)
-                      setCtxAuto(false)
-                    }}
-                    onBlur={() => autoFetchCtx(newModel)}
-                    placeholder={t('providers.modelIdPlaceholder')}
-                    className="sm:flex-1"
-                  />
-                  <Input
-                    value={newCtx}
-                    onChange={(e) => setNewCtx(e.target.value)}
-                    placeholder={t('providers.ctxPlaceholder')}
-                    inputMode="numeric"
-                    className="sm:w-40"
-                  />
-                  <Button size="sm" onClick={addModel} loading={modelBusy} disabled={!newModel.trim()}>
-                    {t('providers.add')}
-                  </Button>
-                </div>
-                <p className="text-[11px] text-muted-foreground">
-                  {ctxAuto ? t('providers.ctxAuto') : t('providers.ctxHint')}
-                </p>
-              </div>
-
-              {myModels.length === 0 ? (
-                <p className="py-4 text-center text-xs text-muted-foreground">{t('models.none')}</p>
+              {agentOnly ? (
+                <>
+                  <p className="text-xs text-muted-foreground">{t('providers.agentModelsReadOnly')}</p>
+                  {agentModelsState.data?.needs_key ? (
+                    <p className="py-4 text-center text-xs text-muted-foreground">{t('models.needsKey')}</p>
+                  ) : agentModelsError ? (
+                    <p className="rounded-[var(--radius-sm)] border border-destructive/40 bg-destructive/10 p-2.5 text-xs text-destructive">
+                      {agentModelsError}
+                    </p>
+                  ) : (agentModelsState.data?.models ?? []).length === 0 ? (
+                    <p className="py-4 text-center text-xs text-muted-foreground">{t('models.none')}</p>
+                  ) : (
+                    <div className="max-h-64 space-y-1.5 overflow-y-auto">
+                      {(agentModelsState.data?.models ?? []).map((m) => (
+                        <div key={m.id} className="rounded-[var(--radius-sm)] border border-border p-2.5">
+                          <p className="truncate font-mono text-xs">{m.id}</p>
+                          <p className="truncate text-xs text-muted-foreground">{m.name}</p>
+                          {m.description ? <p className="mt-1 text-[11px] text-muted-foreground">{m.description}</p> : null}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </>
               ) : (
-                <div className="max-h-64 space-y-1.5 overflow-y-auto">
-                  {myModels.map((m) => (
-                    <div key={m.id} className="flex items-center gap-2 rounded-[var(--radius-sm)] border border-border p-2.5">
-                      <div className="min-w-0 flex-1">
-                        <p className="truncate font-mono text-xs">{m.id}</p>
-                        {m.context_window > 0 ? (
-                          <p className="text-[10px] text-muted-foreground">
-                            {t('models.ctx', { n: Math.round(m.context_window / 1000) })}
-                          </p>
-                        ) : null}
-                      </div>
-                      <Button
-                        variant="ghost"
-                        size="icon-sm"
-                        aria-label={t('common.delete')}
-                        onClick={() => removeModel(m.id)}
-                        className="shrink-0 text-muted-foreground hover:text-destructive"
-                      >
-                        <Trash className="size-4" />
+                <>
+                  <div className="space-y-1.5 rounded-[var(--radius-sm)] border border-border p-3">
+                    <Label>{t('providers.addModel')}</Label>
+                    <div className="flex flex-col gap-2 sm:flex-row">
+                      <Input
+                        value={newModel}
+                        onChange={(e) => {
+                          setNewModel(e.target.value)
+                          setCtxAuto(false)
+                        }}
+                        onBlur={() => autoFetchCtx(newModel)}
+                        placeholder={t('providers.modelIdPlaceholder')}
+                        className="sm:flex-1"
+                      />
+                      <Input
+                        value={newCtx}
+                        onChange={(e) => setNewCtx(e.target.value)}
+                        placeholder={t('providers.ctxPlaceholder')}
+                        inputMode="numeric"
+                        className="sm:w-40"
+                      />
+                      <Button size="sm" onClick={addModel} loading={modelBusy} disabled={!newModel.trim()}>
+                        {t('providers.add')}
                       </Button>
                     </div>
-                  ))}
-                </div>
+                    <p className="text-[11px] text-muted-foreground">
+                      {ctxAuto ? t('providers.ctxAuto') : t('providers.ctxHint')}
+                    </p>
+                  </div>
+
+                  {myModels.length === 0 ? (
+                    <p className="py-4 text-center text-xs text-muted-foreground">{t('models.none')}</p>
+                  ) : (
+                    <div className="max-h-64 space-y-1.5 overflow-y-auto">
+                      {myModels.map((m) => (
+                        <div key={m.id} className="flex items-center gap-2 rounded-[var(--radius-sm)] border border-border p-2.5">
+                          <div className="min-w-0 flex-1">
+                            <p className="truncate font-mono text-xs">{m.id}</p>
+                            {m.context_window > 0 ? (
+                              <p className="text-[10px] text-muted-foreground">
+                                {t('models.ctx', { n: Math.round(m.context_window / 1000) })}
+                              </p>
+                            ) : null}
+                          </div>
+                          <Button
+                            variant="ghost"
+                            size="icon-sm"
+                            aria-label={t('common.delete')}
+                            onClick={() => removeModel(m.id)}
+                            className="shrink-0 text-muted-foreground hover:text-destructive"
+                          >
+                            <Trash className="size-4" />
+                          </Button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </>
               )}
             </>
           ) : null}

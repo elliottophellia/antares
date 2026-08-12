@@ -22,6 +22,7 @@ import (
 	"github.com/enowdev/antares/internal/agent"
 	"github.com/enowdev/antares/internal/config"
 	"github.com/enowdev/antares/internal/cron"
+	"github.com/enowdev/antares/internal/cursor"
 	"github.com/enowdev/antares/internal/gateway"
 	"github.com/enowdev/antares/internal/mcp"
 	"github.com/enowdev/antares/internal/skills"
@@ -29,6 +30,17 @@ import (
 	"github.com/enowdev/antares/internal/store"
 	"github.com/enowdev/antares/internal/version"
 )
+
+// cursorMetadataClient is the narrow surface Server needs from a Cursor
+// client: identity/quota verification and the model catalogue. Tests inject a
+// fake through cursorFactory; production always goes through cursor.New.
+type cursorMetadataClient interface {
+	Me(context.Context) (*cursor.Me, error)
+	Models(context.Context) (*cursor.ModelCatalog, error)
+}
+
+// cursorClientFactory builds a cursorMetadataClient from connection options.
+type cursorClientFactory func(cursor.Options) (cursorMetadataClient, error)
 
 // Server wires the API handlers to the agent and store.
 type Server struct {
@@ -47,6 +59,15 @@ type Server struct {
 
 	// distFS holds the embedded dashboard build, when present.
 	distFS fs.FS
+
+	// cursorFactory overrides how a Cursor metadata client is constructed.
+	// Only tests set this; production callers get cursor.New via
+	// newCursorMetadataClient.
+	cursorFactory cursorClientFactory
+
+	// providerResolver overrides provider hostname resolution in handler tests.
+	// Production uses net.DefaultResolver.
+	providerResolver providerIPResolver
 
 	mu       sync.RWMutex
 	reloadFn func() error
@@ -138,6 +159,15 @@ func (s *Server) config() *config.Config {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.cfg
+}
+
+// newCursorMetadataClient builds a Cursor metadata client, honouring an
+// injected test factory when one is set. No production caller injects one.
+func (s *Server) newCursorMetadataClient(o cursor.Options) (cursorMetadataClient, error) {
+	if s.cursorFactory != nil {
+		return s.cursorFactory(o)
+	}
+	return cursor.New(o)
 }
 
 //go:embed all:dist

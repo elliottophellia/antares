@@ -2,6 +2,7 @@ package server
 
 import (
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/enowdev/antares/internal/config"
 	"github.com/enowdev/antares/internal/llm"
+	"github.com/enowdev/antares/internal/providers"
 	"github.com/enowdev/antares/internal/tools"
 )
 
@@ -165,21 +167,25 @@ func (s *Server) handleModelOptions(w http.ResponseWriter, r *http.Request) {
 		NeedsAPIVersion bool   `json:"needs_api_version,omitempty"`
 		NeedsBaseURL    bool   `json:"needs_base_url,omitempty"`
 		TimeoutSecs     int    `json:"timeout_seconds,omitempty"`
+		// Capability distinguishes chat-model providers ("llm") from agent
+		// integrations ("agent", e.g. Cursor) so the dashboard can route them
+		// to their own connection flow instead of the active-model picker.
+		Capability string `json:"capability"`
 	}
 
 	// Every provider from the catalogue (configured or not), so the new kinds
 	// can be set up from here — then any custom providers only in the config.
 	seen := map[string]bool{}
-	providers := make([]providerInfo, 0)
+	providerList := make([]providerInfo, 0)
 	for _, sp := range setupProviderCatalogue(cfg) {
 		p := cfg.Providers[sp.ID]
-		providers = append(providers, providerInfo{
+		providerList = append(providerList, providerInfo{
 			ID: sp.ID, Label: sp.Label, Kind: sp.Kind,
 			Enabled: p.Enabled, HasKey: p.APIKey != "", Local: sp.Local,
 			BaseURL: firstNonEmpty(p.BaseURL, sp.BaseURL), Active: sp.ID == cfg.Model.Provider,
 			Hint: sp.Hint, KeyHint: sp.KeyHint, KeyURL: sp.KeyURL, KeyLabel: sp.KeyLabel,
 			Note: sp.Note, NeedsRegion: sp.NeedsRegion, NeedsAPIVersion: sp.NeedsAPIVersion,
-			NeedsBaseURL: sp.NeedsBaseURL, TimeoutSecs: p.TimeoutSecs,
+			NeedsBaseURL: sp.NeedsBaseURL, TimeoutSecs: p.TimeoutSecs, Capability: sp.Capability,
 		})
 		seen[sp.ID] = true
 	}
@@ -192,25 +198,38 @@ func (s *Server) handleModelOptions(w http.ResponseWriter, r *http.Request) {
 	sort.Strings(names)
 	for _, name := range names {
 		p := cfg.Providers[name]
-		providers = append(providers, providerInfo{
+		providerList = append(providerList, providerInfo{
 			ID: name, Label: firstNonEmpty(p.Label, name), Kind: p.Kind, Enabled: p.Enabled,
 			HasKey: p.APIKey != "", Local: isLocalEndpoint(p.BaseURL), BaseURL: p.BaseURL,
 			Active: name == cfg.Model.Provider, TimeoutSecs: p.TimeoutSecs,
+			Capability: string(providers.CapabilityForKind(p.Kind)),
 		})
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
 		"active":    map[string]string{"model": cfg.Model.Default, "provider": cfg.Model.Provider},
-		"providers": providers,
+		"providers": providerList,
 	})
 }
 
 func (s *Server) handleModelList(w http.ResponseWriter, r *http.Request) {
 	provider := r.URL.Query().Get("provider")
+	cfg := s.config()
 
 	// Calling a provider we know has no credential just turns a known state
 	// into an opaque 401. Report the missing key instead.
-	id, p := s.config().ResolveProvider(provider)
+	id, p := cfg.ResolveProvider(provider)
+	// Agent integrations (Cursor) are not chat-model providers: fail before
+	// the generic agent.Models -> llm.New path, and point the caller at the
+	// dedicated discovery endpoint instead of a 401/500 from the guard below.
+	if providers.CapabilityOf(cfg, id) == providers.CapabilityAgent {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"models": []any{}, "provider": id, "capability": "agent",
+			"error": fmt.Sprintf(
+				"%s is an agent integration; browse its models via GET /api/providers/%s/models.", id, id),
+		})
+		return
+	}
 	if p.APIKey == "" && !isLocalEndpoint(p.BaseURL) {
 		writeJSON(w, http.StatusOK, map[string]any{
 			"models": []any{}, "needs_key": true, "provider": id,
@@ -252,8 +271,15 @@ func (s *Server) handleModelListAll(w http.ResponseWriter, r *http.Request) {
 	}
 	var targets []target
 	seen := map[string]bool{}
-	add := func(id, label string) {
+	add := func(id, label, kind string) {
 		if seen[id] {
+			return
+		}
+		// Agent integrations (Cursor) are never aggregated here, even when
+		// keyed via the environment: this endpoint feeds the active-model
+		// picker, and an agent capability cannot be the active chat model.
+		if providers.CapabilityForKind(kind) == providers.CapabilityAgent {
+			seen[id] = true
 			return
 		}
 		p := cfg.Providers[id]
@@ -264,10 +290,10 @@ func (s *Server) handleModelListAll(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	for _, sp := range setupProviderCatalogue(cfg) {
-		add(sp.ID, sp.Label)
+		add(sp.ID, sp.Label, sp.Kind)
 	}
 	for name := range cfg.Providers {
-		add(name, cfg.Providers[name].Label)
+		add(name, cfg.Providers[name].Label, cfg.Providers[name].Kind)
 	}
 
 	type row struct {
@@ -343,6 +369,17 @@ func (s *Server) handleModelSet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	prevProvider := cfg.Model.Provider
+	resultProvider := prevProvider
+	if body.Provider != "" {
+		resultProvider = body.Provider
+	}
+	// An agent integration (Cursor) can never become the active chat model —
+	// checked before any mutation, memory swap, or disk write below.
+	if providers.CapabilityOf(cfg, resultProvider) == providers.CapabilityAgent {
+		writeError(w, http.StatusBadRequest,
+			fmt.Errorf("%q is an agent integration and cannot be the active model", resultProvider))
+		return
+	}
 	cfg.Model.Default = body.Model
 	if body.Provider != "" {
 		cfg.Model.Provider = body.Provider

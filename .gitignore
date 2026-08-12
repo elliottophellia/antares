@@ -28,6 +28,8 @@ web/src/sample/
 .mcp.json
 opencode.json
 AGENTS.md
+.worktrees/
+.superpowers/
 
 # Release artifacts
 dist/
