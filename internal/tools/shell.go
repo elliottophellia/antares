@@ -201,6 +201,11 @@ func (m *ShellManager) session(id, workspace string) (*shellSession, error) {
 	out := &lockedBuffer{}
 	cmd.Stdout = out
 	cmd.Stderr = out
+	// Keep the persistent shell and every foreground command it starts in an
+	// isolated process group. A timed-out command must be terminated as a unit;
+	// killing only the shell can leave descendants holding the shell's pipes and
+	// wedge the session for all subsequent calls.
+	configureProcessGroup(cmd)
 	if err := cmd.Start(); err != nil {
 		return nil, fmt.Errorf("start shell: %w", err)
 	}
@@ -287,11 +292,18 @@ func (m *ShellManager) ReapIdle(lifetime time.Duration) {
 func (s *shellSession) terminate() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.terminateLocked()
+}
+
+// terminateLocked stops the shell and its descendants. The caller must hold
+// s.mu. It is also used by run when a foreground call times out, where waiting
+// for the normal command sentinel is no longer safe.
+func (s *shellSession) terminateLocked() {
 	if s.cmd == nil || s.cmd.Process == nil {
 		return
 	}
 	_ = s.stdin.Close()
-	_ = s.cmd.Process.Kill()
+	killProcessGroup(s.cmd)
 	s.dead.Store(true)
 }
 
@@ -335,7 +347,9 @@ func (s *shellSession) run(ctx context.Context, command string, timeout time.Dur
 	for {
 		select {
 		case <-ctx.Done():
-			return s.finish(marker), -1, ctx.Err()
+			out := s.finish(marker)
+			s.terminateLocked()
+			return out, -1, ctx.Err()
 		case <-s.done:
 			// The shell can exit before printing the sentinel (for example when a
 			// command enables `set -e` and then fails). Do not wait out the full
@@ -364,6 +378,9 @@ func (s *shellSession) run(ctx context.Context, command string, timeout time.Dur
 			}
 			if time.Now().After(deadline) {
 				out := s.finish(marker)
+				// Do not leave the timed-out command running behind the persistent
+				// shell. Its output and stdin state would corrupt the next call.
+				s.terminateLocked()
 				return out, -1, fmt.Errorf("command timed out after %s", timeout)
 			}
 		}

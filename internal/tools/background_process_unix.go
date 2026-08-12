@@ -8,7 +8,16 @@ import (
 )
 
 func configureProcessGroup(cmd *exec.Cmd) {
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if cmd == nil {
+		return
+	}
+	// Sandboxed commands may already carry Cloneflags, uid mappings, or a
+	// parent-death signal. Preserve those settings while adding the process
+	// group needed to terminate a command tree on timeout.
+	if cmd.SysProcAttr == nil {
+		cmd.SysProcAttr = &syscall.SysProcAttr{}
+	}
+	cmd.SysProcAttr.Setpgid = true
 }
 
 func terminateProcessGroup(cmd *exec.Cmd) {
