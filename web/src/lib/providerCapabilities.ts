@@ -14,3 +14,10 @@ export function providerModelsPath(provider: ProviderCapabilityInfo): string | n
     ? `/providers/${encodeURIComponent(provider.id)}/models`
     : null
 }
+
+export function agentModelsErrorText(
+  response: { error?: string } | undefined,
+  requestError: Error | undefined,
+): string | undefined {
+  return response?.error ?? requestError?.message
+}

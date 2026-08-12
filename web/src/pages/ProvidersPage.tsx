@@ -12,7 +12,7 @@ import {
   Trash,
 } from '@phosphor-icons/react'
 import { del, get, post } from '@/lib/api'
-import { isAgentProvider, providerModelsPath, type ProviderCapability } from '@/lib/providerCapabilities'
+import { agentModelsErrorText, isAgentProvider, providerModelsPath, type ProviderCapability } from '@/lib/providerCapabilities'
 import { useApi } from '@/lib/hooks'
 import { useI18n } from '@/lib/i18n'
 import { cn } from '@/lib/utils'
@@ -253,6 +253,12 @@ interface AgentModel {
   parameters?: unknown[]
 }
 
+interface AgentModelsResponse {
+  models: AgentModel[]
+  needs_key?: boolean
+  error?: string
+}
+
 /**
  * Manage one provider in a modal: credentials, its models (add/remove with an
  * auto-fetched context window), and advanced settings. Each section saves to
@@ -285,9 +291,10 @@ function ProviderModal({
 
   // Both hooks must run for every provider; the irrelevant endpoint is disabled.
   const agentOnly = isAgentProvider(p)
-  const agentModelsState = useApi<{ models: AgentModel[]; needs_key?: boolean }>(providerModelsPath(p))
+  const agentModelsState = useApi<AgentModelsResponse>(providerModelsPath(p))
   const llmModelsState = useApi<{ models: AllModel[] }>(agentOnly ? null : '/model/list-all')
   const myModels = (llmModelsState.data?.models ?? []).filter((m) => m.provider === p.id)
+  const agentModelsError = agentModelsErrorText(agentModelsState.data, agentModelsState.error)
   const [newModel, setNewModel] = useState('')
   const [newCtx, setNewCtx] = useState('')
   const [ctxAuto, setCtxAuto] = useState(false)
@@ -469,9 +476,9 @@ function ProviderModal({
                   <p className="text-xs text-muted-foreground">{t('providers.agentModelsReadOnly')}</p>
                   {agentModelsState.data?.needs_key ? (
                     <p className="py-4 text-center text-xs text-muted-foreground">{t('models.needsKey')}</p>
-                  ) : agentModelsState.error ? (
+                  ) : agentModelsError ? (
                     <p className="rounded-[var(--radius-sm)] border border-destructive/40 bg-destructive/10 p-2.5 text-xs text-destructive">
-                      {agentModelsState.error.message}
+                      {agentModelsError}
                     </p>
                   ) : (agentModelsState.data?.models ?? []).length === 0 ? (
                     <p className="py-4 text-center text-xs text-muted-foreground">{t('models.none')}</p>
