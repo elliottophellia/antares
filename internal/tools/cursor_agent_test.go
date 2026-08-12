@@ -389,6 +389,44 @@ func TestCursorAgentCancelPostsOnce(t *testing.T) {
 	}
 }
 
+// A cancel 404 can mean either the run or the whole agent is gone, and only
+// Cursor's typed code says which.
+func TestCursorAgentCancelNotFoundUsesTypedCode(t *testing.T) {
+	for _, tc := range []struct {
+		code string
+		want string
+	}{
+		{code: "agent_not_found", want: "Cursor agent not found"},
+		{code: "run_not_found", want: "Cursor run not found"},
+		{code: "", want: "Cursor run not found"},
+	} {
+		t.Run("code="+tc.code, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(http.StatusNotFound)
+				_ = json.NewEncoder(w).Encode(map[string]any{
+					"code": tc.code, "message": "missing " + cursorToolTestKey,
+				})
+			}))
+			defer srv.Close()
+
+			got := (cursorAgentTool{}).Execute(
+				context.Background(),
+				cursorToolTestInput(
+					cursorToolTestConfig(srv.URL),
+					`{"action":"cancel","agent_id":"bc-one","run_id":"run-one"}`,
+					nil,
+				),
+			)
+			if !got.IsError || !strings.HasPrefix(got.Content, tc.want) {
+				t.Fatalf("cancel 404 result = %+v, want %q", got, tc.want)
+			}
+			if strings.Contains(got.Content, cursorToolTestKey) {
+				t.Fatalf("cancel 404 leaked the API key: %s", got.Content)
+			}
+		})
+	}
+}
+
 func TestCursorAgentStatusResolvesLatestRunWithoutStreaming(t *testing.T) {
 	var calls atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

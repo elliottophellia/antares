@@ -604,17 +604,32 @@ func safeCursorResultError(err error, agentID, runID, secret string) Result {
 	)
 }
 
+// cursorNotFoundLabel prefers Cursor's typed code over the caller's guess:
+// cancelling a run whose agent is gone reports the agent, not the run. Only
+// these fixed labels are returned, never the upstream code itself.
+func cursorNotFoundLabel(err error, missingKind string) string {
+	var apiErr *cursor.APIError
+	if errors.As(err, &apiErr) {
+		switch strings.ToLower(strings.TrimSpace(apiErr.Code)) {
+		case "agent_not_found":
+			return "Cursor agent not found"
+		case "run_not_found":
+			return "Cursor run not found"
+		}
+	}
+	if missingKind == "agent" {
+		return "Cursor agent not found"
+	}
+	return "Cursor run not found"
+}
+
 func cursorOperationError(err error, missingKind, agentID, runID, secret string) Result {
 	err = sanitizeCursorError(err, secret)
 	agentID = redactCursorString(agentID, secret)
 	runID = redactCursorString(runID, secret)
 	meta := map[string]any{"agent_id": agentID, "run_id": runID}
 	if cursor.IsStatus(err, http.StatusNotFound) {
-		label := "Cursor run not found"
-		if missingKind == "agent" {
-			label = "Cursor agent not found"
-		}
-		return Result{Content: label + ": " + err.Error(), Meta: meta, IsError: true}
+		return Result{Content: cursorNotFoundLabel(err, missingKind) + ": " + err.Error(), Meta: meta, IsError: true}
 	}
 	if cursor.IsStatus(err, http.StatusConflict) {
 		return Result{Content: err.Error(), Meta: meta, IsError: true}
