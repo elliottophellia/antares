@@ -119,6 +119,27 @@ func TestCursorAgentRejectsMissingConfigAndInvalidRepository(t *testing.T) {
 	}
 }
 
+func TestCursorAgentRejectsStartingRefWithoutRepositoryBeforeNetwork(t *testing.T) {
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		http.Error(w, "validation should happen before network I/O", http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+
+	args := `{"action":"start","prompt":"fix it","starting_ref":"main","wait":false}`
+	got := (cursorAgentTool{}).Execute(
+		context.Background(),
+		cursorToolTestInput(cursorToolTestConfig(srv.URL), args, nil),
+	)
+	if !got.IsError || !strings.Contains(got.Content, "repository_url is required when starting_ref is set") {
+		t.Fatalf("result = %+v, want actionable starting_ref validation error", got)
+	}
+	if calls.Load() != 0 {
+		t.Fatalf("starting_ref without repository_url made %d network request(s)", calls.Load())
+	}
+}
+
 func TestCursorAgentValidatesActionSpecificArguments(t *testing.T) {
 	var calls atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

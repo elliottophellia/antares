@@ -203,7 +203,8 @@ func (c *Client) streamOnce(
 }
 
 // StreamRun streams a run's events, transparently reconnecting on ordinary
-// disconnects (preserving Last-Event-ID) up to a bounded number of attempts.
+// disconnects while preserving Last-Event-ID. The retry budget applies only
+// to consecutive disconnects that make no event-ID progress.
 // It returns the run's terminal state once a "result" event is decoded, or
 // once the stream ends and GetRun confirms completion.
 func (c *Client) StreamRun(
@@ -219,27 +220,27 @@ func (c *Client) StreamRun(
 	}
 
 	backoffs := [3]time.Duration{250 * time.Millisecond, 500 * time.Millisecond, 1 * time.Second}
-	const maxAttempts = 4
+	const maxNoProgress = 4
 
 	var lastID string
 	var resetUsed bool
-	attempts := 0
-	skipSleep := true
+	noProgress := 0
+	var retryDelay time.Duration
 
 	for {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		if !skipSleep {
+		if retryDelay > 0 {
 			select {
 			case <-ctx.Done():
 				return nil, ctx.Err()
-			case <-time.After(backoffs[attempts-1]):
+			case <-time.After(retryDelay):
 			}
 		}
-		skipSleep = false
-		attempts++
+		retryDelay = 0
 
+		previousID := lastID
 		nextID, terminal, done, err := c.streamOnce(ctx, agentID, runID, lastID, emit)
 		if nextID != "" {
 			lastID = nextID
@@ -256,8 +257,6 @@ func (c *Client) StreamRun(
 				apiErr.Code == "invalid_last_event_id" && !resetUsed {
 				resetUsed = true
 				lastID = ""
-				attempts--
-				skipSleep = true
 				continue
 			}
 			var emErr *emitError
@@ -274,8 +273,37 @@ func (c *Client) StreamRun(
 			// final state via the metadata API instead of guessing.
 			return c.GetRun(ctx, agentID, runID)
 		}
-		if attempts >= maxAttempts {
-			return nil, fmt.Errorf("cursor: stream run did not complete after %d attempts", maxAttempts)
+
+		if nextID != "" && nextID != previousID {
+			noProgress = 0
+			retryDelay = backoffs[0]
+			continue
 		}
+
+		noProgress++
+		if noProgress >= maxNoProgress {
+			current, err := c.GetRun(ctx, agentID, runID)
+			if err != nil {
+				return nil, err
+			}
+			if current != nil && isTerminalRunStatus(current.Status) {
+				return current, nil
+			}
+			// A live run is not a successful stream result. Keep reconnecting
+			// with capped backoff until the stream advances or ctx expires.
+			noProgress = 0
+			retryDelay = backoffs[len(backoffs)-1]
+			continue
+		}
+		retryDelay = backoffs[min(noProgress-1, len(backoffs)-1)]
+	}
+}
+
+func isTerminalRunStatus(status string) bool {
+	switch strings.ToUpper(strings.TrimSpace(status)) {
+	case "FINISHED", "ERROR", "CANCELLED":
+		return true
+	default:
+		return false
 	}
 }

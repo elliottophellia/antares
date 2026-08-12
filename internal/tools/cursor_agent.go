@@ -221,6 +221,9 @@ func validateCursorAgentArgs(args cursorAgentArgs) error {
 		if err := validateCursorRepository(args.RepositoryURL); err != nil {
 			return err
 		}
+		if args.StartingRef != "" && args.RepositoryURL == "" {
+			return errors.New("repository_url is required when starting_ref is set")
+		}
 		if args.PullRequestURL != "" {
 			if args.RepositoryURL == "" {
 				return errors.New("repository_url is required when pull_request_url is set")

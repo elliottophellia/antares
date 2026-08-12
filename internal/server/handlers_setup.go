@@ -156,14 +156,16 @@ func setupProviderCatalogue(cfg *config.Config) []setupProvider {
 		if out[i].Capability == "" {
 			out[i].Capability = "llm"
 		}
-		// Resolve through cfg.ResolveProvider so an env-supplied credential
-		// (api_key_env, or ANTARES_PROVIDER_<NAME>_API_KEY) reports has_key
-		// just like a stored one — the dashboard should not tell an operator
-		// to "connect" a provider that is already usable via the environment.
-		_, resolved := cfg.ResolveProvider(out[i].ID)
-		out[i].HasKey = strings.TrimSpace(resolved.APIKey) != ""
-		if resolved.BaseURL != "" {
-			out[i].BaseURL = resolved.BaseURL
+		// Resolve only configured providers. ResolveProvider intentionally
+		// treats an unknown name as the legacy inline model provider, which
+		// would otherwise make absent catalogue entries inherit ANTARES_API_KEY
+		// and ANTARES_BASE_URL.
+		if _, configured := cfg.Providers[out[i].ID]; configured {
+			_, resolved := cfg.ResolveProvider(out[i].ID)
+			out[i].HasKey = strings.TrimSpace(resolved.APIKey) != ""
+			if resolved.BaseURL != "" {
+				out[i].BaseURL = resolved.BaseURL
+			}
 		}
 	}
 	return out

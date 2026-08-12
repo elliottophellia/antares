@@ -168,6 +168,47 @@ func TestSetupStatusOmitsCursorCapability(t *testing.T) {
 	}
 }
 
+func TestSetupProviderCatalogueDoesNotResolveAbsentProviderThroughLegacyModel(t *testing.T) {
+	t.Setenv("ANTARES_HOME", t.TempDir())
+	t.Setenv("ANTARES_API_KEY", "synthetic-legacy-key")
+	t.Setenv("ANTARES_BASE_URL", "https://legacy.example/v1")
+	t.Setenv("CURSOR_API_KEY", "synthetic-cursor-key")
+
+	cfg, err := config.Reload()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := cfg.Providers["copilot"]; ok {
+		t.Fatal("test requires copilot to be absent from cfg.Providers")
+	}
+
+	var copilot, cursorProvider *setupProvider
+	catalogue := setupProviderCatalogue(cfg)
+	for i := range catalogue {
+		switch catalogue[i].ID {
+		case "copilot":
+			copilot = &catalogue[i]
+		case "cursor":
+			cursorProvider = &catalogue[i]
+		}
+	}
+	if copilot == nil || cursorProvider == nil {
+		t.Fatalf("catalogue missing providers: copilot=%v cursor=%v", copilot != nil, cursorProvider != nil)
+	}
+	if copilot.HasKey {
+		t.Fatal("absent copilot provider inherited the legacy ANTARES_API_KEY")
+	}
+	if copilot.BaseURL != "" {
+		t.Fatalf("absent copilot base URL = %q, want catalogue default", copilot.BaseURL)
+	}
+	if !cursorProvider.HasKey {
+		t.Fatal("configured default cursor provider did not resolve CURSOR_API_KEY")
+	}
+	if cursorProvider.BaseURL != "https://api.cursor.com" {
+		t.Fatalf("cursor base URL = %q, want configured default", cursorProvider.BaseURL)
+	}
+}
+
 // TestSetupCompleteRejectsCursorProvider guards onboarding: the initial setup
 // flow must never be able to activate an agent-capability provider.
 func TestSetupCompleteRejectsCursorProvider(t *testing.T) {

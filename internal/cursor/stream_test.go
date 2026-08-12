@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -42,6 +43,115 @@ func TestStreamRunReconnectsFromLastEventID(t *testing.T) {
 	}
 	if len(events) != 2 {
 		t.Fatalf("events = %#v", events)
+	}
+}
+
+func TestStreamRunReconnectsBeyondAttemptBudgetWhenEachDisconnectAdvancesEventID(t *testing.T) {
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		attempt := calls.Add(1)
+		if attempt > 1 {
+			want := fmt.Sprintf("evt-%d", attempt-1)
+			if got := r.Header.Get("Last-Event-ID"); got != want {
+				t.Errorf("attempt %d Last-Event-ID = %q, want %q", attempt, got, want)
+			}
+		}
+		if attempt <= 5 {
+			_, _ = fmt.Fprintf(w,
+				"id: evt-%d\nevent: assistant\ndata: {\"text\":\"progress\"}\n\n",
+				attempt,
+			)
+			return
+		}
+		_, _ = io.WriteString(w,
+			"id: evt-6\nevent: result\ndata: {\"runId\":\"run-one\",\"status\":\"FINISHED\",\"text\":\"done\"}\n\n"+
+				"id: evt-7\nevent: done\ndata: {}\n\n")
+	}))
+	defer srv.Close()
+
+	client, _ := New(Options{BaseURL: srv.URL, APIKey: "synthetic-key", HTTPClient: srv.Client()})
+	var events []StreamEvent
+	run, err := client.StreamRun(context.Background(), "bc-agent", "run-one", func(event StreamEvent) error {
+		events = append(events, event)
+		return nil
+	})
+	if err != nil || run.Status != "FINISHED" || run.Result != "done" {
+		t.Fatalf("StreamRun = %+v, %v", run, err)
+	}
+	if calls.Load() != 6 {
+		t.Fatalf("stream calls = %d, want 6", calls.Load())
+	}
+	if len(events) != 6 {
+		t.Fatalf("events = %d, want five progress events and one result", len(events))
+	}
+}
+
+func TestStreamRunNoProgressCapFallsBackToTerminalRun(t *testing.T) {
+	var streamCalls, statusCalls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/stream"):
+			streamCalls.Add(1)
+			w.Header().Set("Content-Type", "text/event-stream")
+		case r.URL.Path == "/v1/agents/bc-agent/runs/run-one":
+			statusCalls.Add(1)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"id": "run-one", "agentId": "bc-agent", "status": "FINISHED", "result": "done via status",
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	client, _ := New(Options{BaseURL: srv.URL, APIKey: "synthetic-key", HTTPClient: srv.Client()})
+	run, err := client.StreamRun(context.Background(), "bc-agent", "run-one", func(StreamEvent) error {
+		return nil
+	})
+	if err != nil || run.Status != "FINISHED" || run.Result != "done via status" {
+		t.Fatalf("StreamRun = %+v, %v", run, err)
+	}
+	if streamCalls.Load() != 4 || statusCalls.Load() != 1 {
+		t.Fatalf("stream calls = %d, status calls = %d; want 4 and 1", streamCalls.Load(), statusCalls.Load())
+	}
+}
+
+func TestStreamRunNoProgressFallbackDoesNotReturnActiveRun(t *testing.T) {
+	var streamCalls, statusCalls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/stream"):
+			streamCalls.Add(1)
+			w.Header().Set("Content-Type", "text/event-stream")
+		case r.URL.Path == "/v1/agents/bc-agent/runs/run-one":
+			statusCalls.Add(1)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"id": "run-one", "agentId": "bc-agent", "status": "RUNNING",
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	client, _ := New(Options{BaseURL: srv.URL, APIKey: "synthetic-key", HTTPClient: srv.Client()})
+	run, err := client.StreamRun(ctx, "bc-agent", "run-one", func(StreamEvent) error {
+		return nil
+	})
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("StreamRun = %+v, %v; want context deadline after active fallback", run, err)
+	}
+	if statusCalls.Load() == 0 {
+		t.Fatal("no-progress cap never checked run status")
+	}
+	if got := streamCalls.Load(); got < 4 || got > 6 {
+		t.Fatalf("stream calls = %d, want bounded reconnects after fallback", got)
+	}
+	if got := statusCalls.Load(); got != 1 {
+		t.Fatalf("status calls = %d, want one bounded fallback check", got)
 	}
 }
 
