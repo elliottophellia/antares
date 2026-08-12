@@ -282,7 +282,7 @@ func (s *Server) handleProviderSettings(w http.ResponseWriter, r *http.Request) 
 			}
 		}
 		if baseURL != "" {
-			if err := validateProviderBaseURL(r.Context(), baseURL, allowLocal); err != nil {
+			if err := s.validateProviderBaseURL(r.Context(), baseURL, allowLocal); err != nil {
 				writeError(w, http.StatusBadRequest, err)
 				return
 			}

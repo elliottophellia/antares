@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -13,6 +14,22 @@ import (
 	"github.com/enowdev/antares/internal/config"
 	"github.com/enowdev/antares/internal/cursor"
 )
+
+// trackingIPResolver counts LookupIP calls so tests can prove a handler
+// actually routed hostname resolution through the injected server resolver,
+// rather than bypassing it (e.g. via net.DefaultResolver or an IP literal
+// that skips resolution entirely).
+type trackingIPResolver struct {
+	providerIPResolver
+	calls int
+}
+
+func (r *trackingIPResolver) LookupIP(
+	ctx context.Context, network, host string,
+) ([]net.IP, error) {
+	r.calls++
+	return r.providerIPResolver.LookupIP(ctx, network, host)
+}
 
 // hermeticCursorBaseURL is a syntactically valid, public, non-loopback HTTPS
 // URL whose host is an IP literal. validateProviderBaseURL parses an IP
@@ -122,15 +139,23 @@ func TestConnectCursorPreservesActiveModel(t *testing.T) {
 		}, nil
 	}
 	s.reloadFn = func() error { return nil }
+	resolver := &trackingIPResolver{
+		providerIPResolver: dns64Resolver(
+			t, "api.cursor.com", net.ParseIP("54.158.233.194")),
+	}
+	s.providerResolver = resolver
 
 	req := httptest.NewRequest(http.MethodPost, "/api/providers/cursor/key",
-		strings.NewReader(`{"api_key":"synthetic-key","base_url":"`+hermeticCursorBaseURL+`"}`))
+		strings.NewReader(`{"api_key":"synthetic-key"}`))
 	req.SetPathValue("id", "cursor")
 	req.Header.Set("Authorization", "Bearer test-token")
 	rec := httptest.NewRecorder()
 	s.handleSetProviderKey(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if resolver.calls == 0 {
+		t.Fatal("Cursor connection bypassed the server provider resolver")
 	}
 	saved, err := config.Reload()
 	if err != nil {

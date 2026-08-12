@@ -189,6 +189,85 @@ func TestValidateProviderBaseURLBlocksPrivateDestinations(t *testing.T) {
 	}
 }
 
+func dns64Resolver(t *testing.T, targetHost string, targetV4 net.IP) staticIPResolver {
+	t.Helper()
+	prefix := net.ParseIP("fd00:aa:bb:2090::")
+	return staticIPResolver{
+		"ip " + targetHost: {
+			targetV4,
+			synthesizeRFC6052(t, prefix, 96, targetV4),
+		},
+		"ip6 ipv4only.arpa": {
+			synthesizeRFC6052(t, prefix, 96, net.ParseIP("192.0.0.170")),
+			synthesizeRFC6052(t, prefix, 96, net.ParseIP("192.0.0.171")),
+		},
+	}
+}
+
+func TestValidateProviderBaseURLAllowsDiscoveredDNS64(t *testing.T) {
+	resolver := dns64Resolver(t, "api.cursor.com", net.ParseIP("54.158.233.194"))
+	err := validateProviderBaseURLWithResolver(
+		context.Background(), "https://api.cursor.com", false, resolver)
+	if err != nil {
+		t.Fatalf("DNS64 provider rejected: %v", err)
+	}
+}
+
+func TestValidateProviderBaseURLRejectsUnrelatedULAOnMixedDNS(t *testing.T) {
+	resolver := dns64Resolver(t, "provider.example", net.ParseIP("54.158.233.194"))
+	resolver["ip provider.example"] = append(
+		resolver["ip provider.example"], net.ParseIP("fd00:dead:beef::1"))
+	if err := validateProviderBaseURLWithResolver(
+		context.Background(), "https://provider.example", false, resolver); err == nil {
+		t.Fatal("mixed public DNS with an unrelated ULA was accepted")
+	}
+}
+
+func TestValidateProviderBaseURLRejectsDNS64AddressForDifferentARecord(t *testing.T) {
+	prefix := net.ParseIP("fd00:aa:bb:2090::")
+	resolver := dns64Resolver(t, "provider.example", net.ParseIP("54.158.233.194"))
+	resolver["ip provider.example"] = []net.IP{
+		net.ParseIP("54.158.233.194"),
+		synthesizeRFC6052(t, prefix, 96, net.ParseIP("54.225.153.71")),
+	}
+	if err := validateProviderBaseURLWithResolver(
+		context.Background(), "https://provider.example", false, resolver); err == nil {
+		t.Fatal("DNS64 address whose embedded IPv4 mismatched the A record was accepted")
+	}
+}
+
+func TestValidateProviderBaseURLRejectsMissingOrMalformedDNS64Discovery(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		discovery []net.IP
+	}{
+		{name: "missing"},
+		{name: "malformed", discovery: []net.IP{net.ParseIP("2001:4860::1")}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			resolver := dns64Resolver(t, "provider.example", net.ParseIP("54.158.233.194"))
+			if tc.discovery == nil {
+				delete(resolver, "ip6 ipv4only.arpa")
+			} else {
+				resolver["ip6 ipv4only.arpa"] = tc.discovery
+			}
+			if err := validateProviderBaseURLWithResolver(
+				context.Background(), "https://provider.example", false, resolver); err == nil {
+				t.Fatal("provider passed without a valid discovered DNS64 prefix")
+			}
+		})
+	}
+}
+
+func TestDNS64MatchRejectsEmbeddedPrivateIPv4(t *testing.T) {
+	prefix := nat64Prefix{network: net.ParseIP("fd00:aa:bb:2090::"), bits: 96}
+	ip := synthesizeRFC6052(t, prefix.network, prefix.bits, net.ParseIP("10.0.0.8"))
+	publicV4 := map[string]struct{}{"10.0.0.8": {}}
+	if dns64AddressMatches(ip, []nat64Prefix{prefix}, publicV4) {
+		t.Fatal("DNS64 address embedding a private IPv4 was accepted")
+	}
+}
+
 func TestRequireSetupAccessIsLoopbackOnlyWithoutBearer(t *testing.T) {
 	cfg := config.Default()
 	s := &Server{cfg: cfg}

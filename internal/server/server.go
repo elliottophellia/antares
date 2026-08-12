@@ -65,6 +65,10 @@ type Server struct {
 	// newCursorMetadataClient.
 	cursorFactory cursorClientFactory
 
+	// providerResolver overrides provider hostname resolution in handler tests.
+	// Production uses net.DefaultResolver.
+	providerResolver providerIPResolver
+
 	mu       sync.RWMutex
 	reloadFn func() error
 

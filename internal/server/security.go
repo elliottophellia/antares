@@ -101,6 +101,58 @@ func (s *Server) requireSetupAccess(w http.ResponseWriter, r *http.Request) bool
 // loopback endpoint; custom/provider URLs are not allowed to resolve into
 // private, link-local, metadata, multicast, or otherwise non-public ranges.
 func validateProviderBaseURL(ctx context.Context, raw string, allowLocal bool) error {
+	return validateProviderBaseURLWithResolver(ctx, raw, allowLocal, net.DefaultResolver)
+}
+
+// validateProviderBaseURL validates a provider's base_url using the server's
+// injected resolver when tests set one, or net.DefaultResolver otherwise.
+// Production request handlers must call this method (not the package-level
+// function) so DNS64 discovery and hostname resolution stay hermetically
+// testable end to end.
+func (s *Server) validateProviderBaseURL(ctx context.Context, raw string, allowLocal bool) error {
+	resolver := s.providerResolver
+	if resolver == nil {
+		resolver = net.DefaultResolver
+	}
+	return validateProviderBaseURLWithResolver(ctx, raw, allowLocal, resolver)
+}
+
+func providerIPError(ip net.IP) error {
+	return fmt.Errorf("provider base_url resolves to a non-public address (%s)", ip.String())
+}
+
+// dns64AddressMatches reports whether ip is a synthesized NAT64 address (per
+// one of the discovered prefixes) whose embedded IPv4 is itself public and
+// was also observed as one of the host's plain A records. This is the only
+// way a blocked (non-public per providerIPBlocked) IPv6 literal is accepted:
+// it must decode, under a locally discovered RFC 6052 prefix, to an IPv4
+// address that is both public and independently confirmed by the same
+// lookup — never trusting the embedded IPv4 alone.
+func dns64AddressMatches(ip net.IP, prefixes []nat64Prefix, publicV4 map[string]struct{}) bool {
+	for _, prefix := range prefixes {
+		if !prefixMatches(ip, prefix.network, prefix.bits) {
+			continue
+		}
+		embedded, ok := extractRFC6052IPv4(ip, prefix.bits)
+		if !ok || providerIPBlocked(embedded) {
+			continue
+		}
+		if _, ok := publicV4[embedded.String()]; ok {
+			return true
+		}
+	}
+	return false
+}
+
+// validateProviderBaseURLWithResolver is validateProviderBaseURL with an
+// injectable resolver, so tests can exercise DNS64/NAT64 behavior
+// hermetically. Blocked IPv4 addresses fail immediately. A blocked IPv6
+// address is accepted only when it decodes under a prefix discovered via
+// ipv4only.arpa to a public IPv4 that was also returned as a plain A record
+// for the same host; discovery failure is fail-closed.
+func validateProviderBaseURLWithResolver(
+	ctx context.Context, raw string, allowLocal bool, resolver providerIPResolver,
+) error {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
 		return errors.New("provider base_url is required")
@@ -117,28 +169,49 @@ func validateProviderBaseURL(ctx context.Context, raw string, allowLocal bool) e
 	}
 
 	host := strings.TrimSuffix(strings.ToLower(u.Hostname()), ".")
-	check := func(ip net.IP) error {
+	if ip := net.ParseIP(host); ip != nil {
 		if providerIPBlocked(ip) && !(allowLocal && ip.IsLoopback()) {
-			return fmt.Errorf("provider base_url resolves to a non-public address (%s)", ip.String())
+			return providerIPError(ip)
 		}
 		return nil
-	}
-	if ip := net.ParseIP(host); ip != nil {
-		return check(ip)
 	}
 
 	lookupCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
-	ips, err := net.DefaultResolver.LookupIP(lookupCtx, "ip", host)
+	ips, err := resolver.LookupIP(lookupCtx, "ip", host)
 	if err != nil {
 		return fmt.Errorf("provider host cannot be resolved: %w", err)
 	}
 	if len(ips) == 0 {
 		return errors.New("provider host has no address")
 	}
+
+	publicV4 := map[string]struct{}{}
+	var blockedV6 []net.IP
 	for _, ip := range ips {
-		if err := check(ip); err != nil {
-			return err
+		blocked := providerIPBlocked(ip) && !(allowLocal && ip.IsLoopback())
+		if !blocked {
+			if v4 := ip.To4(); v4 != nil && !providerIPBlocked(v4) {
+				publicV4[v4.String()] = struct{}{}
+			}
+			continue
+		}
+		if ip.To4() != nil {
+			return providerIPError(ip)
+		}
+		blockedV6 = append(blockedV6, append(net.IP(nil), ip...))
+	}
+	if len(blockedV6) == 0 {
+		return nil
+	}
+
+	prefixes, err := discoverNAT64Prefixes(lookupCtx, resolver)
+	if err != nil {
+		return providerIPError(blockedV6[0])
+	}
+	for _, ip := range blockedV6 {
+		if !dns64AddressMatches(ip, prefixes, publicV4) {
+			return providerIPError(ip)
 		}
 	}
 	return nil

@@ -247,7 +247,7 @@ func (s *Server) handleSetupTest(w http.ResponseWriter, r *http.Request) {
 
 	baseURL := firstNonEmpty(body.BaseURL, chosen.BaseURL)
 	if baseURL != "" {
-		if err := validateProviderBaseURL(r.Context(), baseURL, chosen.Local); err != nil {
+		if err := s.validateProviderBaseURL(r.Context(), baseURL, chosen.Local); err != nil {
 			writeError(w, http.StatusBadRequest, err)
 			return
 		}
@@ -380,7 +380,7 @@ func (s *Server) handleSetupComplete(w http.ResponseWriter, r *http.Request) {
 
 	baseURL := firstNonEmpty(body.BaseURL, chosen.BaseURL)
 	if baseURL != "" {
-		if err := validateProviderBaseURL(r.Context(), baseURL, chosen.Local); err != nil {
+		if err := s.validateProviderBaseURL(r.Context(), baseURL, chosen.Local); err != nil {
 			writeError(w, http.StatusBadRequest, err)
 			return
 		}
@@ -555,7 +555,7 @@ func (s *Server) handleSetProviderKey(w http.ResponseWriter, r *http.Request) {
 	}
 	baseURL := firstNonEmpty(body.BaseURL, entry.BaseURL, chosen.BaseURL)
 	if baseURL != "" {
-		if err := validateProviderBaseURL(r.Context(), baseURL, chosen.Local); err != nil {
+		if err := s.validateProviderBaseURL(r.Context(), baseURL, chosen.Local); err != nil {
 			writeError(w, http.StatusBadRequest, err)
 			return
 		}
