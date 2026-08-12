@@ -6,12 +6,14 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
+	"unicode/utf8"
 )
 
 func TestStreamRunReconnectsFromLastEventID(t *testing.T) {
@@ -87,6 +89,163 @@ func TestStreamRunReconnectsBeyondAttemptBudgetWhenEachDisconnectAdvancesEventID
 	}
 }
 
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+// truncatedBody serves fixed SSE bytes and then fails, standing in for a
+// connection dropped mid-stream.
+type truncatedBody struct {
+	data []byte
+	err  error
+	off  int
+}
+
+func (b *truncatedBody) Read(p []byte) (int, error) {
+	if b.off < len(b.data) {
+		n := copy(p, b.data[b.off:])
+		b.off += n
+		return n, nil
+	}
+	return 0, b.err
+}
+
+func (b *truncatedBody) Close() error { return nil }
+
+func truncatedStreamClient(t *testing.T, respond func(attempt int32, r *http.Request) (string, error)) (*Client, *atomic.Int32) {
+	t.Helper()
+	var calls atomic.Int32
+	client, err := New(Options{
+		BaseURL: "https://api.cursor.invalid",
+		APIKey:  "synthetic-key",
+		HTTPClient: &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+			body, readErr := respond(calls.Add(1), r)
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+				Body:       &truncatedBody{data: []byte(body), err: readErr},
+			}, nil
+		})},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return client, &calls
+}
+
+func TestStreamRunReconnectsAfterConnectionResetWithLastEventID(t *testing.T) {
+	reset := &net.OpError{Op: "read", Net: "tcp", Err: errors.New("connection reset by peer")}
+	client, calls := truncatedStreamClient(t, func(attempt int32, r *http.Request) (string, error) {
+		if attempt == 1 {
+			return "id: evt-1\nevent: assistant\ndata: {\"text\":\"hello\"}\n\n", reset
+		}
+		if got := r.Header.Get("Last-Event-ID"); got != "evt-1" {
+			t.Errorf("reconnect Last-Event-ID = %q, want evt-1", got)
+		}
+		return "id: evt-2\nevent: result\ndata: {\"runId\":\"run-one\",\"status\":\"FINISHED\",\"text\":\"done\"}\n\n" +
+			"id: evt-3\nevent: done\ndata: {}\n\n", io.EOF
+	})
+
+	run, err := client.StreamRun(context.Background(), "bc-agent", "run-one", func(StreamEvent) error { return nil })
+	if err != nil || run == nil || run.Status != "FINISHED" || run.Result != "done" {
+		t.Fatalf("StreamRun = %+v, %v; want reconnect after a connection reset", run, err)
+	}
+	if calls.Load() != 2 {
+		t.Fatalf("stream calls = %d, want 2", calls.Load())
+	}
+}
+
+func TestStreamRunTerminalResultWinsOverLaterReadError(t *testing.T) {
+	client, calls := truncatedStreamClient(t, func(int32, *http.Request) (string, error) {
+		return "id: evt-1\nevent: result\ndata: {\"runId\":\"run-one\",\"status\":\"FINISHED\",\"text\":\"done\"}\n\n",
+			io.ErrUnexpectedEOF
+	})
+
+	run, err := client.StreamRun(context.Background(), "bc-agent", "run-one", func(StreamEvent) error { return nil })
+	if err != nil || run == nil || run.Status != "FINISHED" || run.Result != "done" {
+		t.Fatalf("StreamRun = %+v, %v; want the decoded result to outrank the read error", run, err)
+	}
+	if calls.Load() != 1 {
+		t.Fatalf("stream calls = %d, want 1", calls.Load())
+	}
+}
+
+// The same recovery must hold over a real connection, not just an injected
+// read error: an aborted response truncates the chunked body mid-stream.
+func TestStreamRunReconnectsAfterTruncatedResponse(t *testing.T) {
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		if calls.Add(1) == 1 {
+			_, _ = io.WriteString(w, "id: evt-1\nevent: assistant\ndata: {\"text\":\"hello\"}\n\n")
+			w.(http.Flusher).Flush()
+			panic(http.ErrAbortHandler)
+		}
+		if got := r.Header.Get("Last-Event-ID"); got != "evt-1" {
+			t.Errorf("reconnect Last-Event-ID = %q, want evt-1", got)
+		}
+		_, _ = io.WriteString(w,
+			"id: evt-2\nevent: result\ndata: {\"runId\":\"run-one\",\"status\":\"FINISHED\",\"text\":\"done\"}\n\n"+
+				"id: evt-3\nevent: done\ndata: {}\n\n")
+	}))
+	defer srv.Close()
+
+	client, _ := New(Options{BaseURL: srv.URL, APIKey: "synthetic-key", HTTPClient: srv.Client()})
+	run, err := client.StreamRun(context.Background(), "bc-agent", "run-one", func(StreamEvent) error { return nil })
+	if err != nil || run == nil || run.Status != "FINISHED" || run.Result != "done" {
+		t.Fatalf("StreamRun = %+v, %v; want reconnect after a truncated response", run, err)
+	}
+	if calls.Load() != 2 {
+		t.Fatalf("stream calls = %d, want 2", calls.Load())
+	}
+}
+
+func TestStreamRunDoesNotRetryInvalidPayload(t *testing.T) {
+	client, calls := truncatedStreamClient(t, func(int32, *http.Request) (string, error) {
+		return "id: evt-1\nevent: result\ndata: {\"runId\":\n\n", io.EOF
+	})
+
+	run, err := client.StreamRun(context.Background(), "bc-agent", "run-one", func(StreamEvent) error { return nil })
+	if err == nil {
+		t.Fatalf("StreamRun = %+v, nil; want an immediate decode error", run)
+	}
+	if calls.Load() != 1 {
+		t.Fatalf("stream calls = %d, want 1 (invalid payloads are not retried)", calls.Load())
+	}
+}
+
+// Reconnects after read failures reuse the bounded no-progress budget rather
+// than looping until the context expires.
+func TestStreamRunTruncatedReadsRespectNoProgressBudget(t *testing.T) {
+	var streamCalls, statusCalls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/stream"):
+			streamCalls.Add(1)
+			w.Header().Set("Content-Type", "text/event-stream")
+			w.(http.Flusher).Flush()
+			panic(http.ErrAbortHandler)
+		case r.URL.Path == "/v1/agents/bc-agent/runs/run-one":
+			statusCalls.Add(1)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"id": "run-one", "agentId": "bc-agent", "status": "FINISHED", "result": "done via status",
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	client, _ := New(Options{BaseURL: srv.URL, APIKey: "synthetic-key", HTTPClient: srv.Client()})
+	run, err := client.StreamRun(context.Background(), "bc-agent", "run-one", func(StreamEvent) error { return nil })
+	if err != nil || run == nil || run.Result != "done via status" {
+		t.Fatalf("StreamRun = %+v, %v", run, err)
+	}
+	if streamCalls.Load() != 4 || statusCalls.Load() != 1 {
+		t.Fatalf("stream calls = %d, status calls = %d; want 4 and 1", streamCalls.Load(), statusCalls.Load())
+	}
+}
+
 func TestStreamRunNoProgressCapFallsBackToTerminalRun(t *testing.T) {
 	var streamCalls, statusCalls atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -155,6 +314,59 @@ func TestStreamRunNoProgressFallbackDoesNotReturnActiveRun(t *testing.T) {
 	}
 }
 
+// Cursor computes durationMs "once the run reaches FINISHED, ERROR,
+// CANCELLED, or EXPIRED" — Cloud Agents API, "Get A Run"
+// (https://cursor.com/docs/cloud-agent/api/endpoints).
+func TestIsTerminalRunStatusCoversEveryCursorTerminalState(t *testing.T) {
+	for _, tc := range []struct {
+		status string
+		want   bool
+	}{
+		{status: "FINISHED", want: true},
+		{status: "ERROR", want: true},
+		{status: "CANCELLED", want: true},
+		{status: "EXPIRED", want: true},
+		{status: " expired ", want: true},
+		{status: "RUNNING"},
+		{status: "CREATING"},
+		{status: "PENDING"},
+		{status: ""},
+	} {
+		if got := isTerminalRunStatus(tc.status); got != tc.want {
+			t.Errorf("isTerminalRunStatus(%q) = %v, want %v", tc.status, got, tc.want)
+		}
+	}
+}
+
+func TestStreamRunNoProgressFallbackReturnsExpiredRun(t *testing.T) {
+	var statusCalls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/stream"):
+			w.Header().Set("Content-Type", "text/event-stream")
+		case r.URL.Path == "/v1/agents/bc-agent/runs/run-one":
+			statusCalls.Add(1)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"id": "run-one", "agentId": "bc-agent", "status": "EXPIRED",
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
+	defer cancel()
+	client, _ := New(Options{BaseURL: srv.URL, APIKey: "synthetic-key", HTTPClient: srv.Client()})
+	run, err := client.StreamRun(ctx, "bc-agent", "run-one", func(StreamEvent) error { return nil })
+	if err != nil || run == nil || run.Status != "EXPIRED" {
+		t.Fatalf("StreamRun = %+v, %v; want the EXPIRED run returned instead of reconnecting", run, err)
+	}
+	if statusCalls.Load() != 1 {
+		t.Fatalf("status calls = %d, want one bounded fallback check", statusCalls.Load())
+	}
+}
+
 func TestStreamRunUsesDocumentedStreamEndpoint(t *testing.T) {
 	var gotMethod, gotURI string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -210,6 +422,38 @@ func TestStreamRunParsesMultilineDataToolCallAndIgnoresHeartbeat(t *testing.T) {
 	}
 	if events[1].Type != "assistant" || events[1].Text != "hello world" {
 		t.Fatalf("assistant event (multiline data) = %+v", events[1])
+	}
+}
+
+// The tool layer redacts again, but the client contract must on its own keep
+// the configured key out of stream errors and keep them bounded.
+func TestStreamRunSanitizesInBandSSEError(t *testing.T) {
+	const key = "synthetic-key"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, "id: evt-1\nevent: error\ndata: {\"code\":\"rejected "+key+
+			"\",\"message\":\"upstream refused "+key+" \xff\xfe "+strings.Repeat("padding ", 400)+"\"}\n\n")
+	}))
+	defer srv.Close()
+
+	client, _ := New(Options{BaseURL: srv.URL, APIKey: key, HTTPClient: srv.Client()})
+	_, err := client.StreamRun(context.Background(), "bc-agent", "run-one", func(StreamEvent) error { return nil })
+	if err == nil {
+		t.Fatal("StreamRun accepted an SSE error event")
+	}
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("err = %v (%T), want *APIError", err, err)
+	}
+	if strings.Contains(apiErr.Message, key) || strings.Contains(apiErr.Code, key) ||
+		strings.Contains(err.Error(), key) {
+		t.Fatalf("stream error leaked the API key: code=%q message=%q", apiErr.Code, apiErr.Message)
+	}
+	if got := utf8.RuneCountInString(apiErr.Message); got > 240 {
+		t.Fatalf("stream error message = %d runes, want the bounded API-error policy", got)
+	}
+	if !utf8.ValidString(apiErr.Message) || !utf8.ValidString(apiErr.Code) {
+		t.Fatalf("stream error was not normalized to valid UTF-8: code=%q message=%q", apiErr.Code, apiErr.Message)
 	}
 }
 

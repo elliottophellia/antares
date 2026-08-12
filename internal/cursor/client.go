@@ -199,11 +199,7 @@ func (c *Client) decodeAPIError(resp *http.Response) error {
 		apiErr.Message = "request failed"
 	}
 
-	if c.apiKey != "" {
-		apiErr.Code = strings.ReplaceAll(apiErr.Code, c.apiKey, "[REDACTED]")
-		apiErr.Message = strings.ReplaceAll(apiErr.Message, c.apiKey, "[REDACTED]")
-	}
-	apiErr.Message = truncateRunes(apiErr.Message, 240)
+	c.sanitizeAPIError(apiErr)
 
 	if ra := resp.Header.Get("Retry-After"); ra != "" {
 		if secs, err := strconv.Atoi(ra); err == nil {
@@ -217,6 +213,20 @@ func (c *Client) decodeAPIError(resp *http.Response) error {
 	}
 
 	return apiErr
+}
+
+// sanitizeAPIError is the single policy for every error this client hands
+// back, whether it came from a REST response or from an in-band SSE error
+// event: the configured key never appears, the text is valid UTF-8, and both
+// fields are bounded. Codes are short identifiers, so their cap only exists
+// to stop an oversized payload from becoming an oversized error.
+func (c *Client) sanitizeAPIError(apiErr *APIError) {
+	if c.apiKey != "" {
+		apiErr.Code = strings.ReplaceAll(apiErr.Code, c.apiKey, "[REDACTED]")
+		apiErr.Message = strings.ReplaceAll(apiErr.Message, c.apiKey, "[REDACTED]")
+	}
+	apiErr.Code = truncateRunes(strings.ToValidUTF8(apiErr.Code, "\uFFFD"), 120)
+	apiErr.Message = truncateRunes(strings.ToValidUTF8(apiErr.Message, "\uFFFD"), 240)
 }
 
 func truncateRunes(s string, maxRunes int) string {

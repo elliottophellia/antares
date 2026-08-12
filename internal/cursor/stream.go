@@ -26,6 +26,40 @@ type emitError struct{ err error }
 func (e *emitError) Error() string { return e.err.Error() }
 func (e *emitError) Unwrap() error { return e.err }
 
+// transportError marks a connection-level failure — a dropped, reset, or
+// truncated stream — which StreamRun recovers from by reconnecting with
+// Last-Event-ID. Protocol failures (oversized lines, undecodable payloads,
+// API errors, emit failures) are never wrapped in it and stay immediate.
+type transportError struct{ err error }
+
+func (e *transportError) Error() string { return "cursor: stream transport: " + e.err.Error() }
+func (e *transportError) Unwrap() error { return e.err }
+
+// sanitizeStreamError holds an in-band SSE error to the same contract as a
+// REST failure. Emit failures belong to the caller and pass through
+// untouched, so the caller's own error identity survives.
+func (c *Client) sanitizeStreamError(err error) error {
+	var emErr *emitError
+	if errors.As(err, &emErr) {
+		return err
+	}
+	var apiErr *APIError
+	if errors.As(err, &apiErr) {
+		safe := *apiErr
+		c.sanitizeAPIError(&safe)
+		return &safe
+	}
+	return err
+}
+
+func isRetryableStreamError(err error) bool {
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return false
+	}
+	var transport *transportError
+	return errors.As(err, &transport)
+}
+
 // parseSSE reads Server-Sent Events from r until EOF, a "done" event, or an
 // error. It returns the most recent non-empty event id seen (for use as a
 // Last-Event-ID header on reconnect) and, if a "result" event was decoded,
@@ -138,7 +172,12 @@ func parseSSE(r io.Reader, emit func(StreamEvent) error) (lastID string, termina
 		}
 	}
 	if serr := scanner.Err(); serr != nil {
-		return lastID, terminal, fmt.Errorf("cursor: sse scan: %w", serr)
+		// An oversized line is a protocol violation that would recur on every
+		// reconnect; anything else here is the connection failing under us.
+		if errors.Is(serr, bufio.ErrTooLong) {
+			return lastID, terminal, fmt.Errorf("cursor: sse scan: %w", serr)
+		}
+		return lastID, terminal, &transportError{err: serr}
 	}
 	if recID != "" || recType != "" || len(recData) != 0 {
 		if ferr := flush(); ferr != nil {
@@ -182,7 +221,7 @@ func (c *Client) streamOnce(
 
 	resp, err := streamHTTP.Do(req)
 	if err != nil {
-		return lastID, nil, false, err
+		return lastID, nil, false, &transportError{err: err}
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 400 {
@@ -197,7 +236,12 @@ func (c *Client) streamOnce(
 		return lastID, terminal, true, nil
 	}
 	if err != nil {
-		return lastID, terminal, false, err
+		// A result decoded on this connection is the run's real outcome; a
+		// transport failure arriving after it must not discard it.
+		if terminal != nil && isRetryableStreamError(err) {
+			return lastID, terminal, false, nil
+		}
+		return lastID, terminal, false, c.sanitizeStreamError(err)
 	}
 	return lastID, terminal, false, nil
 }
@@ -263,7 +307,11 @@ func (c *Client) StreamRun(
 			if errors.As(err, &emErr) {
 				return nil, emErr.err
 			}
-			return nil, err
+			if !isRetryableStreamError(err) {
+				return nil, err
+			}
+			// A dropped connection is an ordinary disconnect: reuse the
+			// bounded reconnect accounting below instead of failing the run.
 		}
 		if terminal != nil {
 			return terminal, nil
@@ -299,9 +347,13 @@ func (c *Client) StreamRun(
 	}
 }
 
+// isTerminalRunStatus reports whether a run has stopped for good. Cursor
+// computes a run's duration once it reaches any of these states — Cloud
+// Agents API (https://cursor.com/docs/cloud-agent/api/endpoints) — so an
+// EXPIRED run will never produce further stream events.
 func isTerminalRunStatus(status string) bool {
 	switch strings.ToUpper(strings.TrimSpace(status)) {
-	case "FINISHED", "ERROR", "CANCELLED":
+	case "FINISHED", "ERROR", "CANCELLED", "EXPIRED":
 		return true
 	default:
 		return false
