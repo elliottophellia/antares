@@ -45,6 +45,31 @@ func TestStreamRunReconnectsFromLastEventID(t *testing.T) {
 	}
 }
 
+func TestStreamRunUsesDocumentedStreamEndpoint(t *testing.T) {
+	var gotMethod, gotURI string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod, gotURI = r.Method, r.RequestURI
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w,
+			"id: evt-1\nevent: result\ndata: {\"runId\":\"run-one\",\"status\":\"FINISHED\",\"text\":\"done\"}\n\n"+
+				"id: evt-2\nevent: done\ndata: {}\n\n")
+	}))
+	defer srv.Close()
+
+	client, _ := New(Options{BaseURL: srv.URL, APIKey: "synthetic-key", HTTPClient: srv.Client()})
+	if _, err := client.StreamRun(context.Background(), "bc-agent", "run-one", func(e StreamEvent) error { return nil }); err != nil {
+		t.Fatalf("StreamRun error = %v", err)
+	}
+	// Cursor Cloud Agents API, "Stream A Run":
+	// https://cursor.com/docs/cloud-agent/api/endpoints#stream-a-run
+	if gotMethod != http.MethodGet {
+		t.Fatalf("method = %q, want GET", gotMethod)
+	}
+	if want := "/v1/agents/bc-agent/runs/run-one/stream"; gotURI != want {
+		t.Fatalf("request URI = %q, want %q", gotURI, want)
+	}
+}
+
 func TestStreamRunParsesMultilineDataToolCallAndIgnoresHeartbeat(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")

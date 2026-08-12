@@ -160,6 +160,9 @@ func (c *Client) streamOnce(
 	agentID, runID, lastID string,
 	emit func(StreamEvent) error,
 ) (nextID string, terminal *Run, done bool, err error) {
+	// Documented endpoint: GET /v1/agents/{id}/runs/{runId}/stream — Cursor
+	// Cloud Agents API, "Stream A Run"
+	// (https://cursor.com/docs/cloud-agent/api/endpoints#stream-a-run).
 	path := "/v1/agents/" + url.PathEscape(agentID) + "/runs/" + url.PathEscape(runID) + "/stream"
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+path, nil)
 	if err != nil {
