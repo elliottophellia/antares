@@ -193,6 +193,168 @@ func TestEditFileRecoversUniqueNearInsertionWithoutChangingExistingLine(t *testi
 	}
 }
 
+// The similarity search picks a unique best line, so the insertion must land
+// at that line — not at an earlier occurrence of the same text inside a longer
+// line, which strings.Replace-based recovery corrupted mid-line.
+func TestEditFileAdjacentInsertionSplicesAtMatchedLine(t *testing.T) {
+	workspace := t.TempDir()
+	path := filepath.Join(workspace, "f.txt")
+	content := "start\nreturn nil // TODO cleanup\nmiddle\nreturn nil\nend\n"
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// Stale old_string (double space) matches nothing exactly; similarity must
+	// pick line 4 ("return nil", score 1.0) over line 2 (score 0.5).
+	old := "return  nil"
+	args, _ := json.Marshal(map[string]any{
+		"path": "f.txt", "old_string": old, "new_string": old + "\nINSERTED",
+	})
+	result := (editFileTool{}).Execute(context.Background(), Input{Workspace: workspace, Args: args})
+	if result.IsError {
+		t.Fatalf("unique near-line insertion should recover: %s", result.Content)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "start\nreturn nil // TODO cleanup\nmiddle\nreturn nil\nINSERTED\nend\n"
+	if string(got) != want {
+		t.Fatalf("insertion landed at the wrong place:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+// replace_all promises "replace every exact occurrence"; a similarity-based
+// recovery must never piggyback on it and multiply insertions.
+func TestEditFileAdjacentInsertionIgnoredWithReplaceAll(t *testing.T) {
+	workspace := t.TempDir()
+	path := filepath.Join(workspace, "ra.txt")
+	content := "return nil // TODO cleanup\nmiddle\nreturn nil\nend\n"
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	old := "return  nil"
+	args, _ := json.Marshal(map[string]any{
+		"path": "ra.txt", "old_string": old, "new_string": old + "\nINSERTED", "replace_all": true,
+	})
+	result := (editFileTool{}).Execute(context.Background(), Input{Workspace: workspace, Args: args})
+	if !result.IsError {
+		t.Fatalf("replace_all must not trigger similarity recovery: %s", result.Content)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != content {
+		t.Fatalf("file modified by rejected recovery:\n%s", got)
+	}
+}
+
+// A file with mixed line endings must never reject an old_string whose bytes
+// match the file exactly. (fileEOL used to pick CRLF because one line used it,
+// then converted the LF old_string so it matched nothing.)
+func TestEditFileExactMatchOnMixedEOLFile(t *testing.T) {
+	workspace := t.TempDir()
+	path := filepath.Join(workspace, "mixed.txt")
+	content := "alpha\r\nbeta\nGAMMA\ndelta\n"
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	args, _ := json.Marshal(map[string]any{
+		"path": "mixed.txt", "old_string": "beta\nGAMMA", "new_string": "beta\nGAMMA2",
+	})
+	result := (editFileTool{}).Execute(context.Background(), Input{Workspace: workspace, Args: args})
+	if result.IsError {
+		t.Fatalf("exact byte match rejected on mixed-EOL file: %s", result.Content)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "alpha\r\nbeta\nGAMMA2\ndelta\n"
+	if string(got) != want {
+		t.Fatalf("edited = %q, want %q", got, want)
+	}
+}
+
+// One stray lone CR byte anywhere in an LF file used to flip fileEOL to "\r"
+// and permanently break every multi-line edit in that file.
+func TestEditFileExactMatchDespiteStrayCR(t *testing.T) {
+	workspace := t.TempDir()
+	path := filepath.Join(workspace, "cr.txt")
+	content := "one\ntwo\nnote ends\rrest\nfour\nfive\n"
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	args, _ := json.Marshal(map[string]any{
+		"path": "cr.txt", "old_string": "four\nfive", "new_string": "four\nFIVE",
+	})
+	result := (editFileTool{}).Execute(context.Background(), Input{Workspace: workspace, Args: args})
+	if result.IsError {
+		t.Fatalf("stray CR poisoned an exact match: %s", result.Content)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "one\ntwo\nnote ends\rrest\nfour\nFIVE\n"
+	if string(got) != want {
+		t.Fatalf("edited = %q, want %q", got, want)
+	}
+}
+
+// read_file line numbers are always consecutive, so a multi-line block whose
+// numeric prefixes are not sequential is real pipe-delimited data, not a paste.
+func TestStripReadFileLinePrefixesRequiresSequentialNumbers(t *testing.T) {
+	if _, ok := stripReadFileLinePrefixes("3|a\n7|b"); ok {
+		t.Fatal("non-sequential numeric prefixes must not strip")
+	}
+	if _, ok := stripReadFileLinePrefixes("5|x\n5|y"); ok {
+		t.Fatal("repeated numeric prefixes must not strip")
+	}
+	got, ok := stripReadFileLinePrefixes("9|a\n10|b\n11|c")
+	if !ok || got != "a\nb\nc" {
+		t.Fatalf("sequential prefixes should strip, got %q ok=%v", got, ok)
+	}
+}
+
+// Truncating at the byte cap must not cut a multi-byte rune in half and then
+// misreport the whole file as binary.
+func TestReadFileTruncationDoesNotSplitRune(t *testing.T) {
+	workspace := t.TempDir()
+	path := filepath.Join(workspace, "big.txt")
+	// "é" is 2 bytes; place it so the maxReadBytes cut lands inside it.
+	content := strings.Repeat("a", maxReadBytes-1) + "é" + strings.Repeat("b", 16)
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	in := Input{Workspace: workspace, Args: []byte(`{"path":"big.txt"}`)}
+	result := (readFileTool{}).Execute(context.Background(), in)
+	if result.IsError {
+		t.Fatalf("truncated UTF-8 file misread as binary: %s", result.Content)
+	}
+	if !strings.Contains(result.Content, "file truncated") {
+		t.Fatalf("missing truncation notice: %s", result.Content)
+	}
+}
+
+// Classic-Mac style lone CR line endings must display as separate lines, not
+// one giant line with embedded CR bytes.
+func TestReadFileDisplaysLoneCRLines(t *testing.T) {
+	workspace := t.TempDir()
+	path := filepath.Join(workspace, "old.txt")
+	if err := os.WriteFile(path, []byte("a\rb\rc"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	in := Input{Workspace: workspace, Args: []byte(`{"path":"old.txt"}`)}
+	result := (readFileTool{}).Execute(context.Background(), in)
+	if result.IsError {
+		t.Fatalf("read failed: %s", result.Content)
+	}
+	if !strings.Contains(result.Content, "1|a\n2|b\n3|c") {
+		t.Fatalf("lone-CR file not split into lines: %q", result.Content)
+	}
+}
+
 func TestEditFileDoesNotRecoverAmbiguousNearInsertion(t *testing.T) {
 	workspace := t.TempDir()
 	path := filepath.Join(workspace, "README.md")

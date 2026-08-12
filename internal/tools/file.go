@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"unicode/utf8"
 )
@@ -179,12 +180,20 @@ func (readFileTool) Execute(_ context.Context, in Input) Result {
 	if len(data) > maxReadBytes {
 		data = data[:maxReadBytes]
 		truncatedBytes = true
+		// The cut can land inside a multi-byte rune; trimming up to three
+		// trailing bytes keeps a genuine text file from reading as binary.
+		for i := 0; i < 3 && len(data) > 0 && !utf8.Valid(data); i++ {
+			data = data[:len(data)-1]
+		}
 	}
 	if !utf8.Valid(data) {
 		return Errorf("%s appears to be a binary file (%d bytes)", args.Path, fi.Size())
 	}
 
-	lines := strings.Split(strings.ReplaceAll(string(data), "\r\n", "\n"), "\n")
+	normalized := strings.ReplaceAll(string(data), "\r\n", "\n")
+	// Lone CR (classic Mac) must also split, or the file displays as one line.
+	normalized = strings.ReplaceAll(normalized, "\r", "\n")
+	lines := strings.Split(normalized, "\n")
 	offset := args.Offset
 	if offset <= 0 {
 		offset = 1
@@ -323,6 +332,22 @@ func (editFileTool) Execute(_ context.Context, in Input) Result {
 	oldString, newString, count, how := resolveEditMatch(content, args.OldString, args.NewString)
 	switch {
 	case count == 0:
+		// Last-resort recovery for one narrow shape: a stale single-line anchor
+		// whose new_string only inserts adjacent text. Spliced by line index so
+		// it can never touch any other occurrence; never combined with
+		// replace_all, whose contract is "every exact occurrence".
+		if !args.ReplaceAll {
+			if updated, ok := spliceAdjacentInsertion(content, args.OldString, args.NewString); ok {
+				if err := writeWithCheckpoint(in, path, []byte(updated), "edit_file"); err != nil {
+					return Errorf("cannot write %s: %v", args.Path, err)
+				}
+				rel := relTo(in.Workspace, path)
+				return Result{
+					Content: fmt.Sprintf("Edited %s (1 replacement(s)) [matched unique near line for adjacent insertion]", rel),
+					Meta:    map[string]any{"path": rel, "replacements": 1},
+				}
+			}
+		}
 		return Errorf("%s", editNotFoundMessage(args.Path, content, args.OldString))
 	case count > 1 && !args.ReplaceAll:
 		return Errorf("%s", editAmbiguousMessage(args.Path, content, oldString, count))
@@ -352,15 +377,38 @@ func (editFileTool) Execute(_ context.Context, in Input) Result {
 	}
 }
 
-// fileEOL returns the dominant newline sequence used in s.
+// fileEOL returns the dominant newline sequence used in s, by majority. A
+// single stray CRLF or CR in an otherwise-LF file must not decide the flavor:
+// that used to convert every multi-line old_string away from what the file
+// actually contains and permanently break edits on such files.
 func fileEOL(s string) string {
-	if strings.Contains(s, "\r\n") {
+	crlf := strings.Count(s, "\r\n")
+	lf := strings.Count(s, "\n") - crlf
+	cr := strings.Count(s, "\r") - crlf
+	if crlf > 0 && crlf >= lf && crlf >= cr {
 		return "\r\n"
 	}
-	if strings.Contains(s, "\r") {
+	if cr > lf {
 		return "\r"
 	}
 	return "\n"
+}
+
+// eolOf reports the single newline flavor used in s, or "" when s has no
+// newlines or mixes flavors.
+func eolOf(s string) string {
+	crlf := strings.Count(s, "\r\n")
+	lf := strings.Count(s, "\n") - crlf
+	cr := strings.Count(s, "\r") - crlf
+	switch {
+	case crlf > 0 && lf == 0 && cr == 0:
+		return "\r\n"
+	case lf > 0 && crlf == 0 && cr == 0:
+		return "\n"
+	case cr > 0 && crlf == 0 && lf == 0:
+		return "\r"
+	}
+	return ""
 }
 
 // toEOL rewrites every newline in s to the given eol sequence.
@@ -394,6 +442,7 @@ func stripReadFileLinePrefixes(s string) (string, bool) {
 	}
 	lines := strings.Split(body, "\n")
 	out := make([]string, 0, len(lines))
+	nums := make([]int, 0, len(lines))
 	for _, line := range lines {
 		i := strings.IndexByte(line, '|')
 		if i <= 0 {
@@ -404,7 +453,20 @@ func stripReadFileLinePrefixes(s string) (string, bool) {
 				return s, false
 			}
 		}
+		n, err := strconv.Atoi(line[:i])
+		if err != nil {
+			return s, false
+		}
+		nums = append(nums, n)
 		out = append(out, line[i+1:])
+	}
+	// read_file prefixes are always consecutive. A multi-line block whose
+	// numbers are not is real pipe-delimited data — stripping it could make a
+	// stale old_string match somewhere else entirely.
+	for k := 1; k < len(nums); k++ {
+		if nums[k] != nums[k-1]+1 {
+			return s, false
+		}
 	}
 	joined := strings.Join(out, "\n")
 	if trimTrailing {
@@ -417,34 +479,46 @@ func stripReadFileLinePrefixes(s string) (string, bool) {
 // the two failure modes that read_file → edit_file commonly hits:
 //  1. LF vs CRLF (read_file always displays LF)
 //  2. pasted NUMBER| line prefixes from read_file output
-//  3. a unique near-match when new_string only inserts adjacent text
 //
+// The verbatim input is always tried first: when old_string already matches
+// the file bytes exactly, no newline heuristic may reject or rewrite it.
 // how is a short note for the success message when recovery was used; empty on
 // a plain exact match.
 func resolveEditMatch(content, oldIn, newIn string) (oldString, newString string, count int, how string) {
-	eol := fileEOL(content)
-
-	try := func(oldCand, newCand, label string) bool {
-		o := toEOL(oldCand, eol)
-		n := toEOL(newCand, eol)
-		if o == "" {
-			return false
+	// 0. Verbatim bytes. Mixed-EOL files and stray CR bytes made the old
+	// normalize-first order fail edits whose old_string was byte-perfect.
+	if c := strings.Count(content, oldIn); c > 0 {
+		flav := eolOf(oldIn)
+		if flav == "" {
+			flav = fileEOL(content)
 		}
-		c := strings.Count(content, o)
-		if c == 0 {
-			return false
-		}
-		oldString, newString, count, how = o, n, c, label
-		return true
+		return oldIn, toEOL(newIn, flav), c, ""
 	}
 
-	// 1. Exact / EOL-normalized (covers LF paste against a CRLF file).
-	if try(oldIn, newIn, "") {
-		// Only annotate when the on-disk form actually differs from the input
-		// (i.e. we rewrote newlines). A pure exact match stays silent.
-		if oldString != oldIn {
-			how = "normalized line endings to match file"
+	// Candidate flavors for normalized matching: the file's dominant flavor
+	// first, then the alternatives a mixed-EOL file may need.
+	flavors := []string{fileEOL(content), "\n", "\r\n"}
+
+	try := func(oldCand, newCand, label string) bool {
+		tried := map[string]bool{oldIn: true} // verbatim already attempted
+		for _, flav := range flavors {
+			o := toEOL(oldCand, flav)
+			if o == "" || tried[o] {
+				continue
+			}
+			tried[o] = true
+			c := strings.Count(content, o)
+			if c == 0 {
+				continue
+			}
+			oldString, newString, count, how = o, toEOL(newCand, flav), c, label
+			return true
 		}
+		return false
+	}
+
+	// 1. EOL-normalized (covers LF paste against a CRLF file and vice versa).
+	if try(oldIn, newIn, "normalized line endings to match file") {
 		return
 	}
 
@@ -461,65 +535,90 @@ func resolveEditMatch(content, oldIn, newIn string) (oldString, newString string
 		}
 	}
 
-	// 3. A common README/table operation copies a line from an earlier read,
-	// abbreviates one phrase, and adds a new row immediately after it. Recover
-	// only that narrow insertion shape, and only when one file line is a clear
-	// unique match. The actual on-disk line is retained, so stale wording is not
-	// silently overwritten. Ordinary replacements remain exact-only.
-	if oldLine, newLine, ok := resolveAdjacentInsertion(content, oldIn, newIn, eol); ok {
-		return oldLine, newLine, 1, "matched unique near line for adjacent insertion"
-	}
-
 	return oldIn, newIn, 0, ""
 }
 
-func resolveAdjacentInsertion(content, oldIn, newIn, eol string) (oldLine, newLine string, ok bool) {
+// lineSpan is the [start,end) byte range of one line's text in the original
+// content, excluding its \n, \r\n, or lone \r terminator.
+type lineSpan struct{ start, end int }
+
+func lineSpans(content string) []lineSpan {
+	var spans []lineSpan
+	start := 0
+	i := 0
+	for i < len(content) {
+		switch content[i] {
+		case '\n':
+			spans = append(spans, lineSpan{start, i})
+			i++
+			start = i
+		case '\r':
+			spans = append(spans, lineSpan{start, i})
+			if i+1 < len(content) && content[i+1] == '\n' {
+				i += 2
+			} else {
+				i++
+			}
+			start = i
+		default:
+			i++
+		}
+	}
+	if start < len(content) {
+		spans = append(spans, lineSpan{start, len(content)})
+	}
+	return spans
+}
+
+// spliceAdjacentInsertion recovers one narrow failure shape: a common
+// README/table operation copies a line from an earlier read, abbreviates one
+// phrase, and adds a new row immediately before or after it. old_string is a
+// single stale line, new_string only wraps it with inserted text, and exactly
+// one file line is a clear similarity match. The inserted text is spliced at
+// that line's byte range: the anchor line is kept byte-for-byte, and no other
+// occurrence of similar text can be touched. Ordinary replacements remain
+// exact-only.
+func spliceAdjacentInsertion(content, oldIn, newIn string) (string, bool) {
 	oldNorm := toEOL(oldIn, "\n")
 	newNorm := toEOL(newIn, "\n")
 	if oldNorm == "" || strings.Contains(oldNorm, "\n") {
-		return "", "", false
+		return "", false
 	}
 
-	mode := 0 // 1 = insert after, 2 = insert before
+	insertAfter := false
 	insert := ""
-	if strings.HasPrefix(newNorm, oldNorm+"\n") {
-		mode = 1
+	switch {
+	case strings.HasPrefix(newNorm, oldNorm+"\n"):
+		insertAfter = true
 		insert = strings.TrimPrefix(newNorm, oldNorm)
-	} else if strings.HasSuffix(newNorm, "\n"+oldNorm) {
-		mode = 2
+	case strings.HasSuffix(newNorm, "\n"+oldNorm):
 		insert = strings.TrimSuffix(newNorm, oldNorm)
-	} else {
-		return "", "", false
+	default:
+		return "", false
 	}
 
-	normalized := strings.ReplaceAll(content, "\r\n", "\n")
-	normalized = strings.ReplaceAll(normalized, "\r", "\n")
-	lines := strings.Split(normalized, "\n")
+	spans := lineSpans(content)
 	best, second := -1.0, -1.0
-	bestLine := -1
-	for i, line := range lines {
-		if line == "" && i == len(lines)-1 {
-			continue
-		}
-		score := editLineSimilarity(oldNorm, line)
+	bestIdx := -1
+	for i, sp := range spans {
+		score := editLineSimilarity(oldNorm, content[sp.start:sp.end])
 		if score > best {
 			second, best = best, score
-			bestLine = i
+			bestIdx = i
 		} else if score > second {
 			second = score
 		}
 	}
-	if bestLine < 0 || best < 0.78 || (second >= 0 && best-second < 0.12) {
-		return "", "", false
+	if bestIdx < 0 || best < 0.78 || (second >= 0 && best-second < 0.12) {
+		return "", false
 	}
 
-	actual := lines[bestLine]
-	if mode == 1 {
-		newLine = actual + insert
-	} else {
-		newLine = insert + actual
+	insert = toEOL(insert, fileEOL(content))
+	sp := spans[bestIdx]
+	if insertAfter {
+		return content[:sp.end] + insert + content[sp.end:], true
 	}
-	return toEOL(actual, eol), toEOL(newLine, eol), true
+	return content[:sp.start] + insert + content[sp.start:], true
 }
 
 func editLineSimilarity(a, b string) float64 {
