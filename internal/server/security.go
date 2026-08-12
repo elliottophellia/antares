@@ -292,14 +292,34 @@ func isIPv4OnlyWKA(ip net.IP) bool {
 	return ip.Equal(net.IPv4(192, 0, 0, 170)) || ip.Equal(net.IPv4(192, 0, 0, 171))
 }
 
+// nat64Candidate records the evidence an ipv4only.arpa answer gives for one
+// prefix: which well-known IPv4 addresses were embedded there, and whether
+// some answer placed a well-known address there and nowhere else.
+type nat64Candidate struct {
+	prefix nat64Prefix
+	wka    map[string]bool
+	sole   bool
+}
+
+// discoverNAT64Prefixes learns the NAT64 prefixes in use from ipv4only.arpa,
+// keeping them in the order the resolver returned (RFC 7050, Section 3).
+//
+// A well-known IPv4 address can sit at more than one RFC 6052 placement of
+// the same answer when the prefix itself repeats those octets. RFC 7050
+// requires the value to be present only once and, when it is not, to repeat
+// the search with the other well-known address: only a placement both
+// 192.0.0.170 and 192.0.0.171 agree on survives. Candidates that neither
+// test resolves are dropped, because a spurious shorter prefix would widen
+// the network that validation is willing to accept.
 func discoverNAT64Prefixes(ctx context.Context, resolver providerIPResolver) ([]nat64Prefix, error) {
 	ips, err := resolver.LookupIP(ctx, "ip6", "ipv4only.arpa")
 	if err != nil {
 		return nil, err
 	}
-	seen := map[string]bool{}
-	var out []nat64Prefix
+	candidates := map[string]*nat64Candidate{}
+	var order []string
 	for _, ip := range ips {
+		var placements []*nat64Candidate
 		for _, bits := range rfc6052PrefixLengths {
 			embedded, ok := extractRFC6052IPv4(ip, bits)
 			if !ok || !isIPv4OnlyWKA(embedded) {
@@ -308,14 +328,31 @@ func discoverNAT64Prefixes(ctx context.Context, resolver providerIPResolver) ([]
 			mask := net.CIDRMask(bits, 128)
 			network := append(net.IP(nil), ip.To16().Mask(mask)...)
 			key := fmt.Sprintf("%d:%x", bits, []byte(network))
-			if !seen[key] {
-				seen[key] = true
-				out = append(out, nat64Prefix{network: network, bits: bits})
+			candidate := candidates[key]
+			if candidate == nil {
+				candidate = &nat64Candidate{
+					prefix: nat64Prefix{network: network, bits: bits},
+					wka:    map[string]bool{},
+				}
+				candidates[key] = candidate
+				order = append(order, key)
 			}
+			candidate.wka[embedded.String()] = true
+			placements = append(placements, candidate)
+		}
+		if len(placements) == 1 {
+			placements[0].sole = true
+		}
+	}
+
+	var out []nat64Prefix
+	for _, key := range order {
+		if candidate := candidates[key]; candidate.sole || len(candidate.wka) > 1 {
+			out = append(out, candidate.prefix)
 		}
 	}
 	if len(out) == 0 {
-		return nil, errors.New("DNS64 prefix discovery returned no RFC 6052 prefix")
+		return nil, errors.New("DNS64 prefix discovery returned no unambiguous RFC 6052 prefix")
 	}
 	return out, nil
 }

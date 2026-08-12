@@ -160,6 +160,77 @@ func TestDiscoverNAT64PrefixesUsesIPv4OnlyARPA(t *testing.T) {
 	}
 }
 
+// ambiguousNAT64Prefix embeds the 192.0.0.170 byte pattern in its own bytes,
+// so an ipv4only.arpa answer synthesized under it carries a well-known
+// address at both the /32 and the /96 RFC 6052 placement.
+func ambiguousNAT64Prefix() net.IP { return net.ParseIP("fd00:aa:c000:aa::") }
+
+func TestDiscoverNAT64PrefixesRejectsAmbiguousWellKnownPlacement(t *testing.T) {
+	prefix := ambiguousNAT64Prefix()
+	resolver := staticIPResolver{
+		"ip6 ipv4only.arpa": {
+			synthesizeRFC6052(t, prefix, 96, net.ParseIP("192.0.0.170")),
+			synthesizeRFC6052(t, prefix, 96, net.ParseIP("192.0.0.171")),
+		},
+	}
+	prefixes, err := discoverNAT64Prefixes(context.Background(), resolver)
+	if err != nil {
+		t.Fatalf("discoverNAT64Prefixes: %v", err)
+	}
+	if len(prefixes) != 1 || prefixes[0].bits != 96 {
+		t.Fatalf("prefixes = %+v, want only the /96 corroborated by both well-known addresses", prefixes)
+	}
+	if !prefixMatches(prefix, prefixes[0].network, 96) {
+		t.Fatalf("prefix network = %s/%d, want %s/96", prefixes[0].network, prefixes[0].bits, prefix)
+	}
+}
+
+func TestDiscoverNAT64PrefixesKeepsMultipleLegitimatePrefixes(t *testing.T) {
+	short, long := net.ParseIP("fd00:cc:dd:ee::"), net.ParseIP("fd00:aa:bb:2090::")
+	resolver := staticIPResolver{
+		"ip6 ipv4only.arpa": {
+			synthesizeRFC6052(t, short, 64, net.ParseIP("192.0.0.170")),
+			synthesizeRFC6052(t, short, 64, net.ParseIP("192.0.0.171")),
+			synthesizeRFC6052(t, long, 96, net.ParseIP("192.0.0.170")),
+			synthesizeRFC6052(t, long, 96, net.ParseIP("192.0.0.171")),
+		},
+	}
+	prefixes, err := discoverNAT64Prefixes(context.Background(), resolver)
+	if err != nil {
+		t.Fatalf("discoverNAT64Prefixes: %v", err)
+	}
+	if len(prefixes) != 2 {
+		t.Fatalf("prefixes = %+v, want both discovered NAT64 prefixes", prefixes)
+	}
+	if prefixes[0].bits != 64 || !prefixMatches(short, prefixes[0].network, 64) {
+		t.Fatalf("first prefix = %s/%d, want %s/64", prefixes[0].network, prefixes[0].bits, short)
+	}
+	if prefixes[1].bits != 96 || !prefixMatches(long, prefixes[1].network, 96) {
+		t.Fatalf("second prefix = %s/%d, want %s/96", prefixes[1].network, prefixes[1].bits, long)
+	}
+}
+
+// A broader prefix inferred from an ambiguous placement would accept any ULA
+// sharing those leading bits, so an unrelated internal AAAA must stay blocked
+// even though its bytes decode to the host's real public IPv4.
+func TestValidateProviderBaseURLRejectsULAUnderAmbiguousDNS64Discovery(t *testing.T) {
+	prefix := ambiguousNAT64Prefix()
+	resolver := staticIPResolver{
+		"ip provider.example": {
+			net.ParseIP("54.158.233.194"),
+			net.ParseIP("fd00:aa:369e:e9c2::1"),
+		},
+		"ip6 ipv4only.arpa": {
+			synthesizeRFC6052(t, prefix, 96, net.ParseIP("192.0.0.170")),
+			synthesizeRFC6052(t, prefix, 96, net.ParseIP("192.0.0.171")),
+		},
+	}
+	if err := validateProviderBaseURLWithResolver(
+		context.Background(), "https://provider.example", false, resolver); err == nil {
+		t.Fatal("internal ULA was accepted under a prefix inferred from an ambiguous placement")
+	}
+}
+
 func TestValidateProviderBaseURLBlocksPrivateDestinations(t *testing.T) {
 	ctx := context.Background()
 	for _, raw := range []string{
