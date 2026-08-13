@@ -66,18 +66,8 @@ func (a *Agent) maybeCompact(ctx context.Context, history []llm.Message, system,
 
 	protectFirst := maxInt(cfg.ProtectFirstN, 1)
 	protectLast := maxInt(cfg.ProtectLastN, 4)
-	if len(history) <= protectFirst+protectLast+2 {
-		return history
-	}
-
-	head := history[:protectFirst]
-	middle := history[protectFirst : len(history)-protectLast]
-	tail := history[len(history)-protectLast:]
-
-	// Never split an assistant tool-call turn from its tool results, or the
-	// provider will reject the request.
-	middle, tail = rebalanceToolBoundary(middle, tail)
-	if len(middle) == 0 {
+	head, middle, tail, ok := splitForCompaction(history, protectFirst, protectLast)
+	if !ok {
 		return history
 	}
 
@@ -116,6 +106,127 @@ func (a *Agent) maybeCompact(ctx context.Context, history []llm.Message, system,
 
 	slog.Info("context compacted", "before", len(history), "after", len(compacted), "tokens_before", used)
 	return compacted
+}
+
+// splitForCompaction divides history into the head kept verbatim, the middle to
+// be summarised, and the tail kept verbatim, honouring the tool-call boundary so
+// an assistant turn is never split from its results. It reports false when there
+// is too little between the protected ends to be worth summarising.
+func splitForCompaction(history []llm.Message, protectFirst, protectLast int) (head, middle, tail []llm.Message, ok bool) {
+	if len(history) <= protectFirst+protectLast+2 {
+		return nil, nil, nil, false
+	}
+	head = history[:protectFirst]
+	middle = history[protectFirst : len(history)-protectLast]
+	tail = history[len(history)-protectLast:]
+	// Never split an assistant tool-call turn from its tool results, or the
+	// provider will reject the request.
+	middle, tail = rebalanceToolBoundary(middle, tail)
+	if len(middle) == 0 {
+		return nil, nil, nil, false
+	}
+	return head, middle, tail, true
+}
+
+// CompactNow summarises a session's older turns immediately, regardless of the
+// usage threshold maybeCompact waits for, and streams its progress to emit. It
+// is what the /compact command runs: unlike maybeCompact it does not defer the
+// work to the next turn, and it finishes by emitting a usage event carrying the
+// freed context so the gauge drops the moment compaction lands rather than only
+// after the next model call. The summary is persisted, so the next turn loads
+// head + summary + tail without re-summarising.
+func (a *Agent) CompactNow(ctx context.Context, sessionID string, emit Emit) error {
+	if emit == nil {
+		emit = func(Event) error { return nil }
+	}
+	if a.db == nil {
+		return fmt.Errorf("no store configured")
+	}
+	sess, err := a.db.GetSession(ctx, sessionID)
+	if err != nil {
+		return fmt.Errorf("load session: %w", err)
+	}
+
+	cfg := a.config().Compression
+
+	// Resolve the model so the window and the token estimate match the turn the
+	// user will run next.
+	_, modelName, _, err := a.newClient("", sessionID)
+	if err != nil {
+		return err
+	}
+
+	// Rebuild the request context (role, tools, system prompt) the same way Run
+	// does, so the token estimate reflects what the next turn will actually send.
+	req := Request{SessionID: sessionID}
+	if stored, err := a.db.GetKV(ctx, "role:"+sessionID); err == nil {
+		req.Role = stored
+	}
+	a.applyRole(&req)
+
+	history, err := a.loadHistory(ctx, sess, req)
+	if err != nil {
+		return fmt.Errorf("load history: %w", err)
+	}
+
+	activeTools := a.resolveTools(req)
+	toolSpecs := make([]llm.Tool, 0, len(activeTools))
+	for _, t := range activeTools {
+		toolSpecs = append(toolSpecs, llm.Tool{Name: t.Name(), Description: t.Description(), Parameters: t.Schema()})
+	}
+	system := a.buildSystemPrompt(ctx, req, sess, activeTools)
+
+	window := a.contextWindowFor(modelName)
+	if window <= 0 {
+		window = 128000
+	}
+	before := estimateRequestTokens(history, system, toolSpecs)
+
+	protectFirst := maxInt(cfg.ProtectFirstN, 1)
+	protectLast := maxInt(cfg.ProtectLastN, 4)
+	head, middle, tail, ok := splitForCompaction(history, protectFirst, protectLast)
+	if !ok {
+		_ = emit(Event{Type: EventNotice, Message: "Nothing to compact yet — this conversation is still short."})
+		// Report the current fill so the gauge stays accurate even when there
+		// was nothing to do.
+		_ = emit(Event{Type: EventUsage, ContextTokens: before, ContextWindow: window})
+		return nil
+	}
+
+	_ = emit(Event{Type: EventNotice, Message: fmt.Sprintf(
+		"Compacting %d older messages to free context (~%d tokens in use)…", len(middle), before)})
+
+	summary, err := a.summarise(ctx, middle)
+	if err != nil {
+		return fmt.Errorf("summarise: %w", err)
+	}
+
+	if !isQuietSession(sess) {
+		a.persistContextCompact(ctx, sess, summary, protectFirst, protectLast)
+	}
+
+	compacted := make([]llm.Message, 0, len(head)+1+len(tail))
+	compacted = append(compacted, head...)
+	compacted = append(compacted, llm.Message{
+		Role: llm.RoleUser,
+		Content: "[Compacted summary of the earlier conversation]\n\n" + summary +
+			"\n\n[Continue from here. This summary replaces the older messages.]",
+	})
+	compacted = append(compacted, tail...)
+
+	after := estimateRequestTokens(compacted, system, toolSpecs)
+	freed := before - after
+	if freed < 0 {
+		freed = 0
+	}
+	slog.Info("context compacted on demand", "session", sessionID, "before", before, "after", after, "freed", freed)
+
+	_ = emit(Event{Type: EventNotice, Message: fmt.Sprintf(
+		"Compacted %d messages into a summary — freed about %d tokens.", len(middle), freed)})
+	// The gauge plots the latest turn's input, so report the estimate for the
+	// next turn: the same estimator maybeCompact uses for its own threshold.
+	_ = emit(Event{Type: EventUsage, ContextTokens: after, ContextWindow: window})
+	return nil
 }
 
 // isQuietSession is true for ephemeral sub-agent sessions we never persist.

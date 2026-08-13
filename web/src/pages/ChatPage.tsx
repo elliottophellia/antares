@@ -1003,6 +1003,62 @@ export default function ChatPage() {
             if (last) setInput(last.content)
             return
           }
+          case 'compact': {
+            const sid = sessionIdRef.current ?? r.action.value ?? ''
+            if (!sid) {
+              pushSystem(t('chat.compactNoSession'))
+              return
+            }
+            // Compaction is real server work that can take tens of seconds, so
+            // it streams like a turn: the notice line shows progress live, and
+            // the closing usage event drops the context gauge the moment the
+            // summary lands rather than waiting for the next message.
+            setStreaming(true)
+            setLive({ turn: 1, notice: t('chat.compacting') })
+            abortRef.current = streamPost(
+              `/sessions/${encodeURIComponent(sid)}/compact`,
+              {},
+              (event: StreamEvent) => {
+                switch (event.type) {
+                  case 'notice':
+                    setLive((s) => ({
+                      ...s,
+                      notice: String(event.message ?? '').trim() || undefined,
+                    }))
+                    break
+                  case 'usage': {
+                    const used = Number(event.context_tokens ?? 0)
+                    const win = Number(event.context_window ?? 0)
+                    if (used > 0) setCtxUsed(used)
+                    if (win > 0) setCtxWindow(win)
+                    break
+                  }
+                  case 'error':
+                    setError(String(event.error ?? t('chat.somethingWrong')))
+                    break
+                  case 'done':
+                    setStreaming(false)
+                    setLive({ turn: 1 })
+                    abortRef.current?.()
+                    abortRef.current = null
+                    pushSystem(t('chat.compactDone'))
+                    break
+                }
+              },
+              (err) => {
+                setError(err.message)
+                setStreaming(false)
+                setLive({ turn: 1 })
+                abortRef.current = null
+              },
+              () => {
+                setStreaming(false)
+                setLive({ turn: 1 })
+                abortRef.current = null
+              },
+            )
+            return
+          }
         }
         if (r.output) pushSystem(r.output)
       } catch (e) {

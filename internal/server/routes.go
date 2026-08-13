@@ -55,6 +55,7 @@ func (s *Server) routes() {
 	m.HandleFunc("DELETE /api/sessions/{id}", s.handleDeleteSession)
 	m.HandleFunc("POST /api/sessions/{id}/title", s.handleRenameSession)
 	m.HandleFunc("GET /api/sessions/{id}/bg-activity", s.handleBackgroundActivity)
+	m.HandleFunc("POST /api/sessions/{id}/compact", s.handleCompact)
 	m.HandleFunc("GET /api/sessions/{id}/edit-preview", s.handleEditPreview)
 	m.HandleFunc("POST /api/sessions/{id}/edit", s.handleEditMessage)
 
