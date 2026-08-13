@@ -169,19 +169,24 @@ func TestRefreshReplacesToolsAndReadiness(t *testing.T) {
 func helperConfig(mode string) *config.Config {
 	return &config.Config{MCP: config.MCP{
 		Enabled: true,
-		Servers: map[string]config.MCPServer{
-			"fake": {
-				Transport: "stdio",
-				Command:   os.Args[0],
-				Args:      []string{"-test.run=TestHelperServer"},
-				Env: map[string]string{
-					"ANTARES_MCP_HELPER":      "1",
-					"ANTARES_MCP_HELPER_MODE": mode,
-				},
-				Enabled: true,
-			},
-		},
+		Servers: map[string]config.MCPServer{"fake": helperServer(mode)},
 	}}
+}
+
+// helperServer configures one instance of the fixture. mode picks how it
+// behaves: "offline" fails tools/list, "no-resources" holds no resources, and
+// anything else is a healthy server.
+func helperServer(mode string) config.MCPServer {
+	return config.MCPServer{
+		Transport: "stdio",
+		Command:   os.Args[0],
+		Args:      []string{"-test.run=TestHelperServer"},
+		Env: map[string]string{
+			"ANTARES_MCP_HELPER":      "1",
+			"ANTARES_MCP_HELPER_MODE": mode,
+		},
+		Enabled: true,
+	}
 }
 
 func TestUnknownTransport(t *testing.T) {
@@ -286,6 +291,13 @@ func TestHelperServer(t *testing.T) {
 				URI string `json:"uri"`
 			}
 			_ = json.Unmarshal(req.Params, &p)
+			// A server in "no-resources" mode holds nothing, whatever it is
+			// asked for, so a test can watch a search cross it to reach a
+			// server that does answer.
+			if os.Getenv("ANTARES_MCP_HELPER_MODE") == "no-resources" {
+				reply(req.ID, map[string]any{"contents": []any{}})
+				continue
+			}
 			// A "raw:" uri carries the result frame to answer with, so a test
 			// can drive ReadResource with any contents shape.
 			if result, ok := strings.CutPrefix(p.URI, "raw:"); ok {

@@ -17,6 +17,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/enowdev/antares/internal/textutil"
 	"github.com/enowdev/antares/internal/version"
 )
 
@@ -44,12 +45,19 @@ type content struct {
 
 // resourceContents is a resource's payload: inline text or base64 bytes. Both
 // an embedded resource in a tool result and a resources/read reply use it.
+//
+// Text and Blob are pointers because an empty file is a legal payload. A server
+// answering with "text": "" has represented an empty document exactly; only a
+// resource carrying neither key is one this client cannot read.
 type resourceContents struct {
-	URI      string `json:"uri"`
-	MimeType string `json:"mimeType"`
-	Text     string `json:"text"`
-	Blob     string `json:"blob"`
+	URI      string  `json:"uri"`
+	MimeType string  `json:"mimeType"`
+	Text     *string `json:"text"`
+	Blob     *string `json:"blob"`
 }
+
+// hasPayload reports whether the server sent a payload at all, empty or not.
+func (r resourceContents) hasPayload() bool { return r.Text != nil || r.Blob != nil }
 
 // describe names a resource for a summary line.
 func (r resourceContents) describe() string {
@@ -57,39 +65,63 @@ func (r resourceContents) describe() string {
 	if uri == "" {
 		uri = "no uri"
 	}
-	mime := r.MimeType
-	if mime == "" {
-		mime = "unknown type"
-	}
-	return fmt.Sprintf("%s (%s)", uri, mime)
+	return fmt.Sprintf("%s (%s)", uri, mimeOrUnknown(r.MimeType))
 }
 
-// render returns the text this resource contributes, or "" when it carries no
-// payload. Bytes are named rather than inlined: the model cannot use base64 and
-// it would crowd out the rest of the context.
+// render returns the text this resource contributes, which is empty for an
+// empty file. Bytes are named rather than inlined: the model cannot use base64
+// and it would crowd out the rest of the context.
 func (r resourceContents) render() string {
 	switch {
-	case r.Text != "":
-		return r.Text
-	case r.Blob != "":
-		return fmt.Sprintf("[resource: %s, %d bytes base64]", r.describe(), len(r.Blob))
+	case r.Text != nil:
+		return *r.Text
+	case r.Blob != nil && *r.Blob != "":
+		return fmt.Sprintf("[resource: %s, %d bytes base64]", r.describe(), len(*r.Blob))
 	default:
 		return ""
 	}
 }
 
+// mimeOrUnknown names a media type for a summary line. Leaving it out would
+// read as though the server had stated one.
+func mimeOrUnknown(mime string) string {
+	if mime == "" {
+		return "unknown type"
+	}
+	return mime
+}
+
+// contentKindChars bounds one content type named back in an error message, and
+// maxContentKinds bounds how many are named. Both come from the server.
+const (
+	contentKindChars = 40
+	maxContentKinds  = 5
+)
+
 // flattenContent renders a tool result to text and reports the kinds of content
 // it could not represent. The two are kept apart because "the server said
 // nothing" and "the server said something this client cannot read" call for
 // different answers to the model.
+//
+// Text, images and embedded resources are the three kinds this client has
+// rendering code for. Everything else is named back to the caller rather than
+// dropped. An item of a kind it does understand but that carries nothing —
+// an empty file, an empty string — is understood and simply has nothing to
+// show, which is not the same as unreadable.
 func flattenContent(items []content) (string, []string) {
 	var b strings.Builder
 	var skipped []string
+	unnamed := 0
+	seen := map[string]bool{}
 	skip := func(kind string) {
-		for _, seen := range skipped {
-			if seen == kind {
-				return
-			}
+		kind = textutil.TruncateRunes(kind, contentKindChars)
+		if seen[kind] {
+			return
+		}
+		seen[kind] = true
+		if len(skipped) >= maxContentKinds {
+			unnamed++
+			return
 		}
 		skipped = append(skipped, kind)
 	}
@@ -100,23 +132,31 @@ func flattenContent(items []content) (string, []string) {
 			b.WriteString(item.Text)
 			b.WriteString("\n")
 		case "image":
-			fmt.Fprintf(&b, "[image: %s, %d bytes base64]\n", item.MimeType, len(item.Data))
-		case "resource":
-			var line string
-			if item.Resource != nil {
-				line = item.Resource.render()
+			// No bytes is not an empty image, it is not an image at all: a
+			// zero-byte summary line would be this client's assertion rather
+			// than the server's.
+			if item.Data == "" {
+				skip("image with no data")
+				continue
 			}
-			if line == "" {
+			fmt.Fprintf(&b, "[image: %s, %d bytes base64]\n", mimeOrUnknown(item.MimeType), len(item.Data))
+		case "resource":
+			if item.Resource == nil || !item.Resource.hasPayload() {
 				skip("resource with no text or blob")
 				continue
 			}
-			b.WriteString(line)
-			b.WriteString("\n")
+			if line := item.Resource.render(); line != "" {
+				b.WriteString(line)
+				b.WriteString("\n")
+			}
 		case "":
 			skip("item with no type")
 		default:
 			skip(item.Type)
 		}
+	}
+	if unnamed > 0 {
+		skipped = append(skipped, fmt.Sprintf("and %d more", unnamed))
 	}
 	return strings.TrimSpace(b.String()), skipped
 }
