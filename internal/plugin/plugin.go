@@ -335,6 +335,13 @@ func call(ctx context.Context, man Manifest, p Payload) (reply Reply, replied bo
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
+	// Killing the plugin at its deadline does not end the wait. Run also waits
+	// on the goroutines copying stdout and stderr, and those cannot finish
+	// while anything still holds the write end of the pipe — a child the plugin
+	// backgrounded inherits that descriptor and keeps it open long after the
+	// shell that spawned it is gone. Without this, timeout_ms bounds the plugin
+	// process and nothing bounds Dispatch, which is the agent's own turn.
+	cmd.WaitDelay = pipeGrace
 
 	runErr := cmd.Run()
 
@@ -351,12 +358,33 @@ func call(ctx context.Context, man Manifest, p Payload) (reply Reply, replied bo
 // failureChars bounds an excerpt of what a plugin printed when quoting it back.
 const failureChars = 200
 
+// pipeGrace is how long Wait may go on waiting for the plugin's I/O pipes after
+// the plugin itself is finished with — either it exited or its deadline passed
+// — before they are closed out from under whatever is still holding them.
+//
+// It is short because the window only opens once the plugin is done: everything
+// it printed was copied out well before, so cutting the wait short takes
+// nothing away from what it said. Whatever was captured is still read and
+// honoured; only a plugin that printed nothing usable gets a refusal
+// synthesised for it.
+const pipeGrace = 250 * time.Millisecond
+
 // readReply decodes what a plugin printed. Silence is not a failure: it is how
 // a plugin says it has no opinion.
 func readReply(stdout []byte) (reply Reply, replied bool, err error) {
 	out := bytes.TrimSpace(stdout)
 	if len(out) == 0 {
 		return Reply{}, false, nil
+	}
+	// A reply is an object. Every other JSON shape fails to unmarshal into one
+	// except null, which unmarshals into the zero Reply and reports no error at
+	// all — so a plugin printing it looked exactly like one that had answered
+	// and had no objection, and a gate that printed it and then failed was
+	// recorded as having permitted the call. A jq pipeline that matches nothing
+	// prints precisely that.
+	if out[0] != '{' {
+		return Reply{}, false, fmt.Errorf("returned JSON that is not an object: %s",
+			truncate(string(out), failureChars))
 	}
 	if err := json.Unmarshal(out, &reply); err != nil {
 		return Reply{}, false, fmt.Errorf("returned something that is not JSON: %s",
