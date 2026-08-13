@@ -214,6 +214,12 @@ func (readFileTool) Execute(_ context.Context, in Input) Result {
 	// An empty file has no line 1 to be past, so offset 1 on it reads as
 	// "nothing here" rather than as a mistake.
 	if start > 0 && start >= len(lines) {
+		if truncatedBytes {
+			// The line may well exist; this read simply never reached it. Told
+			// it is past the end, a caller following a line number grep just
+			// gave it concludes the file changed under it and reads again.
+			return Errorf("offset %d is past line %d, where the 400 KB cap stopped this read; the file continues beyond it, so search the rest with grep rather than paging to it", offset, len(lines))
+		}
 		return Errorf("offset %d is past end of file (%d lines)", offset, len(lines))
 	}
 	end := start + limit
@@ -240,22 +246,39 @@ func (readFileTool) Execute(_ context.Context, in Input) Result {
 		first = 0
 	}
 
+	// A read stopped by the byte cap counted the lines it read and no others,
+	// so every number it can offer about the whole file is a floor rather than
+	// a count. grep counts the file whole, and a total that disagrees with it
+	// sends a caller holding one of grep's line numbers back to a file it was
+	// just told is shorter than that. Learning the real total means reading
+	// past the cap, which is what the cap is for.
+	floor, atLeast := "", ""
+	if truncatedBytes {
+		floor, atLeast = "≥", "at least "
+	}
 	rel := relTo(in.Workspace, path)
 	var b strings.Builder
-	fmt.Fprintf(&b, "%s — lines %d-%d of %d\n\n", rel, first, end, len(lines))
+	fmt.Fprintf(&b, "%s — lines %d-%d of %s%d\n\n", rel, first, end, floor, len(lines))
 	b.WriteString(body)
 	if end < len(lines) {
-		fmt.Fprintf(&b, "\n… %d more lines (use offset=%d to continue)\n", len(lines)-end, end+1)
+		fmt.Fprintf(&b, "\n… %s%d more lines (use offset=%d to continue)\n", atLeast, len(lines)-end, end+1)
 	}
 	if truncatedBytes {
 		b.WriteString("\n… file truncated at 400 KB\n")
 	}
-	return Result{Content: b.String(), Meta: map[string]any{
-		"path":        rel,
-		"first_line":  first,
-		"last_line":   end,
-		"total_lines": len(lines),
-	}}
+	meta := map[string]any{
+		"path":       rel,
+		"first_line": first,
+		"last_line":  end,
+	}
+	if truncatedBytes {
+		// last_line is the floor the header states; a caller that wants a
+		// count rather than a floor has to be able to tell them apart.
+		meta["truncated"] = true
+	} else {
+		meta["total_lines"] = len(lines)
+	}
+	return Result{Content: b.String(), Meta: meta}
 }
 
 // ---- write_file -------------------------------------------------------------

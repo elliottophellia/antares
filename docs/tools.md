@@ -36,6 +36,14 @@ anchor must never be taken from one. The newline that starts that line is the
 tool's, so on the byte-cap path it is not evidence that the last content line
 was terminated in the file.
 
+A read the 400 KB cap stopped has not counted the lines behind it, and says so
+rather than reporting what it read as the whole: the header's total becomes
+`≥N`, the continuation note says `at least N more lines`, and the metadata
+drops `total_lines` for `truncated: true` — `last_line` is then the floor the
+header states. `grep` counts the whole file (up to 8 MB), so it is the tool
+that can still find something past the cap; asking `read_file` to page to a
+line beyond it is refused, naming the cap.
+
 `edit_file` matches `old_string` byte for byte, and writes `new_string` byte for
 byte on every path but one. That path is the single recovery: if the file uses
 CRLF and an anchor whose every break is LF did not match, it is retried with
