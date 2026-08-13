@@ -30,9 +30,11 @@ callers that would otherwise parse the header.
 
 Two things below the header are the tool's rather than the file's: a clipped
 read appends `… N more lines (use offset=N to continue)`, and a read that hit
-the byte cap appends `… file truncated at 400 KB`. Each sits after a blank line
-and begins with `…`, which is how the model is told to recognise them; an
-anchor must never be taken from one.
+the byte cap appends `… file truncated at 400 KB`. Each occupies a line of its
+own beginning with `…`, which is how the model is told to recognise them; an
+anchor must never be taken from one. The newline that starts that line is the
+tool's, so on the byte-cap path it is not evidence that the last content line
+was terminated in the file.
 
 `edit_file` matches `old_string` byte for byte, and writes `new_string` byte for
 byte on every path but one. That path is the single recovery: if the file uses

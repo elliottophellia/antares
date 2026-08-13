@@ -87,6 +87,14 @@ func TestPromptSendsAFailedMatchBackToTheFile(t *testing.T) {
 // the entire prompt is satisfied by a true clause sitting next to a false one,
 // which is how a sentence that scoped a translation to old_string alone stayed
 // green while the tool was translating new_string too.
+//
+// It knows two sentence boundaries, ". " and a newline, which is enough for the
+// tool notes as written and has two consequences for anyone rewording them. An
+// abbreviation ("e.g.") ends the sentence early and fails the assertion loudly.
+// A sentence ended with "!" or "?" does not end it at all: the claim merges with
+// the sentence after it and can be satisfied by a qualifier that is no longer in
+// the same sentence — a silent pass. Keep these bullets to plain full stops, or
+// teach this function the terminator you introduce.
 func claimAround(t *testing.T, prompt, needle string) string {
 	t.Helper()
 	at := strings.Index(prompt, needle)
@@ -113,48 +121,117 @@ func claimAround(t *testing.T, prompt, needle string) string {
 // read_file appends a note of its own whenever it clips a read, so the lines
 // below the header are not all file content — and the bullet making that claim
 // is the same one that sends the model through large files with offset and
-// limit, which is precisely when the note appears. Taken literally, an
+// limit, which is precisely when a note appears. Taken literally, an
 // unqualified claim invites "… 2 more lines" into an anchor.
-func TestPromptExemptsTheToolsOwnTrailingNoteFromTheContentClaim(t *testing.T) {
+//
+// Both branches that append a note are driven, because they do not produce the
+// same shape. The note is written as "\n…" onto whatever the body ended with,
+// so a blank line appears in front of it only when the body already ended in a
+// newline of its own. On the byte-cap branch it does not, and that leading "\n"
+// is the tool's rather than the file's.
+func TestPromptExemptsTheToolsOwnTrailingNotesFromTheContentClaim(t *testing.T) {
 	const noteMarker = "…"
+	// maxReadBytes over in internal/tools. A file past it is truncated and noted.
+	const byteCap = 400 * 1024
+	oversized := strings.Repeat("x", byteCap+64)
 
-	workspace := t.TempDir()
-	if err := os.WriteFile(filepath.Join(workspace, "notes.txt"), []byte("one\ntwo\nthree\nfour\nfive\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
 	read, ok := tools.Default().Get("read_file")
 	if !ok {
 		t.Fatal("read_file is not registered")
 	}
-	res := read.Execute(context.Background(), tools.Input{
-		Workspace: workspace,
-		Args:      []byte(`{"path":"notes.txt","offset":2,"limit":2}`),
-	})
-	if res.IsError {
-		t.Fatalf("read_file: %s", res.Content)
-	}
-	_, below, ok := strings.Cut(res.Content, "\n\n")
-	if !ok {
-		t.Fatalf("read_file output has no header line followed by a blank line: %q", res.Content)
-	}
-	const inTheFile = "two\nthree\n"
-	if !strings.HasPrefix(below, inTheFile) {
-		t.Fatalf("read_file did not return the range's own bytes first: %q", below)
-	}
-	added := strings.TrimPrefix(below, inTheFile)
-	if strings.TrimSpace(added) == "" {
-		t.Fatal("a clipped read no longer appends a note; the prompt's exception for one is stale and should go")
-	}
-	for _, line := range strings.Split(strings.Trim(added, "\n"), "\n") {
-		if !strings.HasPrefix(line, noteMarker) {
-			t.Fatalf("read_file appends a line the prompt gives the model no way to tell from content: %q", line)
-		}
+
+	blankLineAlways := true
+	for _, tc := range []struct{ name, file, content, args, inTheFile, wantTail string }{
+		{
+			"clipped by line range",
+			"notes.txt", "one\ntwo\nthree\nfour\nfive\n",
+			`{"path":"notes.txt","offset":2,"limit":2}`,
+			"two\nthree\n",
+			"three\n\n… 2 more lines (use offset=4 to continue)\n",
+		},
+		{
+			// One line, longer than the cap: no "more lines" note fires, and
+			// the cap note lands straight onto a content byte. A minified
+			// bundle, a single-line JSON document or a long-lined log.
+			"clipped by the 400 KB byte cap",
+			"bundle.min.js", oversized,
+			`{"path":"bundle.min.js"}`,
+			oversized[:byteCap],
+			"x\n… file truncated at 400 KB\n",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			workspace := t.TempDir()
+			if err := os.WriteFile(filepath.Join(workspace, tc.file), []byte(tc.content), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			res := read.Execute(context.Background(), tools.Input{
+				Workspace: workspace,
+				Args:      []byte(tc.args),
+			})
+			if res.IsError {
+				t.Fatalf("read_file: %s", res.Content)
+			}
+			if !strings.HasSuffix(res.Content, tc.wantTail) {
+				t.Fatalf("read ends %q, want it to end %q — the prompt describes this shape and has to be revisited with it",
+					lastBytes(res.Content, len(tc.wantTail)+8), tc.wantTail)
+			}
+			_, below, ok := strings.Cut(res.Content, "\n\n")
+			if !ok {
+				t.Fatalf("read_file output has no header line followed by a blank line: %q", lastBytes(res.Content, 120))
+			}
+			if !strings.HasPrefix(below, tc.inTheFile) {
+				t.Fatalf("read_file did not return the range's own bytes first: %q", lastBytes(below, 120))
+			}
+			added := strings.TrimPrefix(below, tc.inTheFile)
+			if strings.TrimSpace(added) == "" {
+				t.Fatal("this branch no longer appends a note; the prompt's exception for one is stale and should go")
+			}
+			// The marker is the only property that holds on both branches, so
+			// it is the only one the prompt may offer as the recognition rule.
+			for _, line := range strings.Split(strings.Trim(added, "\n"), "\n") {
+				if !strings.HasPrefix(line, noteMarker) {
+					t.Fatalf("read_file adds a line the prompt gives the model no way to tell from content: %q", line)
+				}
+			}
+			shown := strings.Split(strings.TrimSuffix(below, "\n"), "\n")
+			for i, line := range shown {
+				if !strings.HasPrefix(line, noteMarker) {
+					continue
+				}
+				if i == 0 || shown[i-1] != "" {
+					blankLineAlways = false
+				}
+				break
+			}
+		})
 	}
 
 	claim := claimAround(t, filePrompt(t), "that blank line")
 	if !strings.Contains(claim, noteMarker) {
-		t.Errorf("prompt claims file content below the header without exempting the %q note read_file just appended: %q", noteMarker, claim)
+		t.Errorf("prompt claims file content below the header without exempting the %q notes read_file just appended: %q", noteMarker, claim)
 	}
+	// The prompt may describe what sits in front of a note only if every branch
+	// puts it there. One does not, so promising it would tell the model the last
+	// content line is terminated when the terminator it sees is the tool's.
+	if !blankLineAlways {
+		for _, promise := range []string{
+			"preceded by a blank line", "after a blank line",
+			"behind a blank line", "following a blank line",
+		} {
+			if strings.Contains(claim, promise) {
+				t.Errorf("prompt says a note is %q, but a read above put one straight onto a content byte: %q", promise, claim)
+			}
+		}
+	}
+}
+
+// lastBytes keeps a failure message readable when the subject is a 400 KB read.
+func lastBytes(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return "…" + s[len(s)-n:]
 }
 
 // The recovery stage translates new_string because it had to translate
