@@ -143,6 +143,45 @@ func editOccurrenceLines(t *testing.T, workspace, name, oldString string) []int 
 	return lines
 }
 
+// write_file reports a line count as well, and it is the fourth tool in the
+// same conversation: a model writes a file, is told what it now holds, and
+// reads it back a moment later. Counting a terminated last line as two lines
+// there and one line everywhere else makes the write look like it added
+// something the read then cannot find.
+func TestWriteFileCountsLinesLikeTheToolsThatReadItBack(t *testing.T) {
+	for _, tc := range []struct{ name, content string }{
+		{"lf terminated", "alpha\nbeta\n"},
+		{"lf unterminated", "alpha\nbeta"},
+		{"crlf terminated", "alpha\r\nbeta\r\n"},
+		{"cr terminated", "alpha\rbeta\r"},
+		{"blank line before the end", "alpha\n\n"},
+		{"empty file", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			workspace := t.TempDir()
+			args, err := json.Marshal(map[string]any{"path": "out.txt", "content": tc.content})
+			if err != nil {
+				t.Fatal(err)
+			}
+			res := (writeFileTool{}).Execute(context.Background(), Input{Workspace: workspace, Args: args})
+			if res.IsError {
+				t.Fatalf("write_file: %s", res.Content)
+			}
+			m := regexp.MustCompile(`(\d+) lines\)`).FindStringSubmatch(res.Content)
+			if m == nil {
+				t.Fatalf("write_file reported no line count: %q", res.Content)
+			}
+			said, err := strconv.Atoi(m[1])
+			if err != nil {
+				t.Fatal(err)
+			}
+			if want := readFileTotalLines(t, workspace, "out.txt"); said != want {
+				t.Errorf("write_file says it wrote %d lines and read_file finds %d in %q", said, want, tc.content)
+			}
+		})
+	}
+}
+
 // lineSpans is the one splitter the file tools count with, so its own rules are
 // worth stating directly: a terminated last line adds no empty line after it,
 // and 1-based numbering runs to exactly the number of lines the file has.

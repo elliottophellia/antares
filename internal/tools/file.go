@@ -349,12 +349,10 @@ func (writeFileTool) Execute(_ context.Context, in Input) Result {
 		verb = "Appended to"
 	}
 	rel := relTo(in.Workspace, path)
-	lines := 0
-	if content != "" {
-		lines = strings.Count(content, "\n") + 1
-	}
+	// The same splitter the other three tools count with, so what the write
+	// says it put in the file is what a read of it comes back with.
 	return Result{
-		Content: fmt.Sprintf("%s %s (%d bytes, %d lines)", verb, rel, len(content), lines),
+		Content: fmt.Sprintf("%s %s (%d bytes, %d lines)", verb, rel, len(content), len(lineSpans(content))),
 		Meta:    map[string]any{"path": rel, "bytes": len(content)},
 	}
 }
