@@ -21,8 +21,8 @@ func TestReadAndEditPreserveTabbedCRLFContent(t *testing.T) {
 	if read.IsError {
 		t.Fatalf("read_file: %s", read.Content)
 	}
-	if !strings.Contains(read.Content, "2|\treturn !failed;") {
-		t.Fatalf("read output does not preserve indentation unambiguously: %q", read.Content)
+	if !strings.Contains(read.Content, "\treturn !failed;\r\n") {
+		t.Fatalf("read output does not preserve the line's tab and CRLF: %q", read.Content)
 	}
 
 	edit := (editFileTool{}).Execute(context.Background(), Input{
@@ -42,9 +42,9 @@ func TestReadAndEditPreserveTabbedCRLFContent(t *testing.T) {
 	}
 }
 
-// Model copies old_string from read_file output, which always uses LF, even when
-// the on-disk file is CRLF. edit_file must still match and preserve the file's
-// original line endings on write.
+// A model writes \n for a line break whatever the file it read uses, so an
+// old_string copied out of a CRLF file commonly comes back with LF. edit_file
+// must still match it and preserve the file's original line endings on write.
 func TestEditFileMatchesCRLFWhenCopiedFromRead(t *testing.T) {
 	workspace := t.TempDir()
 	path := filepath.Join(workspace, "win.go")
@@ -59,15 +59,12 @@ func TestEditFileMatchesCRLFWhenCopiedFromRead(t *testing.T) {
 		t.Fatalf("read: %s", read.Content)
 	}
 
-	var copied []string
-	for _, line := range strings.Split(strings.TrimSuffix(read.Content, "\n"), "\n") {
-		_, content, ok := strings.Cut(line, "|")
-		if !ok {
-			t.Fatalf("read line missing NUMBER| separator: %q", line)
-		}
-		copied = append(copied, content)
+	body := readFileBody(t, read.Content)
+	if body != original {
+		t.Fatalf("read_file returned something other than the file's bytes: %q", body)
 	}
-	// Function body as the model would reassemble it from the LF display.
+	copied := strings.Split(strings.TrimSuffix(body, "\r\n"), "\r\n")
+	// Function body as the model reassembles it, with LF for every break.
 	oldString := strings.Join(copied[2:5], "\n")
 	newString := strings.Replace(oldString, "hi", "bye", 1)
 
@@ -337,12 +334,14 @@ func TestReadFileTruncationDoesNotSplitRune(t *testing.T) {
 	}
 }
 
-// Classic-Mac style lone CR line endings must display as separate lines, not
-// one giant line with embedded CR bytes.
-func TestReadFileDisplaysLoneCRLines(t *testing.T) {
+// Classic-Mac style lone CR line endings terminate lines, so such a file is
+// three lines rather than one — but counting them is no licence to rewrite
+// them, and edit_file matches the CR bytes that are really there.
+func TestReadFileCountsLoneCRLinesWithoutRewritingThem(t *testing.T) {
 	workspace := t.TempDir()
 	path := filepath.Join(workspace, "old.txt")
-	if err := os.WriteFile(path, []byte("a\rb\rc"), 0o644); err != nil {
+	original := "a\rb\rc"
+	if err := os.WriteFile(path, []byte(original), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	in := Input{Workspace: workspace, Args: []byte(`{"path":"old.txt"}`)}
@@ -350,8 +349,11 @@ func TestReadFileDisplaysLoneCRLines(t *testing.T) {
 	if result.IsError {
 		t.Fatalf("read failed: %s", result.Content)
 	}
-	if !strings.Contains(result.Content, "1|a\n2|b\n3|c") {
-		t.Fatalf("lone-CR file not split into lines: %q", result.Content)
+	if !strings.HasPrefix(result.Content, "old.txt — lines 1-3 of 3\n\n") {
+		t.Fatalf("lone-CR file not counted as three lines: %q", result.Content)
+	}
+	if body := readFileBody(t, result.Content); body != original {
+		t.Fatalf("lone-CR bytes rewritten for display: %q, want %q", body, original)
 	}
 }
 

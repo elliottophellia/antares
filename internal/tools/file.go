@@ -141,7 +141,7 @@ type readFileTool struct{}
 
 func (readFileTool) Name() string { return "read_file" }
 func (readFileTool) Description() string {
-	return "Read a text file from the workspace. Returns NUMBER|CONTENT lines; only text after | belongs in edit_file.old_string. Use offset/limit for large files."
+	return "Read a text file from the workspace. Returns a header line naming the path and line range, a blank line, then the file's exact bytes — copy any region of it straight into edit_file.old_string. Use offset/limit for large files."
 }
 func (readFileTool) Schema() map[string]any {
 	return schema(map[string]any{
@@ -211,17 +211,41 @@ func (readFileTool) Execute(_ context.Context, in Input) Result {
 		end = len(lines)
 	}
 
-	var b strings.Builder
-	for i := start; i < end; i++ {
-		fmt.Fprintf(&b, "%d|%s\n", i+1, content[lines[i].start:lines[i].end])
+	// The selected lines' own bytes, terminators included, so what the model is
+	// shown is what edit_file can find. Slicing to the start of the line after
+	// the range keeps the last terminator; nothing here rewrites tabs, CRLF or
+	// a lone CR.
+	body := ""
+	if start < end {
+		to := len(content)
+		if end < len(lines) {
+			to = lines[end].start
+		}
+		body = content[lines[start].start:to]
 	}
+	// An empty file has no line 1, so the header names no line rather than
+	// inventing one.
+	first := start + 1
+	if start == end {
+		first = 0
+	}
+
+	rel := relTo(in.Workspace, path)
+	var b strings.Builder
+	fmt.Fprintf(&b, "%s — lines %d-%d of %d\n\n", rel, first, end, len(lines))
+	b.WriteString(body)
 	if end < len(lines) {
 		fmt.Fprintf(&b, "\n… %d more lines (use offset=%d to continue)\n", len(lines)-end, end+1)
 	}
 	if truncatedBytes {
 		b.WriteString("\n… file truncated at 400 KB\n")
 	}
-	return Result{Content: b.String(), Meta: map[string]any{"path": relTo(in.Workspace, path), "lines": len(lines)}}
+	return Result{Content: b.String(), Meta: map[string]any{
+		"path":        rel,
+		"first_line":  first,
+		"last_line":   end,
+		"total_lines": len(lines),
+	}}
 }
 
 // ---- write_file -------------------------------------------------------------
