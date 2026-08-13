@@ -118,8 +118,11 @@ below is done and green unless called out under **Next Steps**.
    to one file from one edit made three times, so it fired on ordinary work, which
    for a coding agent is most of the work. **Do not reintroduce it.** `repeatKey`
    is now uniform over the full normalised arguments for every tool, and
-   `internal/agent/repeat_guard_test.go` fails if any tool is given a coarser key
-   again. The loop itself is therefore still unsolved: a model that varies the
+   `internal/agent/repeat_guard_test.go` fails if `write_file`, `edit_file` or
+   `vps_upload` is given a coarser key again. Those are the three names that ever
+   carried a special case, and the test names each of them; it asserts nothing
+   about any other tool, so a coarser key introduced for a different tool would
+   pass. The loop itself is therefore still unsolved: a model that varies the
    content each time is bounded only by the ceilings below, and any replacement
    needs a signal other than the call fingerprint. This is what produced the giant
    turn that caused the OOM in item 4 — the frontend is now hardened, but the loop
