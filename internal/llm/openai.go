@@ -386,8 +386,13 @@ func (c *openAIClient) Stream(ctx context.Context, req Request, emit func(Event)
 		return nil, fmt.Errorf("%w: the stream ended without [DONE] or a finish_reason", ErrStreamTruncated)
 	}
 	// The dialect has no per-call terminator, so the stream's own terminal is
-	// what says every call it carried was fully sent.
-	acc.markAllComplete()
+	// what says every call it carried was fully sent. At the token cap it says
+	// no such thing: the answer can stop between a call's name and its
+	// arguments and still be framed correctly, so leave those calls unmarked
+	// and let result() refuse whatever the model did not finish asking for.
+	if finish != "length" {
+		acc.markAllComplete()
+	}
 
 	calls, err := acc.result()
 	if err != nil {

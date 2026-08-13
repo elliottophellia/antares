@@ -489,7 +489,18 @@ func sseLines(r io.Reader, fn func(event, data string) error) error {
 		}
 	}
 	if err := sc.Err(); err != nil {
-		return err
+		// A read that dies part-way through is a body that stopped early,
+		// whatever the socket called it: unexpected EOF, a peer reset, a
+		// chunked frame that never landed. Left raw it matches nothing
+		// Retryable looks for and fails the turn outright. Cancellation and
+		// the idle timeout are the caller's own doing, and a line too long for
+		// the buffer arrives the same oversized way however often it is asked
+		// for, so none of those three are truncation and none is worth a retry.
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) ||
+			errors.Is(err, bufio.ErrTooLong) {
+			return err
+		}
+		return fmt.Errorf("%w: %w", ErrStreamTruncated, err)
 	}
 	if err := flush(); err != nil && !errors.Is(err, io.EOF) {
 		return err
