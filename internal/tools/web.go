@@ -33,6 +33,9 @@ func (webFetchTool) Schema() map[string]any {
 	}, "url")
 }
 
+// UntrustedOutput reports that a fetched page is written by whoever owns it.
+func (webFetchTool) UntrustedOutput() bool { return true }
+
 func (webFetchTool) Execute(ctx context.Context, in Input) Result {
 	var args struct {
 		URL      string `json:"url"`
@@ -153,6 +156,10 @@ func (webSearchTool) Schema() map[string]any {
 		"max_results": propDefault("integer", "Number of results to return.", 8),
 	}, "query")
 }
+
+// UntrustedOutput reports that titles and snippets are written by the pages
+// they point at.
+func (webSearchTool) UntrustedOutput() bool { return true }
 
 func (webSearchTool) Execute(ctx context.Context, in Input) Result {
 	var args struct {

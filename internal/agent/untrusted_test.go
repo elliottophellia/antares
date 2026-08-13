@@ -5,13 +5,18 @@ import "strings"
 import "testing"
 
 func TestUntrustedToolClassification(t *testing.T) {
-	for _, name := range []string{"web_fetch", "web_search", "browser", "http_request", "mcp__server__tool"} {
-		if !untrustedTool(name) {
+	for _, name := range []string{"web_fetch", "web_search", "browser", "http_request"} {
+		if !untrustedTool(lookupTool(t, name)) {
 			t.Errorf("%s should be treated as untrusted", name)
 		}
 	}
+	// A tool borrowed from an MCP server is written outside this codebase, so
+	// its name is the only declaration available.
+	if !untrustedTool(writingTool{"mcp__server__tool"}) {
+		t.Error("a tool from an MCP server should be treated as untrusted")
+	}
 	for _, name := range []string{"read_file", "terminal", "memory", "skill"} {
-		if untrustedTool(name) {
+		if untrustedTool(lookupTool(t, name)) {
 			t.Errorf("%s should not be treated as untrusted", name)
 		}
 	}

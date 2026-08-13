@@ -135,6 +135,10 @@ func (browserTool) Schema() map[string]any {
 // a page as the signed-in user.
 func (browserTool) RequiresApproval() bool { return true }
 
+// UntrustedOutput reports that page text, snapshots, and console output are
+// written by the site being driven.
+func (browserTool) UntrustedOutput() bool { return true }
+
 func (browserTool) Execute(ctx context.Context, in Input) Result {
 	var args struct {
 		Action  string `json:"action"`

@@ -3,6 +3,7 @@ package tools
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
@@ -592,6 +593,12 @@ func (terminalTool) Schema() map[string]any {
 		"timeout":    propDefault("integer", "Foreground: seconds before aborting. Background: optional total runtime limit; zero means no runtime limit.", 0),
 		"background": propDefault("boolean", "Start as a managed background process and return immediately with a process_id. Use for builds, analysis, imports, servers, and other commands whose duration is unknown.", false),
 	}, "command")
+}
+
+// ShellCommand lets callers read the command this call would run without
+// knowing which tool holds the shell.
+func (terminalTool) ShellCommand(args json.RawMessage) (string, bool) {
+	return commandArgument(args)
 }
 
 func (terminalTool) Execute(ctx context.Context, in Input) Result {

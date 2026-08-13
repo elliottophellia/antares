@@ -941,7 +941,7 @@ func (a *Agent) executeTools(
 		// What the model sees may be fenced as untrusted; what the UI shows stays
 		// raw. Errors are our own messages, so they are never fenced.
 		modelContent := content
-		if !res.IsError && a.config().Agent.WrapUntrustedOutput && untrustedTool(call.Name) {
+		if !res.IsError && a.config().Agent.WrapUntrustedOutput && untrustedTool(tool) {
 			modelContent = wrapUntrusted(call.Name, content)
 		}
 
@@ -1163,13 +1163,14 @@ func (a *Agent) guardrailTripped(toolCalls int, emit Emit) bool {
 
 // untrustedTool reports whether a tool returns content fetched from outside —
 // web pages, HTTP responses, search snippets, or MCP servers — which an attacker
-// could have seeded with instructions aimed at the model.
-func untrustedTool(name string) bool {
-	switch name {
-	case "web_fetch", "web_search", "browser", "http_request":
+// could have seeded with instructions aimed at the model. A tool borrowed from
+// an MCP server is written outside this codebase and so cannot declare the
+// capability in Go; for those the namespace is the declaration.
+func untrustedTool(tool tools.Tool) bool {
+	if tools.ReturnsUntrustedOutput(tool) {
 		return true
 	}
-	return strings.HasPrefix(name, tools.MCPPrefix)
+	return strings.HasPrefix(tool.Name(), tools.MCPPrefix)
 }
 
 // wrapUntrusted fences external content so the model reads it as data. The
