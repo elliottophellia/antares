@@ -37,6 +37,88 @@ type content struct {
 	// Non-text content is summarised rather than inlined.
 	MimeType string `json:"mimeType,omitempty"`
 	Data     string `json:"data,omitempty"`
+	// Resource holds an embedded resource's own payload. Filesystem, git and
+	// docs servers answer with these rather than with plain text.
+	Resource *resourceContents `json:"resource,omitempty"`
+}
+
+// resourceContents is a resource's payload: inline text or base64 bytes. Both
+// an embedded resource in a tool result and a resources/read reply use it.
+type resourceContents struct {
+	URI      string `json:"uri"`
+	MimeType string `json:"mimeType"`
+	Text     string `json:"text"`
+	Blob     string `json:"blob"`
+}
+
+// describe names a resource for a summary line.
+func (r resourceContents) describe() string {
+	uri := r.URI
+	if uri == "" {
+		uri = "no uri"
+	}
+	mime := r.MimeType
+	if mime == "" {
+		mime = "unknown type"
+	}
+	return fmt.Sprintf("%s (%s)", uri, mime)
+}
+
+// render returns the text this resource contributes, or "" when it carries no
+// payload. Bytes are named rather than inlined: the model cannot use base64 and
+// it would crowd out the rest of the context.
+func (r resourceContents) render() string {
+	switch {
+	case r.Text != "":
+		return r.Text
+	case r.Blob != "":
+		return fmt.Sprintf("[resource: %s, %d bytes base64]", r.describe(), len(r.Blob))
+	default:
+		return ""
+	}
+}
+
+// flattenContent renders a tool result to text and reports the kinds of content
+// it could not represent. The two are kept apart because "the server said
+// nothing" and "the server said something this client cannot read" call for
+// different answers to the model.
+func flattenContent(items []content) (string, []string) {
+	var b strings.Builder
+	var skipped []string
+	skip := func(kind string) {
+		for _, seen := range skipped {
+			if seen == kind {
+				return
+			}
+		}
+		skipped = append(skipped, kind)
+	}
+
+	for _, item := range items {
+		switch item.Type {
+		case "text":
+			b.WriteString(item.Text)
+			b.WriteString("\n")
+		case "image":
+			fmt.Fprintf(&b, "[image: %s, %d bytes base64]\n", item.MimeType, len(item.Data))
+		case "resource":
+			var line string
+			if item.Resource != nil {
+				line = item.Resource.render()
+			}
+			if line == "" {
+				skip("resource with no text or blob")
+				continue
+			}
+			b.WriteString(line)
+			b.WriteString("\n")
+		case "":
+			skip("item with no type")
+		default:
+			skip(item.Type)
+		}
+	}
+	return strings.TrimSpace(b.String()), skipped
 }
 
 // CallResult is the outcome of calling an MCP tool.
@@ -253,20 +335,15 @@ func (c *Client) Call(ctx context.Context, tool string, args map[string]any) (*C
 		return nil, fmt.Errorf("decode tool result: %w", err)
 	}
 
-	var b strings.Builder
-	for _, item := range out.Content {
-		switch item.Type {
-		case "text":
-			b.WriteString(item.Text)
-			b.WriteString("\n")
-		case "image":
-			fmt.Fprintf(&b, "[image: %s, %d bytes base64]\n", item.MimeType, len(item.Data))
-		case "resource":
-			fmt.Fprintf(&b, "[resource: %s]\n", item.MimeType)
-		}
-	}
-	text := strings.TrimSpace(b.String())
+	text, skipped := flattenContent(out.Content)
 	if text == "" {
+		// Nothing renderable came back. If the server did send something, say
+		// what it was: reporting it as an empty success would tell the model the
+		// tool ran and had nothing to report, so it proceeds instead of retrying.
+		if len(skipped) > 0 {
+			return nil, fmt.Errorf("tool %q returned only content this client cannot represent: %s",
+				tool, strings.Join(skipped, ", "))
+		}
 		text = "(no content returned)"
 	}
 	return &CallResult{Text: text, IsError: out.IsError}, nil
@@ -318,23 +395,22 @@ func (c *Client) ReadResource(ctx context.Context, uri string) (string, error) {
 		return "", resp.Error
 	}
 	var out struct {
-		Contents []struct {
-			URI      string `json:"uri"`
-			MimeType string `json:"mimeType"`
-			Text     string `json:"text"`
-			Blob     string `json:"blob"`
-		} `json:"contents"`
+		Contents []resourceContents `json:"contents"`
 	}
 	if err := json.Unmarshal(resp.Result, &out); err != nil {
 		return "", err
 	}
+	// No contents at all is this server saying it does not hold the resource.
+	// Manager.ReadResource asks one server after another, so this has to be an
+	// error for the search to continue past the first server that lacks it.
+	if len(out.Contents) == 0 {
+		return "", fmt.Errorf("server %q has no resource with uri %q", c.name, uri)
+	}
 	var b strings.Builder
 	for _, part := range out.Contents {
-		if part.Text != "" {
-			b.WriteString(part.Text)
+		if line := part.render(); line != "" {
+			b.WriteString(line)
 			b.WriteString("\n")
-		} else if part.Blob != "" {
-			fmt.Fprintf(&b, "[binary resource: %s, %d bytes base64]\n", part.MimeType, len(part.Blob))
 		}
 	}
 	text := strings.TrimSpace(b.String())

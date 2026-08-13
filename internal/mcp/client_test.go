@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"os"
 	"os/exec"
+	"strings"
 	"testing"
 	"time"
 
@@ -262,6 +263,13 @@ func TestHelperServer(t *testing.T) {
 				// transport self-closes.
 				continue
 			}
+			// "raw" replies with the result frame the caller supplied, so a test
+			// can drive Call with any content shape the protocol allows.
+			if p.Name == "raw" {
+				result, _ := p.Arguments["result"].(string)
+				reply(req.ID, json.RawMessage(result))
+				continue
+			}
 			if p.Name != "echo" {
 				reply(req.ID, map[string]any{
 					"isError": true,
@@ -273,6 +281,24 @@ func TestHelperServer(t *testing.T) {
 			reply(req.ID, map[string]any{
 				"content": []map[string]any{{"type": "text", "text": "echo: " + text}},
 			})
+		case "resources/read":
+			var p struct {
+				URI string `json:"uri"`
+			}
+			_ = json.Unmarshal(req.Params, &p)
+			// A "raw:" uri carries the result frame to answer with, so a test
+			// can drive ReadResource with any contents shape.
+			if result, ok := strings.CutPrefix(p.URI, "raw:"); ok {
+				reply(req.ID, json.RawMessage(result))
+				continue
+			}
+			out := map[string]any{
+				"jsonrpc": "2.0",
+				"id":      req.ID,
+				"error":   map[string]any{"code": -32002, "message": "no such resource " + p.URI},
+			}
+			b, _ := json.Marshal(out)
+			os.Stdout.Write(append(b, '\n'))
 		}
 	}
 }
