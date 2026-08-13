@@ -444,7 +444,7 @@ func (editFileTool) Execute(_ context.Context, in Input) Result {
 	// about what was written. newString is the string that actually reached
 	// disk, so the LF-to-CRLF recovery — which already translated it — cannot
 	// trip this.
-	if fileEOL(content) == "\r\n" && strings.Contains(newString, "\n") && !strings.Contains(newString, "\r\n") {
+	if fileEOL(content) == "\r\n" && hasBareLF(newString) {
 		msg += " Note: the file uses CRLF line endings and new_string used LF, so the replaced region now has LF line breaks. It was written exactly as given; send new_string with \\r\\n breaks if the file must stay consistent."
 	}
 	return Result{
@@ -468,6 +468,14 @@ func fileEOL(s string) string {
 		return "\r"
 	}
 	return "\n"
+}
+
+// hasBareLF reports whether s breaks a line with an LF that is not half of a
+// CRLF pair. Asking instead whether s contains a CRLF anywhere answers a
+// different question: a replacement that mixes the two leaves the file just as
+// inconsistent as an all-LF one, and its single bare LF is the harder to see.
+func hasBareLF(s string) bool {
+	return strings.Count(s, "\n") > strings.Count(s, "\r\n")
 }
 
 // eolOf reports the single newline flavor used in s, or "" when s has no

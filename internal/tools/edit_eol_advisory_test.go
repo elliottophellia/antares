@@ -30,6 +30,30 @@ func TestEditNotesLFReplacementLandingInACRLFFile(t *testing.T) {
 	}
 }
 
+// A replacement that mixes the two flavors leaves the file exactly as
+// inconsistent as an all-LF one, and hides it better: the model wrote most of
+// its breaks the way the file has them, so the one it did not is the easiest
+// to miss. Asking whether new_string contains a CRLF anywhere answers a
+// different question and skips the note here.
+func TestEditNotesAReplacementThatMixesItsOwnLineEndings(t *testing.T) {
+	said, isError, after := editOnDisk(t, "win.txt", "alpha\r\nbeta\r\ngamma\r\n", map[string]any{
+		"path":       "win.txt",
+		"old_string": "beta\r\ngamma",
+		"new_string": "one\r\ntwo\nthree",
+	})
+	if isError {
+		t.Fatalf("a byte-exact anchor was refused: %s", said)
+	}
+	if want := "alpha\r\none\r\ntwo\nthree\r\n"; after != want {
+		t.Fatalf("new_string was not written verbatim\nwant %q\ngot  %q", want, after)
+	}
+	for _, want := range []string{"CRLF line endings", "LF line breaks"} {
+		if !strings.Contains(said, want) {
+			t.Errorf("a bare LF landed in a CRLF file with no mention of %q: %s", want, said)
+		}
+	}
+}
+
 // The note describes one situation, so it must appear in exactly that one. On
 // every other path it is either false or noise, and a note the caller learns to
 // ignore is worse than no note at all.
