@@ -27,6 +27,7 @@ import {
 import { copyText } from '@/lib/clipboard'
 import { useI18n, useTimeAgo, type MessageKey } from '@/lib/i18n'
 import { cn } from '@/lib/utils'
+import { changedFilesFromMessages } from '@/lib/toolCallState'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/primitives'
 import { SkeletonMessage } from '@/components/ui/skeleton'
@@ -56,8 +57,10 @@ export interface ToolCallView {
   args: string
   result?: string
   isError?: boolean
-  progress?: string
+  // A result is the completion marker. Hydrated calls without one were
+  // interrupted before the server recorded their outcome.
   running?: boolean
+  progress?: string
 }
 
 /** One part of an assistant turn, in the order it happened. */
@@ -481,30 +484,7 @@ export default function ChatPage() {
     return [...by.values()].sort((a, b) => (b.last ?? '').localeCompare(a.last ?? '') || b.count - a.count)
   }, [messages])
 
-  // Files the agent wrote/edited this session, newest first and de-duplicated —
-  // drives the sidebar's Changes tab. Parsed from write_file/edit_file calls.
-  const changedFiles = useMemo(() => {
-    const seen = new Set<string>()
-    const out: { path: string; tool: string }[] = []
-    for (let i = messages.length - 1; i >= 0; i--) {
-      const calls = messages[i].toolCalls
-      if (!calls) continue
-      for (let j = calls.length - 1; j >= 0; j--) {
-        const c = calls[j]
-        if (c.name !== 'write_file' && c.name !== 'edit_file') continue
-        try {
-          const path = String(JSON.parse(c.args)?.path ?? '').trim()
-          if (path && !seen.has(path)) {
-            seen.add(path)
-            out.push({ path, tool: c.name })
-          }
-        } catch {
-          /* ignore unparseable args */
-        }
-      }
-    }
-    return out
-  }, [messages])
+  const changedFiles = useMemo(() => changedFilesFromMessages(messages), [messages])
 
   const abortRef = useRef<(() => void) | null>(null)
   // The bound project dir tracked in a ref, so a turn fired immediately after

@@ -468,6 +468,8 @@ const en = {
   'chat.toolArgs': 'Arguments',
   'chat.toolResult': 'Result',
   'chat.toolError': 'error',
+  'chat.toolIncomplete': 'incomplete',
+  'chat.toolIncompleteDetail': 'This tool call did not finish; no result was recorded.',
   'chat.nLines': '{n} lines',
   'chat.tasks': 'Tasks',
   'chat.copyCode': 'Copy code',

@@ -18,6 +18,7 @@ import {
 import { cn } from '@/lib/utils'
 import type { ToolCallView } from '@/pages/ChatPage'
 import { useI18n } from '@/lib/i18n'
+import { isIncompleteToolCall } from '@/lib/toolCallState'
 
 type IconType = React.ComponentType<{ className?: string; weight?: 'regular' | 'fill' }>
 type Meta = { label: string; Icon: IconType }
@@ -151,6 +152,7 @@ export const ToolCallCard = memo(function ToolCallCard({ call }: { call: ToolCal
   const isDiff = isEdit || isCreate
   const isRead = call.name === 'read_file'
   const output = call.result ?? call.progress ?? ''
+  const incomplete = isIncompleteToolCall(call)
 
   // Only the file tools render as filename-over-directory. Other tools may also
   // carry a `path` arg (e.g. view_image with a URL), but for them that is just
@@ -172,15 +174,21 @@ export const ToolCallCard = memo(function ToolCallCard({ call }: { call: ToolCal
 
   const canExpand = call.isError
     ? !!output
-    : isDiff
-      ? diff.rows.length > 0
-      : (call.args && call.args !== '{}') || !!output
+    : incomplete
+      ? true
+      : isDiff
+        ? diff.rows.length > 0
+        : (call.args && call.args !== '{}') || !!output
 
   // Right-side status: a diff tally for edits, "N lines" for reads, a spinner
   // while running, else a short result echo.
   const right = call.isError ? (
     <span className="max-w-48 truncate text-[10px] font-semibold text-destructive" title={output}>
       {output.trim().split('\n')[0] || t('chat.toolError')}
+    </span>
+  ) : incomplete ? (
+    <span className="text-[10px] font-semibold text-[var(--warning)]" title={t('chat.toolIncomplete')}>
+      {t('chat.toolIncomplete')}
     </span>
   ) : isDiff ? (
     <span className="flex items-center gap-1.5 text-[10px] font-semibold tabular-nums">
@@ -209,7 +217,7 @@ export const ToolCallCard = memo(function ToolCallCard({ call }: { call: ToolCal
     <div
       className={cn(
         'overflow-hidden rounded-[var(--radius-sm)] border bg-card',
-        call.isError ? 'border-destructive/40' : 'border-border',
+        call.isError ? 'border-destructive/40' : incomplete ? 'border-[var(--warning)]/40' : 'border-border',
       )}
     >
       <button
@@ -312,7 +320,7 @@ export const ToolCallCard = memo(function ToolCallCard({ call }: { call: ToolCal
                 </pre>
               </div>
             ) : null}
-            {output ? (
+            {output || incomplete ? (
               <div>
                 <p className="mb-1 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
                   {t('chat.toolResult')}
@@ -321,9 +329,10 @@ export const ToolCallCard = memo(function ToolCallCard({ call }: { call: ToolCal
                   className={cn(
                     'max-h-80 overflow-auto whitespace-pre-wrap break-words rounded bg-muted/50 p-2 font-mono text-[11px]',
                     call.isError && 'text-destructive',
+                    incomplete && 'text-[var(--warning)]',
                   )}
                 >
-                  {output}
+                  {output || t('chat.toolIncompleteDetail')}
                 </pre>
               </div>
             ) : null}
