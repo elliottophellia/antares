@@ -69,11 +69,13 @@ func (r resourceContents) describe() string {
 }
 
 // render returns the text this resource contributes, which is empty for an
-// empty file. Bytes are named rather than inlined: the model cannot use base64
-// and it would crowd out the rest of the context.
+// empty file. Text wins over bytes only when it has something in it: a server
+// marshalling both keys sends "text": "" with every binary resource, and an
+// empty string must not hide the bytes sent beside it. Bytes are named rather
+// than inlined: the model cannot use base64 and it would crowd out the context.
 func (r resourceContents) render() string {
 	switch {
-	case r.Text != nil:
+	case r.Text != nil && *r.Text != "":
 		return *r.Text
 	case r.Blob != nil && *r.Blob != "":
 		return fmt.Sprintf("[resource: %s, %d bytes base64]", r.describe(), len(*r.Blob))

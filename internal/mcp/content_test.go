@@ -27,6 +27,12 @@ func helperClient(t *testing.T) *Client {
 	return client
 }
 
+// cannotRepresent is the whole error Call returns for a result it could not
+// render, so a table row pins the message instead of a fragment of it.
+func cannotRepresent(kinds string) string {
+	return `tool "raw" returned only content this client cannot represent: ` + kinds
+}
+
 // TestCallContent drives Call over the tool result shapes a server may legally
 // return. A result the client cannot represent must say so rather than pass for
 // an empty success: the model would otherwise proceed believing the tool ran and
@@ -38,7 +44,8 @@ func TestCallContent(t *testing.T) {
 	cases := []struct {
 		name string
 		raw  string
-		// wantErr is a substring the error must contain; empty means no error.
+		// wantErr is the whole error, not a fragment of it: a substring here
+		// cannot tell a deduplicated list of kinds from a repeated one.
 		wantErr  string
 		wantText string
 	}{
@@ -63,6 +70,18 @@ func TestCallContent(t *testing.T) {
 			wantText: "[resource: file:///a.png (image/png), 8 bytes base64]",
 		},
 		{
+			// A server marshalling a struct with both fields and no omitempty
+			// sends "text": "" with every binary resource.
+			name:     "blob beside an empty text",
+			raw:      `{"content":[{"type":"resource","resource":{"uri":"file:///a.png","mimeType":"image/png","text":"","blob":"QUJDRA=="}}]}`,
+			wantText: "[resource: file:///a.png (image/png), 8 bytes base64]",
+		},
+		{
+			name:     "text beside a blob",
+			raw:      `{"content":[{"type":"resource","resource":{"uri":"file:///a.png","mimeType":"image/png","text":"HELLO","blob":"QUJDRA=="}}]}`,
+			wantText: "HELLO",
+		},
+		{
 			name:     "embedded resource holding an empty binary file",
 			raw:      `{"content":[{"type":"resource","resource":{"uri":"file:///empty.bin","mimeType":"application/octet-stream","blob":""}}]}`,
 			wantText: "(no content returned)",
@@ -75,32 +94,32 @@ func TestCallContent(t *testing.T) {
 		{
 			name:    "image with no data",
 			raw:     `{"content":[{"type":"image","mimeType":"image/png"}]}`,
-			wantErr: "cannot represent: image with no data",
+			wantErr: cannotRepresent("image with no data"),
 		},
 		{
 			name:    "audio only",
 			raw:     `{"content":[{"type":"audio","data":"QUJDRA==","mimeType":"audio/wav"}]}`,
-			wantErr: "cannot represent: audio",
+			wantErr: cannotRepresent("audio"),
 		},
 		{
 			name:    "unknown type only",
 			raw:     `{"content":[{"type":"hologram","data":"QUJDRA=="}]}`,
-			wantErr: "cannot represent: hologram",
+			wantErr: cannotRepresent("hologram"),
 		},
 		{
 			name:    "resource with no payload key",
 			raw:     `{"content":[{"type":"resource"}]}`,
-			wantErr: "cannot represent: resource with no text or blob",
+			wantErr: cannotRepresent("resource with no text or blob"),
 		},
 		{
 			name:    "resource with an empty payload object",
 			raw:     `{"content":[{"type":"resource","resource":{"uri":"file:///a"}}]}`,
-			wantErr: "cannot represent: resource with no text or blob",
+			wantErr: cannotRepresent("resource with no text or blob"),
 		},
 		{
 			name:    "a repeated kind is named once",
 			raw:     `{"content":[{"type":"audio","data":"a"},{"type":"hologram"},{"type":"audio","data":"b"}]}`,
-			wantErr: "cannot represent: audio, hologram",
+			wantErr: cannotRepresent("audio, hologram"),
 		},
 		{
 			name:     "text alongside audio",
@@ -126,10 +145,10 @@ func TestCallContent(t *testing.T) {
 			res, err := client.Call(ctx, "raw", map[string]any{"result": tc.raw})
 			if tc.wantErr != "" {
 				if err == nil {
-					t.Fatalf("Call returned %+v with no error, want one saying %q", res, tc.wantErr)
+					t.Fatalf("Call returned %+v with no error, want %q", res, tc.wantErr)
 				}
-				if !strings.Contains(err.Error(), tc.wantErr) {
-					t.Fatalf("error = %v, want it to say %q", err, tc.wantErr)
+				if err.Error() != tc.wantErr {
+					t.Fatalf("error = %q, want %q", err, tc.wantErr)
 				}
 				return
 			}
@@ -162,16 +181,12 @@ func TestCallErrorBoundsWhatTheServerNamed(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected an error naming the content this client cannot represent")
 	}
-	msg := err.Error()
-	if strings.Contains(msg, strings.Repeat("z", contentKindChars+1)) {
-		t.Fatalf("a server-supplied type reached the error untruncated: %s", msg)
-	}
-	// Nine distinct kinds arrived and five are named.
-	if !strings.Contains(msg, "and 4 more") {
-		t.Fatalf("error = %s, want it to count the kinds it did not name", msg)
-	}
-	if len(msg) > 400 {
-		t.Fatalf("error is %d bytes, want a bounded message: %s", len(msg), msg)
+	// Nine distinct kinds arrived: the first is cut to contentKindChars, four
+	// more are named, and the rest are counted rather than listed.
+	want := cannotRepresent(strings.Repeat("z", contentKindChars) +
+		", kind-0, kind-1, kind-2, kind-3, and 4 more")
+	if err.Error() != want {
+		t.Fatalf("error = %q, want %q", err, want)
 	}
 }
 
@@ -242,6 +257,16 @@ func TestReadResourcePayloads(t *testing.T) {
 			contents: `{"uri":"mem:///a.bin","mimeType":"application/octet-stream","blob":""}`,
 			wantText: "(resource is empty)",
 		},
+		{
+			name:     "blob beside an empty text",
+			contents: `{"uri":"mem:///a.bin","mimeType":"application/octet-stream","text":"","blob":"QUJDRA=="}`,
+			wantText: "[resource: mem:///a.bin (application/octet-stream), 8 bytes base64]",
+		},
+		{
+			name:     "text beside a blob",
+			contents: `{"uri":"mem:///a.bin","mimeType":"application/octet-stream","text":"BODY","blob":"QUJDRA=="}`,
+			wantText: "BODY",
+		},
 	}
 
 	for _, tc := range cases {
@@ -276,7 +301,10 @@ func TestManagerReadResourceRejectsEmptyAnswer(t *testing.T) {
 // for. The manager walks its servers in map order, so the answer must not depend
 // on which one it happens to ask first. The repetition is what makes the
 // regression visible: an implementation that takes the first empty reply as the
-// answer passes a single attempt about half the time.
+// answer only fails an attempt when the empty server is visited first, which
+// Go's iteration over a two-key map does about a quarter of the time. Measured
+// at eight attempts such an implementation still passed 5 runs in 40; thirty
+// puts that under one in a thousand.
 func TestManagerReadResourceKeepsSearchingPastAnEmptyServer(t *testing.T) {
 	manager := NewManager()
 	manager.Connect(context.Background(), &config.Config{MCP: config.MCP{
@@ -289,7 +317,7 @@ func TestManagerReadResourceKeepsSearchingPastAnEmptyServer(t *testing.T) {
 	defer manager.Close()
 
 	const uri = `raw:{"contents":[{"uri":"mem:///a","mimeType":"text/plain","text":"BODY"}]}`
-	for i := 0; i < 8; i++ {
+	for i := 0; i < 30; i++ {
 		text, err := manager.ReadResource(context.Background(), uri)
 		if err != nil {
 			t.Fatalf("attempt %d: %v", i, err)
