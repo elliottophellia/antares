@@ -169,6 +169,7 @@ interface SessionDetail {
     tool_call_id?: string
     tool_name?: string
     attachments?: string
+    meta?: { is_error?: boolean } | null
     created_at: string
     tokens_in: number
     tokens_out: number
@@ -189,6 +190,7 @@ function hydrate(detail: SessionDetail): ChatMessage[] {
       const call = pending.get(m.tool_call_id ?? '')
       if (call) {
         call.result = m.content
+        call.isError = m.meta?.is_error === true
         call.running = false
       }
       continue

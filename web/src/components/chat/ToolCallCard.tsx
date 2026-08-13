@@ -48,8 +48,9 @@ type Diff = { rows: DiffRow[]; added: number; removed: number }
 
 // Line-based diff (LCS) between old and new source, for the expanded edit view.
 function lineDiff(oldText: string, newText: string): Diff {
-  const a = (oldText || '').replace(/\n$/, '').split('\n')
-  const b = (newText || '').replace(/\n$/, '').split('\n')
+  if (!oldText && !newText) return { rows: [], added: 0, removed: 0 }
+  const a = oldText.replace(/\n$/, '').split('\n')
+  const b = newText.replace(/\n$/, '').split('\n')
   if (!oldText) {
     return { rows: b.map((text) => ({ type: 'add', text })), added: b.length, removed: 0 }
   }
@@ -169,17 +170,26 @@ export const ToolCallCard = memo(function ToolCallCard({ call }: { call: ToolCal
   // Lines read, for the collapsed read summary.
   const readLines = isRead && output.trim() ? output.trim().split('\n').length : 0
 
-  const canExpand = isDiff ? diff.rows.length > 0 : (call.args && call.args !== '{}') || !!output
+  const canExpand = call.isError
+    ? !!output
+    : isDiff
+      ? diff.rows.length > 0
+      : (call.args && call.args !== '{}') || !!output
 
   // Right-side status: a diff tally for edits, "N lines" for reads, a spinner
   // while running, else a short result echo.
   const right = call.isError ? (
-    <span className="text-[10px] font-semibold text-destructive">{t('chat.toolError')}</span>
+    <span className="max-w-48 truncate text-[10px] font-semibold text-destructive" title={output}>
+      {output.trim().split('\n')[0] || t('chat.toolError')}
+    </span>
   ) : isDiff ? (
     <span className="flex items-center gap-1.5 text-[10px] font-semibold tabular-nums">
       {call.running ? <CircleNotch className="size-3 animate-spin text-muted-foreground" /> : null}
       {diff.added > 0 ? <span className="text-emerald-500">+{diff.added}</span> : null}
       {diff.removed > 0 ? <span className="text-destructive">-{diff.removed}</span> : null}
+      {!call.running && diff.added === 0 && diff.removed === 0 ? (
+        <CheckCircle className="size-3.5 text-[var(--success)]" weight="fill" />
+      ) : null}
     </span>
   ) : call.running ? (
     <CircleNotch className="size-3.5 animate-spin text-muted-foreground" />
@@ -258,7 +268,7 @@ export const ToolCallCard = memo(function ToolCallCard({ call }: { call: ToolCal
       </button>
 
       {open && canExpand ? (
-        isDiff ? (
+        isDiff && !call.isError ? (
           <div className="border-t border-border bg-muted/30">
             <div className="max-h-64 overflow-auto py-1 font-mono text-[11px] leading-[1.5]">
               {diff.rows.map((r, ri) => (
