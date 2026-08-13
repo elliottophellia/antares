@@ -240,7 +240,7 @@ var Toolsets = map[string][]string{
 	"minimal": {"read_file", "list_files", "grep", "todo"},
 	"coding": {
 		"read_file", "read_document", "write_file", "edit_file", "list_files", "glob", "grep",
-		"terminal", "process", "todo", "board", "project_info", "set_soul", "skill", "delegate_task", "task", "list_roles", "diagnostics", "http_request", "ask_user", "schedule", "cursor_agent", "cursor_agent_status",
+		"terminal", "process", "todo", "board", "project_info", "set_soul", "skill", "delegate_task", "task", "list_roles", "diagnostics", "http_request", "ask_user", "schedule",
 	},
 	"research": {
 		"read_file", "read_document", "web_search", "web_fetch", "http_request", "browser", "grep", "todo", "memory",
@@ -269,7 +269,6 @@ var Toolsets = map[string][]string{
 		"web_fetch", "http_request", "browser", "web_search", "terminal", "process",
 		"read_file", "write_file", "list_files", "glob", "grep", "check_dependencies",
 		"todo", "report_finding", "add_intel", "methodology_status", "skill", "rag_search",
-		"cursor_agent", "cursor_agent_status",
 	},
 	"intercept": {
 		"intercept", "browser", "http_request", "web_fetch", "solve_captcha",
@@ -284,7 +283,7 @@ var Toolsets = map[string][]string{
 	"default": {
 		"read_file", "read_document", "write_file", "edit_file", "list_files", "glob", "grep",
 		"terminal", "process", "web_search", "web_fetch", "http_request", "browser", "todo", "board", "project_info", "set_soul", "memory", "list_proxies", "vps_run", "vps_upload", "vps_download",
-		"session_search", "rag_search", "rag_index", "skill", "delegate_task", "task", "list_roles", "image_generate", "view_image", "speak", "transcribe", "computer", "diagnostics", "ask_user", "schedule", "cursor_agent", "cursor_agent_status",
+		"session_search", "rag_search", "rag_index", "skill", "delegate_task", "task", "list_roles", "image_generate", "view_image", "speak", "transcribe", "computer", "diagnostics", "ask_user", "schedule",
 		"osint_dns", "osint_dorks", "osint_whois", "osint_ip", "osint_username", "osint_github", "osint_email", "osint_email_full", "osint_breach", "osint_shodan", "osint_reputation", "osint_crypto", "osint_domain", "osint_phone", "osint_scrape", "osint_paste", "osint_footprint", "osint_pivot", "osint_google", "osint_dorks_live", "check_dependencies", "re_info", "re_strings", "re_analyze", "re_decompile", "solve_captcha", "intercept",
 		"email_read", "temp_mail", "social_browser", "social_account",
 	},

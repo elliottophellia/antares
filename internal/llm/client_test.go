@@ -6,7 +6,6 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -146,13 +145,6 @@ func TestStreamingTimeoutTracksInactivityInsteadOfTotalDuration(t *testing.T) {
 	}
 	if text != "onetwothreefour" {
 		t.Fatalf("text = %q, want %q", text, "onetwothreefour")
-	}
-}
-
-func TestNewRejectsCursorAgentKind(t *testing.T) {
-	_, err := New(Options{Kind: "cursor-agent", BaseURL: "https://api.cursor.com"})
-	if err == nil || !strings.Contains(err.Error(), "cursor_agent") {
-		t.Fatalf("cursor-agent error = %v", err)
 	}
 }
 

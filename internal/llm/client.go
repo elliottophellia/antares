@@ -61,10 +61,6 @@ func New(o Options) (Client, error) {
 		o.HTTPClient = &http.Client{Timeout: o.Timeout}
 	}
 	o.BaseURL = strings.TrimRight(strings.TrimSpace(o.BaseURL), "/")
-	if strings.EqualFold(strings.TrimSpace(o.Kind), "cursor-agent") {
-		return nil, errors.New("cursor-agent is an agent integration; use the cursor_agent tool")
-	}
-
 	base, err := newBase(o)
 	if err != nil {
 		return nil, err

@@ -767,13 +767,6 @@ func cmdModel(args []string) error {
 	if len(args) > 1 {
 		resultProvider = args[1]
 	}
-	// An agent integration can never become the active chat model — refused
-	// here before any mutation, exactly as /model, the API, and the TUI do.
-	if providers.CapabilityOf(cfg, resultProvider) == providers.CapabilityAgent {
-		return fmt.Errorf(
-			"%s is an agent integration, not a chat model provider; use the cursor_agent tool",
-			resultProvider)
-	}
 	cfg.Model.Default = args[0]
 	cfg.Model.Provider = resultProvider
 	if cfg.Model.Provider != prevProvider {
@@ -830,9 +823,6 @@ func cmdProvider(args []string) error {
 			return fmt.Errorf("usage: antares provider use <id>")
 		}
 		id := args[1]
-		if providers.CapabilityOf(cfg, id) == providers.CapabilityAgent {
-			return fmt.Errorf("%s is an agent integration, not a chat model provider; use the cursor_agent tool", id)
-		}
 		if !providers.Connected(cfg, id) {
 			return fmt.Errorf("%s is not connected — run `antares provider add %s <api-key>`", id, id)
 		}
@@ -855,15 +845,6 @@ func cmdProvider(args []string) error {
 		info, known := providers.For(id)
 		if known && info.NeedsKey && key == "" && !providers.Connected(cfg, id) {
 			return fmt.Errorf("%s needs an API key: antares provider add %s <api-key>", info.Label, id)
-		}
-		if providers.CapabilityOf(cfg, id) == providers.CapabilityAgent {
-			providers.Connect(cfg, id, key)
-			if err := config.Save(cfg); err != nil {
-				return err
-			}
-			fmt.Printf("connected %s agent integration; active model remains %s (%s)\n",
-				id, cfg.Model.Default, cfg.Model.Provider)
-			return nil
 		}
 		providers.Activate(cfg, id, key)
 		if err := config.Save(cfg); err != nil {

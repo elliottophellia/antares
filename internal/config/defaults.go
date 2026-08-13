@@ -44,15 +44,6 @@ func Default() *Config {
 			"custom": {
 				Kind: "custom", Label: "Custom endpoint", Enabled: false, TimeoutSecs: 300,
 			},
-			// Opt-in, like every other provider the user must bring a key for.
-			// Enabled:true here would mean that merely having CURSOR_API_KEY in
-			// the environment lets the model spawn billable cloud agents — and
-			// the default approval_mode is "auto", so nothing would prompt.
-			// Turn it on from the Providers page when you actually want it.
-			"cursor": {
-				Kind: "cursor-agent", Label: "Cursor Cloud Agents", Enabled: false,
-				BaseURL: "https://api.cursor.com", APIKeyEnv: "CURSOR_API_KEY", TimeoutSecs: 900,
-			},
 		},
 		Database: Database{
 			Driver: "sqlite", DSN: filepath.Join(Home(), "antares.db"),
@@ -77,8 +68,6 @@ func Default() *Config {
 				"terminal": 300, "web_fetch": 60, "web_search": 30,
 				// VPS tools allow up to 900s per call; keep the agent envelope above that.
 				"vps_run": 960, "vps_upload": 960, "vps_download": 960,
-				// Cursor's provider wait defaults to 900s; leave envelope/serialization margin.
-				"cursor_agent": 960, "cursor_agent_status": 960,
 			},
 			WebSearch: WebSearch{Provider: "browser", MaxResults: 8},
 			Browser: Browser{
