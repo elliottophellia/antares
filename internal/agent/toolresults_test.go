@@ -278,6 +278,65 @@ func TestEnsureToolResults_OrphanResultIsNotAdoptedByALaterCall(t *testing.T) {
 	}
 }
 
+// The same orphan, with nothing live to lose the race to. persistContextCompact
+// cuts at throughSeq without rebalancing to a tool boundary, and loadHistory
+// rebuilds the tail from every row past it, so a reloaded history can open with
+// a tool message whose assistant turn was summarised away. A call that then
+// arrives under a recurring Gemini id must not be answered with it: that is
+// last hour's file contents presented as this turn's read, with nothing saying
+// so. A stub that admits no result was recorded is the honest answer.
+func TestEnsureToolResults_OrphanBeforeACallIsNeverBoundBackwards(t *testing.T) {
+	in := []llm.Message{
+		{Role: llm.RoleTool, ToolCallID: "call_0_read_file", Name: "read_file", Content: "STALE ORPHAN FROM AN EARLIER TURN"},
+		{Role: llm.RoleUser, Content: "[Compacted summary of the earlier conversation]"},
+		{Role: llm.RoleAssistant, ToolCalls: []llm.ToolCall{{ID: "call_0_read_file", Name: "read_file"}}},
+	}
+	got := roleAndContent(ensureToolResults(in))
+	want := []string{
+		"user:[Compacted summary of the earlier conversation]",
+		"assistant:",
+		"tool:" + noResultStub,
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("a call was answered with output produced before it was made:\n got %q\nwant %q", got, want)
+	}
+}
+
+// The other direction, which is what the second pass is for. A result may sit
+// past the end of its turn's span — the span closes at the next assistant
+// message, and a result can land after one — and reaching forward for it is the
+// difference between the model getting its output and getting a stub. Only
+// reaching backwards is forbidden.
+func TestEnsureToolResults_CallStillReachesPastItsOwnSpan(t *testing.T) {
+	in := []llm.Message{
+		{Role: llm.RoleAssistant, ToolCalls: []llm.ToolCall{{ID: "c1", Name: "read_file"}}},
+		{Role: llm.RoleAssistant, Content: "thinking out loud"},
+		{Role: llm.RoleTool, ToolCallID: "c1", Name: "read_file", Content: "REAL FILE CONTENT"},
+	}
+	got := roleAndContent(ensureToolResults(in))
+	want := []string{"assistant:", "tool:REAL FILE CONTENT", "assistant:thinking out loud"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("a real result was dropped and stubbed instead:\n got %q\nwant %q", got, want)
+	}
+}
+
+// Both rules at once: the live call takes the result that follows it even
+// though a later assistant message separates them, and the orphan in front of
+// it is dropped rather than adopted.
+func TestEnsureToolResults_ForwardReachDoesNotReopenTheBackwardOne(t *testing.T) {
+	in := []llm.Message{
+		{Role: llm.RoleTool, ToolCallID: "call_0_read_file", Name: "read_file", Content: "STALE ORPHAN"},
+		{Role: llm.RoleAssistant, ToolCalls: []llm.ToolCall{{ID: "call_0_read_file", Name: "read_file"}}},
+		{Role: llm.RoleAssistant, Content: "thinking out loud"},
+		{Role: llm.RoleTool, ToolCallID: "call_0_read_file", Name: "read_file", Content: "FRESH RESULT"},
+	}
+	got := roleAndContent(ensureToolResults(in))
+	want := []string{"assistant:", "tool:FRESH RESULT", "assistant:thinking out loud"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("binding picked the wrong result:\n got %q\nwant %q", got, want)
+	}
+}
+
 // The repair applies to what is sent, so the history it reads — which is what
 // gets persisted — must come back untouched.
 func TestEnsureToolResults_DoesNotMutateItsInput(t *testing.T) {

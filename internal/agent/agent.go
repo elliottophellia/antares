@@ -616,13 +616,14 @@ func (a *Agent) Run(ctx context.Context, req Request, emit Emit) (*Result, error
 		// it. The notice still fires now, so the user sees the repetition the
 		// moment it is detected.
 		var repeatNudge string
-		if stuck := repeats.record(resp.ToolCalls); len(stuck) > 0 {
-			if repeats.exceeded() {
-				_ = emit(Event{Type: EventNotice, Message: "stopped: the same tool call kept repeating"})
-				lastReply = "I was repeating the same step without making progress, so I stopped. " +
-					"Tell me what to try differently."
-				break
-			}
+		stuck, stop := repeats.check(resp.ToolCalls)
+		if stop {
+			_ = emit(Event{Type: EventNotice, Message: "stopped: the same tool call kept repeating"})
+			lastReply = "I was repeating the same step without making progress, so I stopped. " +
+				"Tell me what to try differently."
+			break
+		}
+		if len(stuck) > 0 {
 			_ = emit(Event{Type: EventNotice, Message: "repeating " + strings.Join(stuck, ", ")})
 			repeatNudge = "You have called " + strings.Join(stuck, " and ") +
 				" with the same arguments several times and it is not getting you anywhere. " +
@@ -1276,7 +1277,16 @@ func ensureToolResults(msgs []llm.Message) []llm.Message {
 				continue
 			}
 			for _, ri := range byID[msgs[t.at].ToolCalls[j].ID] {
-				if claimed[ri] || (inSpan && (ri < t.at || ri >= t.end)) {
+				// A result that appears before the call was produced before the
+				// call was made, so it can never be its answer — not in either
+				// pass. Only the forward bound is relaxed outside the span, for
+				// the result a later assistant message was appended in front
+				// of. Letting the second pass reach backwards too is how a
+				// history that opens with an orphaned tool message — the tail
+				// persistContextCompact leaves when it cuts at throughSeq — has
+				// last hour's output handed to a fresh call under a recurring
+				// id, with nothing marking it stale.
+				if claimed[ri] || ri < t.at || (inSpan && ri >= t.end) {
 					continue
 				}
 				claimed[ri] = true
@@ -1288,8 +1298,9 @@ func ensureToolResults(msgs []llm.Message) []llm.Message {
 	for i := range turns {
 		bind(&turns[i], true)
 	}
-	// Only now may a call reach outside its span, for the result that a later
-	// assistant message was appended in front of.
+	// Only now may a call reach past the end of its span, for the result that a
+	// later assistant message was appended in front of. It still may not reach
+	// back before itself.
 	for i := range turns {
 		bind(&turns[i], false)
 	}
