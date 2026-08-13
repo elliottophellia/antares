@@ -155,6 +155,11 @@ func globToRegexp(pattern string) (*regexp.Regexp, error) {
 
 // ---- grep -------------------------------------------------------------------
 
+// maxGrepFileBytes caps the size of a file grep will open, so a single huge log
+// cannot stall a search across a whole tree. A file above the cap is never
+// read, which is why the count of them has to reach the caller.
+const maxGrepFileBytes = 8 * 1024 * 1024
+
 type grepTool struct{}
 
 func (grepTool) Name() string { return "grep" }
@@ -218,6 +223,7 @@ func (grepTool) Execute(ctx context.Context, in Input) Result {
 		b        strings.Builder
 		matches  int
 		files    int
+		skipped  int
 		stopped  bool
 		warnings []string
 	)
@@ -308,13 +314,21 @@ func (grepTool) Execute(ctx context.Context, in Input) Result {
 			if includeRe != nil && !includeRe.MatchString(rel) && !includeRe.MatchString(filepath.Base(rel)) {
 				return nil
 			}
-			if info, err := d.Info(); err == nil && info.Size() > 8*1024*1024 {
+			if info, err := d.Info(); err == nil && info.Size() > maxGrepFileBytes {
+				skipped++
 				return nil
 			}
 			return searchFile(p, rel)
 		})
 	} else {
 		_ = searchFile(root, relTo(in.Workspace, root))
+	}
+
+	// Nothing opened these files, so a bare "no matches" would report them as
+	// match-free. One line for the whole run: a directory of large files would
+	// otherwise bury the result under a list of paths.
+	if skipped > 0 {
+		warnings = append(warnings, fmt.Sprintf("%d file(s) larger than %d MB were not searched, so this result cannot rule out a match in them", skipped, maxGrepFileBytes/(1024*1024)))
 	}
 
 	warn := ""
