@@ -28,6 +28,7 @@ import {
   Tabs,
   TabsList,
   TabsTrigger,
+  Textarea,
 } from '@/components/ui/primitives'
 import {
   Dialog,
@@ -267,12 +268,14 @@ function McpDocs() {
       transport: stdio
       command: npx
       args: ["-y", "@modelcontextprotocol/server-filesystem", "/home/you/data"]
+      # env:                              # optional
+      #   MY_VAR: "value"
     remote:
       enabled: true
       transport: http
       url: https://example.com/mcp
       headers:
-        Authorization: "Bearer …"`}
+        Authorization: "Bearer ..."`}
         </pre>
         <p className="mt-3 text-xs text-muted-foreground">{t('mcp.docsHint')}</p>
       </CardContent>
@@ -295,6 +298,7 @@ function AddMcpDialog({
   const [command, setCommand] = useState('')
   const [args, setArgs] = useState('')
   const [url, setUrl] = useState('')
+  const [envText, setEnvText] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string>()
 
@@ -304,6 +308,7 @@ function AddMcpDialog({
     setCommand('')
     setArgs('')
     setUrl('')
+    setEnvText('')
     setError(undefined)
   }
 
@@ -311,6 +316,17 @@ function AddMcpDialog({
     setBusy(true)
     setError(undefined)
     try {
+      const env: Record<string, string> = {}
+      for (const line of envText.split('\n')) {
+        const trimmed = line.trim()
+        if (!trimmed) continue
+        const eq = trimmed.indexOf('=')
+        if (eq <= 0) {
+          setError(t('mcp.envParseError'))
+          return
+        }
+        env[trimmed.slice(0, eq)] = trimmed.slice(eq + 1)
+      }
       const body =
         transport === 'stdio'
           ? {
@@ -318,8 +334,9 @@ function AddMcpDialog({
               transport,
               command,
               args: args.split(/\s+/).filter(Boolean),
+              env,
             }
-          : { name, transport, url }
+          : { name, transport, url, env }
       const r = await post<{ ok: boolean; error?: string }>('/mcp/servers', body)
       if (!r.ok) {
         setError(r.error ?? t('mcp.addFailed'))
@@ -418,6 +435,18 @@ function AddMcpDialog({
           )}
 
           {error ? <p className="text-xs text-destructive">{error}</p> : null}
+
+          <div className="grid gap-1.5">
+            <Label htmlFor="mcp-env">{t('mcp.fieldEnv')}</Label>
+            <Textarea
+              id="mcp-env"
+              value={envText}
+              onChange={(e) => setEnvText(e.target.value)}
+              placeholder={t('mcp.fieldEnvPlaceholder')}
+              className="min-h-[60px] resize-y font-mono text-xs"
+              rows={3}
+            />
+          </div>
         </DialogBody>
         <DialogFooter>
           <DialogClose asChild>
