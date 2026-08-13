@@ -26,6 +26,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/enowdev/antares/internal/textutil"
 	"gopkg.in/yaml.v3"
 )
 
@@ -340,8 +341,9 @@ func call(ctx context.Context, man Manifest, p Payload) (Reply, error) {
 }
 
 func truncate(s string, max int) string {
-	if len(s) <= max {
+	out := textutil.TruncateRunes(s, max)
+	if out == s {
 		return s
 	}
-	return s[:max] + "…"
+	return out + "…"
 }

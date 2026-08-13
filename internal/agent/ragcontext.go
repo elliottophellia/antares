@@ -7,10 +7,12 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/enowdev/antares/internal/llm"
 	"github.com/enowdev/antares/internal/rag"
 	"github.com/enowdev/antares/internal/store"
+	"github.com/enowdev/antares/internal/textutil"
 	"github.com/enowdev/antares/internal/tools"
 )
 
@@ -174,8 +176,10 @@ func (a *Agent) autoContext(ctx context.Context, req Request, sess *store.Sessio
 				continue
 			}
 			seen[body] = true
-			if chars+len(body) > maxChars {
-				body = body[:max(0, maxChars-chars)]
+			n := utf8.RuneCountInString(body)
+			if chars+n > maxChars {
+				n = max(0, maxChars-chars)
+				body = textutil.TruncateRunes(body, n)
 			}
 			if strings.TrimSpace(body) == "" {
 				continue
@@ -186,7 +190,7 @@ func (a *Agent) autoContext(ctx context.Context, req Request, sess *store.Sessio
 			}
 			fmt.Fprintf(&b, "\n[%s] %s\n", src, body)
 			total++
-			chars += len(body)
+			chars += n
 			if chars >= maxChars {
 				break
 			}
