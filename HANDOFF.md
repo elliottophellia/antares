@@ -108,13 +108,31 @@ below is done and green unless called out under **Next Steps**.
 
 1. **Push the 11 local commits** once the user is ready (they have not asked yet —
    do NOT push without confirmation).
-2. **Agent loop guardrail (explicitly deferred, user picked "frontend first").**
-   The agent can loop writing the same file with slightly different contents; the
-   repeat tracker fingerprints name+args so changing content never trips it, and
-   `grContinue` lets the 60-call hard stop reset up to 9× (~600 calls). Proposed
-   fix: detect repeated `write_file`/`edit_file` to the SAME path (regardless of
-   content) as a repeat. This is what produced the giant turn that caused the OOM
-   in item 4 — the frontend is now hardened, but the loop itself remains.
+2. **Agent loop guardrail (still open — the fix once proposed here was tried and
+   reverted).** The agent can loop writing the same file with slightly different
+   contents; the repeat tracker fingerprints name+args, so changing the content
+   never trips it. The fix this note used to recommend — treat repeated
+   `write_file`/`edit_file` to the SAME path as a repeat regardless of content —
+   was implemented and then removed again in "Tell a stuck loop apart from
+   ordinary progress". Keying on the path alone cannot tell three different edits
+   to one file from one edit made three times, so it fired on ordinary work, which
+   for a coding agent is most of the work. **Do not reintroduce it.** `repeatKey`
+   is now uniform over the full normalised arguments for every tool, and
+   `internal/agent/repeat_guard_test.go` fails if `write_file`, `edit_file` or
+   `vps_upload` is given a coarser key again. Those are the three names that ever
+   carried a special case, and the test names each of them; it asserts nothing
+   about any other tool, so a coarser key introduced for a different tool would
+   pass. The loop itself is therefore still unsolved: a model that varies the
+   content each time is bounded only by the ceilings below, and any replacement
+   needs a signal other than the call fingerprint. This is what produced the giant
+   turn that caused the OOM in item 4 — the frontend is now hardened, but the loop
+   remains.
+
+   The ceilings as they actually stand: the hard stop is 60 tool calls per segment
+   (`HardStopAfter`), `grContinue` may reset it up to 4× (`maxGuardrailContinues`,
+   `harness.go:477`) for five segments, and `AbsoluteMaxToolCalls: 200`
+   (`config/defaults.go:137`) caps the whole run regardless — so 200 calls, not the
+   ~600 this note previously claimed.
 3. **Rotate exposed credentials.** The Z.ai API key and Voyage embed key were
    visible in `~/.antares/config.yaml` read during earlier sessions. Still
    outstanding; user's call.

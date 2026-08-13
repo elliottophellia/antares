@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -103,6 +104,13 @@ func (vpsRunTool) Schema() map[string]any {
 // RequiresApproval: running arbitrary commands on a live server is a mutating,
 // potentially destructive action — gate it behind approval like the terminal.
 func (vpsRunTool) RequiresApproval() bool { return true }
+
+// ShellCommand exposes the command bound for the remote host to the same
+// inspection the local terminal gets: the host it lands on changes nothing
+// about what the command does.
+func (vpsRunTool) ShellCommand(args json.RawMessage) (string, bool) {
+	return commandArgument(args)
+}
 
 func (vpsRunTool) Execute(ctx context.Context, in Input) Result {
 	var args struct {

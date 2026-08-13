@@ -20,6 +20,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/enowdev/antares/internal/textutil"
 	"github.com/enowdev/antares/internal/version"
 )
 
@@ -40,6 +41,129 @@ type content struct {
 	// Non-text content is summarised rather than inlined.
 	MimeType string `json:"mimeType,omitempty"`
 	Data     string `json:"data,omitempty"`
+	// Resource holds an embedded resource's own payload. Filesystem, git and
+	// docs servers answer with these rather than with plain text.
+	Resource *resourceContents `json:"resource,omitempty"`
+}
+
+// resourceContents is a resource's payload: inline text or base64 bytes. Both
+// an embedded resource in a tool result and a resources/read reply use it.
+//
+// Text and Blob are pointers because an empty file is a legal payload. A server
+// answering with "text": "" has represented an empty document exactly; only a
+// resource carrying neither key is one this client cannot read.
+type resourceContents struct {
+	URI      string  `json:"uri"`
+	MimeType string  `json:"mimeType"`
+	Text     *string `json:"text"`
+	Blob     *string `json:"blob"`
+}
+
+// hasPayload reports whether the server sent a payload at all, empty or not.
+func (r resourceContents) hasPayload() bool { return r.Text != nil || r.Blob != nil }
+
+// describe names a resource for a summary line.
+func (r resourceContents) describe() string {
+	uri := r.URI
+	if uri == "" {
+		uri = "no uri"
+	}
+	return fmt.Sprintf("%s (%s)", uri, mimeOrUnknown(r.MimeType))
+}
+
+// render returns the text this resource contributes, which is empty for an
+// empty file. Text wins over bytes only when it has something in it: a server
+// marshalling both keys sends "text": "" with every binary resource, and an
+// empty string must not hide the bytes sent beside it. Bytes are named rather
+// than inlined: the model cannot use base64 and it would crowd out the context.
+func (r resourceContents) render() string {
+	switch {
+	case r.Text != nil && *r.Text != "":
+		return *r.Text
+	case r.Blob != nil && *r.Blob != "":
+		return fmt.Sprintf("[resource: %s, %d bytes base64]", r.describe(), len(*r.Blob))
+	default:
+		return ""
+	}
+}
+
+// mimeOrUnknown names a media type for a summary line. Leaving it out would
+// read as though the server had stated one.
+func mimeOrUnknown(mime string) string {
+	if mime == "" {
+		return "unknown type"
+	}
+	return mime
+}
+
+// contentKindChars bounds one content type named back in an error message, and
+// maxContentKinds bounds how many are named. Both come from the server.
+const (
+	contentKindChars = 40
+	maxContentKinds  = 5
+)
+
+// flattenContent renders a tool result to text and reports the kinds of content
+// it could not represent. The two are kept apart because "the server said
+// nothing" and "the server said something this client cannot read" call for
+// different answers to the model.
+//
+// Text, images and embedded resources are the three kinds this client has
+// rendering code for. Everything else is named back to the caller rather than
+// dropped. An item of a kind it does understand but that carries nothing —
+// an empty file, an empty string — is understood and simply has nothing to
+// show, which is not the same as unreadable.
+func flattenContent(items []content) (string, []string) {
+	var b strings.Builder
+	var skipped []string
+	unnamed := 0
+	seen := map[string]bool{}
+	skip := func(kind string) {
+		kind = textutil.TruncateRunes(kind, contentKindChars)
+		if seen[kind] {
+			return
+		}
+		seen[kind] = true
+		if len(skipped) >= maxContentKinds {
+			unnamed++
+			return
+		}
+		skipped = append(skipped, kind)
+	}
+
+	for _, item := range items {
+		switch item.Type {
+		case "text":
+			b.WriteString(item.Text)
+			b.WriteString("\n")
+		case "image":
+			// No bytes is not an empty image, it is not an image at all: a
+			// zero-byte summary line would be this client's assertion rather
+			// than the server's.
+			if item.Data == "" {
+				skip("image with no data")
+				continue
+			}
+			fmt.Fprintf(&b, "[image: %s, %d bytes base64]\n", mimeOrUnknown(item.MimeType), len(item.Data))
+		case "resource":
+			if item.Resource == nil || !item.Resource.hasPayload() {
+				skip("resource with no text or blob")
+				continue
+			}
+			if line := item.Resource.render(); line != "" {
+				b.WriteString(line)
+				b.WriteString("\n")
+			}
+		case "":
+			skip("item with no type")
+		default:
+			skip(item.Type)
+		}
+	}
+	if unnamed > 0 {
+		skipped = append(skipped, fmt.Sprintf("and %d more", unnamed))
+	}
+	return strings.TrimSpace(b.String()), skipped
 }
 
 // CallResult is the outcome of calling an MCP tool.
@@ -257,20 +381,15 @@ func (c *Client) Call(ctx context.Context, tool string, args map[string]any) (*C
 		return nil, fmt.Errorf("decode tool result: %w", err)
 	}
 
-	var b strings.Builder
-	for _, item := range out.Content {
-		switch item.Type {
-		case "text":
-			b.WriteString(item.Text)
-			b.WriteString("\n")
-		case "image":
-			fmt.Fprintf(&b, "[image: %s, %d bytes base64]\n", item.MimeType, len(item.Data))
-		case "resource":
-			fmt.Fprintf(&b, "[resource: %s]\n", item.MimeType)
-		}
-	}
-	text := strings.TrimSpace(b.String())
+	text, skipped := flattenContent(out.Content)
 	if text == "" {
+		// Nothing renderable came back. If the server did send something, say
+		// what it was: reporting it as an empty success would tell the model the
+		// tool ran and had nothing to report, so it proceeds instead of retrying.
+		if len(skipped) > 0 {
+			return nil, fmt.Errorf("tool %q returned only content this client cannot represent: %s",
+				tool, strings.Join(skipped, ", "))
+		}
 		text = "(no content returned)"
 	}
 	return &CallResult{Text: text, IsError: out.IsError}, nil
@@ -322,23 +441,22 @@ func (c *Client) ReadResource(ctx context.Context, uri string) (string, error) {
 		return "", resp.Error
 	}
 	var out struct {
-		Contents []struct {
-			URI      string `json:"uri"`
-			MimeType string `json:"mimeType"`
-			Text     string `json:"text"`
-			Blob     string `json:"blob"`
-		} `json:"contents"`
+		Contents []resourceContents `json:"contents"`
 	}
 	if err := json.Unmarshal(resp.Result, &out); err != nil {
 		return "", err
 	}
+	// No contents at all is this server saying it does not hold the resource.
+	// Manager.ReadResource asks one server after another, so this has to be an
+	// error for the search to continue past the first server that lacks it.
+	if len(out.Contents) == 0 {
+		return "", fmt.Errorf("server %q has no resource with uri %q", c.name, uri)
+	}
 	var b strings.Builder
 	for _, part := range out.Contents {
-		if part.Text != "" {
-			b.WriteString(part.Text)
+		if line := part.render(); line != "" {
+			b.WriteString(line)
 			b.WriteString("\n")
-		} else if part.Blob != "" {
-			fmt.Fprintf(&b, "[binary resource: %s, %d bytes base64]\n", part.MimeType, len(part.Blob))
 		}
 	}
 	text := strings.TrimSpace(b.String())
@@ -630,21 +748,14 @@ func (t *stdioTransport) send(ctx context.Context, req rpcRequest) (*rpcResponse
 	t.sendMu.Lock()
 	defer t.sendMu.Unlock()
 
-	t.mu.Lock()
-	if t.closed {
-		t.mu.Unlock()
-		return nil, fmt.Errorf("mcp connection closed")
-	}
-	err := t.writeFrame(req)
-	t.mu.Unlock()
-	if err != nil {
-		return nil, err
-	}
-
-	// Register a per-call response channel keyed by request ID, then start
-	// (or reuse) the single background reader. On ctx.Done the entry is
-	// removed so any late reply is discarded by ID mismatch — the transport
-	// stays alive for subsequent calls.
+	// Register a per-call response channel keyed by request ID *before* the
+	// frame goes out. From the second call onward the background reader is
+	// already running, so a server that answers while the write is still
+	// returning would have its reply looked up against an ID the map does not
+	// hold yet, and the reader would discard it as stale; the caller then waits
+	// out its whole deadline for an answer that already arrived. A registration
+	// made first is never too late: the reader cannot see a reply to a request
+	// that has not been written.
 	ch := make(chan *rpcResponse, 1)
 	t.pendingMu.Lock()
 	if t.pending == nil {
@@ -652,14 +763,33 @@ func (t *stdioTransport) send(ctx context.Context, req rpcRequest) (*rpcResponse
 	}
 	t.pending[req.ID] = ch
 	t.pendingMu.Unlock()
-	t.startReader()
-
-	// Ensure the entry is cleaned up no matter how we exit.
-	defer func() {
+	unregister := func() {
 		t.pendingMu.Lock()
 		delete(t.pending, req.ID)
 		t.pendingMu.Unlock()
-	}()
+	}
+
+	t.mu.Lock()
+	if t.closed {
+		t.mu.Unlock()
+		unregister()
+		return nil, fmt.Errorf("mcp connection closed")
+	}
+	err := t.writeFrame(req)
+	t.mu.Unlock()
+	if err != nil {
+		// Nothing will ever answer a frame that did not go out.
+		unregister()
+		return nil, err
+	}
+
+	// Start (or reuse) the single background reader. On ctx.Done the entry is
+	// removed so any late reply is discarded by ID mismatch — the transport
+	// stays alive for subsequent calls.
+	t.startReader()
+
+	// Ensure the entry is cleaned up no matter how we exit.
+	defer unregister()
 
 	select {
 	case <-ctx.Done():

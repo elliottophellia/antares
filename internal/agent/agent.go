@@ -30,6 +30,7 @@ import (
 	"github.com/enowdev/antares/internal/roles"
 	"github.com/enowdev/antares/internal/skills"
 	"github.com/enowdev/antares/internal/store"
+	"github.com/enowdev/antares/internal/textutil"
 	"github.com/enowdev/antares/internal/tools"
 )
 
@@ -609,25 +610,28 @@ func (a *Agent) Run(ctx context.Context, req Request, emit Emit) (*Result, error
 			continue
 		}
 
-		if stuck := repeats.record(resp.ToolCalls); len(stuck) > 0 {
-			if repeats.exceeded() {
-				_ = emit(Event{Type: EventNotice, Message: "stopped: the same tool call kept repeating"})
-				lastReply = "I was repeating the same step without making progress, so I stopped. " +
-					"Tell me what to try differently."
-				break
-			}
+		// The nudge is held back rather than appended here: a user message
+		// between the assistant's tool_calls and their results is not a valid
+		// transcript, and repairing it later is no substitute for not writing
+		// it. The notice still fires now, so the user sees the repetition the
+		// moment it is detected.
+		var repeatNudge string
+		stuck, stop := repeats.check(resp.ToolCalls)
+		if stop {
+			_ = emit(Event{Type: EventNotice, Message: "stopped: the same tool call kept repeating"})
+			lastReply = "I was repeating the same step without making progress, so I stopped. " +
+				"Tell me what to try differently."
+			break
+		}
+		if len(stuck) > 0 {
 			_ = emit(Event{Type: EventNotice, Message: "repeating " + strings.Join(stuck, ", ")})
-			history = append(history, llm.Message{
-				Role: llm.RoleUser,
-				Content: "You have called " + strings.Join(stuck, " and ") +
-					" with the same arguments several times and it is not getting you anywhere. " +
-					"Do not call it again. Either try a different approach, or say what is blocking you.",
-			})
+			repeatNudge = "You have called " + strings.Join(stuck, " and ") +
+				" with the same arguments several times and it is not getting you anywhere. " +
+				"Do not call it again. Either try a different approach, or say what is blocking you."
 		}
 
 		results := a.executeTools(runCtx, resp.ToolCalls, byName, req, sess, emit)
 		for i, r := range results {
-			history = append(history, r.message)
 			if r.isError && i < len(resp.ToolCalls) {
 				failures = append(failures, toolFailure{
 					Tool: resp.ToolCalls[i].Name, Args: resp.ToolCalls[i].Arguments, Error: r.message.Content,
@@ -646,13 +650,12 @@ func (a *Agent) Run(ctx context.Context, req Request, emit Emit) (*Result, error
 
 		// Notes typed while this run was already going land here, which is the
 		// first point the model can act on them without discarding work.
-		for _, note := range drainSteering(sess.ID) {
+		notes := drainSteering(sess.ID)
+		for _, note := range notes {
 			_ = emit(Event{Type: EventNotice, Message: "steering: " + note})
-			history = append(history, llm.Message{
-				Role:    llm.RoleUser,
-				Content: "A new instruction arrived while you were working: " + note,
-			})
 		}
+
+		history = appendTurnMessages(history, results, repeatNudge, notes)
 	}
 
 	if turn > maxTurns {
@@ -736,6 +739,30 @@ func (a *Agent) callModel(ctx context.Context, client llm.Client, req llm.Reques
 type toolOutcome struct {
 	message llm.Message
 	isError bool
+}
+
+// appendTurnMessages assembles the tail of one turn: every tool result first,
+// then the repetition nudge, then any steering note. The order is the whole
+// point. A user message sitting between an assistant's tool_calls and their
+// results is not a valid transcript, and ensureToolResults repairing it at send
+// time is no reason to write it — the repair is silent, so a nudge that drifts
+// back above the results would leave every test green while the transcript we
+// build is wrong. Keeping the order in one pure function is what makes it
+// assertable without a client, a store or a server.
+func appendTurnMessages(history []llm.Message, results []toolOutcome, nudge string, notes []string) []llm.Message {
+	for _, r := range results {
+		history = append(history, r.message)
+	}
+	if nudge != "" {
+		history = append(history, llm.Message{Role: llm.RoleUser, Content: nudge})
+	}
+	for _, note := range notes {
+		history = append(history, llm.Message{
+			Role:    llm.RoleUser,
+			Content: "A new instruction arrived while you were working: " + note,
+		})
+	}
+	return history
 }
 
 // executeTools runs the requested calls, in parallel when the config allows.
@@ -915,7 +942,7 @@ func (a *Agent) executeTools(
 		// What the model sees may be fenced as untrusted; what the UI shows stays
 		// raw. Errors are our own messages, so they are never fenced.
 		modelContent := content
-		if !res.IsError && a.config().Agent.WrapUntrustedOutput && untrustedTool(call.Name) {
+		if !res.IsError && a.config().Agent.WrapUntrustedOutput && untrustedTool(tool) {
 			modelContent = wrapUntrusted(call.Name, content)
 		}
 
@@ -1137,13 +1164,14 @@ func (a *Agent) guardrailTripped(toolCalls int, emit Emit) bool {
 
 // untrustedTool reports whether a tool returns content fetched from outside —
 // web pages, HTTP responses, search snippets, or MCP servers — which an attacker
-// could have seeded with instructions aimed at the model.
-func untrustedTool(name string) bool {
-	switch name {
-	case "web_fetch", "web_search", "browser", "http_request":
+// could have seeded with instructions aimed at the model. A tool borrowed from
+// an MCP server is written outside this codebase and so cannot declare the
+// capability in Go; for those the namespace is the declaration.
+func untrustedTool(tool tools.Tool) bool {
+	if tools.ReturnsUntrustedOutput(tool) {
 		return true
 	}
-	return strings.HasPrefix(name, tools.MCPPrefix)
+	return strings.HasPrefix(tool.Name(), tools.MCPPrefix)
 }
 
 // wrapUntrusted fences external content so the model reads it as data. The
@@ -1166,16 +1194,17 @@ func namesOf(m map[string]tools.Tool) []string {
 	return out
 }
 
+// trimForModel caps text at limit characters, keeping both ends and naming at
+// the seam how many characters of the middle are missing.
 func trimForModel(s string, limit int) string {
 	if limit <= 0 {
 		limit = 60000
 	}
-	if len(s) <= limit {
+	head, tail, removed := textutil.TruncateMiddleParts(s, limit)
+	if removed == 0 {
 		return s
 	}
-	head := limit * 2 / 3
-	tail := limit - head
-	return s[:head] + fmt.Sprintf("\n\n… %d characters truncated …\n\n", len(s)-limit) + s[len(s)-tail:]
+	return head + fmt.Sprintf("\n\n… %d characters truncated …\n\n", removed) + tail
 }
 
 func firstNonEmpty(vals ...string) string {
@@ -1189,58 +1218,120 @@ func firstNonEmpty(vals ...string) string {
 
 // ensureToolResults guarantees the invariant every OpenAI-compatible provider
 // enforces: an assistant message carrying tool_calls must be immediately
-// followed by a tool message for each tool_call_id. A turn interrupted after
-// the assistant's tool_calls were persisted but before (all) their results
-// were — or a history reshaped by compaction — can otherwise leave a dangling
-// tool_call, which the provider rejects with "insufficient tool messages
-// following tool_calls message". For any tool_call with no matching result, a
-// synthetic stub result is spliced in so the request is always well-formed.
-// This is a send-time repair and does not mutate what is persisted.
+// followed by one tool message per tool_call_id, and a tool message must answer
+// a call. A result is bound to its call by id, and among results sharing an id
+// by which turn they fall inside — never by bare adjacency, because a result
+// and its call are not always neighbours: the repetition guard appends its
+// nudge to history before the results land, and compaction reshapes the tail.
+// Each assistant turn is therefore re-joined with its results in call order,
+// and whatever was interleaved keeps its relative order but follows them. A
+// call with no result anywhere in the transcript — an interrupted run, or a
+// history reshaped by compaction — gets a synthetic stub, without which the
+// provider rejects the request with "insufficient tool messages following
+// tool_calls message"; a result answering no call is dropped for the same
+// reason. This is a send-time repair and does not mutate what is persisted.
 func ensureToolResults(msgs []llm.Message) []llm.Message {
+	// A call id is only unique within a turn — Gemini synthesises
+	// "call_<index>_<name>" when it omits one, so the same id recurs across
+	// turns — which makes an id alone too weak to bind a result to a call.
+	// Every result is therefore indexed by id in transcript order, and each
+	// call takes one in two passes: the whole transcript is bound to the
+	// results inside each turn's own span before any call is allowed to look
+	// outside it. Reversing that order lets a turn whose result was compacted
+	// away reach forward and take the result of a later turn sharing its id,
+	// leaving the live call with a stub and the model with stale output.
+	byID := make(map[string][]int)
+	for i, m := range msgs {
+		if m.Role == llm.RoleTool {
+			byID[m.ToolCallID] = append(byID[m.ToolCallID], i)
+		}
+	}
+
+	// A turn's span runs to the next assistant message: anything else between
+	// a turn and its results — the guard's nudge — was interleaved, but a new
+	// assistant message means the turn ended.
+	type turn struct {
+		at    int
+		end   int
+		bound []int // parallel to the turn's ToolCalls; -1 until a result binds
+	}
+	var turns []turn
+	for i, m := range msgs {
+		if m.Role != llm.RoleAssistant {
+			continue
+		}
+		if n := len(turns); n > 0 {
+			turns[n-1].end = i
+		}
+		t := turn{at: i, end: len(msgs), bound: make([]int, len(m.ToolCalls))}
+		for j := range t.bound {
+			t.bound[j] = -1
+		}
+		turns = append(turns, t)
+	}
+
+	claimed := make([]bool, len(msgs))
+	bind := func(t *turn, inSpan bool) {
+		for j := range t.bound {
+			if t.bound[j] >= 0 {
+				continue
+			}
+			for _, ri := range byID[msgs[t.at].ToolCalls[j].ID] {
+				// A result that appears before the call was produced before the
+				// call was made, so it can never be its answer — not in either
+				// pass. Only the forward bound is relaxed outside the span, for
+				// the result a later assistant message was appended in front
+				// of. Letting the second pass reach backwards too is how a
+				// history that opens with an orphaned tool message — the tail
+				// persistContextCompact leaves when it cuts at throughSeq — has
+				// last hour's output handed to a fresh call under a recurring
+				// id, with nothing marking it stale.
+				if claimed[ri] || ri < t.at || (inSpan && ri >= t.end) {
+					continue
+				}
+				claimed[ri] = true
+				t.bound[j] = ri
+				break
+			}
+		}
+	}
+	for i := range turns {
+		bind(&turns[i], true)
+	}
+	// Only now may a call reach past the end of its span, for the result that a
+	// later assistant message was appended in front of. It still may not reach
+	// back before itself.
+	for i := range turns {
+		bind(&turns[i], false)
+	}
+
 	out := make([]llm.Message, 0, len(msgs))
-	for i := 0; i < len(msgs); i++ {
-		m := msgs[i]
-		// A tool message is only valid immediately after an assistant message
-		// carrying tool_calls; those are consumed in the inner loop below. Any
-		// tool message that reaches here is an orphan — its assistant tool_calls
-		// was dropped (e.g. by compaction), and providers reject a tool message
-		// that does not answer a preceding tool_calls. Drop it.
+	next := 0
+	for _, m := range msgs {
+		// Tool messages are emitted below, beside the call they answer. One
+		// reaching here answers no call in this transcript — its assistant
+		// turn was dropped (e.g. by compaction) — so drop it.
 		if m.Role == llm.RoleTool {
 			continue
 		}
 		out = append(out, m)
-		if m.Role != llm.RoleAssistant || len(m.ToolCalls) == 0 {
+		if m.Role != llm.RoleAssistant {
 			continue
 		}
-		ids := make(map[string]bool, len(m.ToolCalls))
-		for _, tc := range m.ToolCalls {
-			ids[tc.ID] = true
-		}
-		// Emit the tool results that follow and match one of this turn's call
-		// ids, recording which ids are covered; unknown or duplicate tool
-		// results are dropped.
-		covered := make(map[string]bool, len(m.ToolCalls))
-		j := i + 1
-		for j < len(msgs) && msgs[j].Role == llm.RoleTool {
-			t := msgs[j]
-			if ids[t.ToolCallID] && !covered[t.ToolCallID] {
-				covered[t.ToolCallID] = true
-				out = append(out, t)
+		t := turns[next]
+		next++
+		for j, tc := range m.ToolCalls {
+			if t.bound[j] >= 0 {
+				out = append(out, msgs[t.bound[j]])
+				continue
 			}
-			j++
+			out = append(out, llm.Message{
+				Role:       llm.RoleTool,
+				ToolCallID: tc.ID,
+				Name:       tc.Name,
+				Content:    "[no result was recorded for this tool call]",
+			})
 		}
-		// Stub any call that never produced a matching result.
-		for _, tc := range m.ToolCalls {
-			if !covered[tc.ID] {
-				out = append(out, llm.Message{
-					Role:       llm.RoleTool,
-					ToolCallID: tc.ID,
-					Name:       tc.Name,
-					Content:    "[no result recorded — the previous run was interrupted before this tool finished]",
-				})
-			}
-		}
-		i = j - 1 // skip the tool messages we just processed
 	}
 	return out
 }

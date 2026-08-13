@@ -13,6 +13,7 @@ import (
 	"github.com/enowdev/antares/internal/engagement"
 	"github.com/enowdev/antares/internal/llm"
 	"github.com/enowdev/antares/internal/store"
+	"github.com/enowdev/antares/internal/textutil"
 	"github.com/enowdev/antares/internal/tools"
 	"github.com/enowdev/antares/internal/version"
 )
@@ -232,16 +233,18 @@ func projectBlock(projectDir, antaresWorkspace string) string {
 	return b.String()
 }
 
-// readCapped returns a file's text truncated to max bytes, or "" if unreadable.
+// readCapped returns a file's text truncated to max characters, or "" if
+// unreadable.
 func readCapped(path string, max int) string {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return ""
 	}
-	if len(data) > max {
-		return strings.TrimSpace(string(data[:max])) + "\n… (truncated)"
+	text := string(data)
+	if capped := textutil.TruncateRunes(text, max); capped != text {
+		return strings.TrimSpace(capped) + "\n… (truncated)"
 	}
-	return strings.TrimSpace(string(data))
+	return strings.TrimSpace(text)
 }
 
 // shallowTree lists the immediate entries of dir (dirs marked with a trailing

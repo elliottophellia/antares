@@ -58,7 +58,7 @@ func TestAutoModeStillNamesDangerousCommands(t *testing.T) {
 		return nil
 	}
 	call := llm.ToolCall{ID: "1", Name: "terminal", Arguments: `{"command":"sudo systemctl restart nginx"}`}
-	if res := a.checkApproval(context.Background(), call, writingTool{"terminal"}, "s", emit); res != nil {
+	if res := a.checkApproval(context.Background(), call, lookupTool(t, "terminal"), "s", emit); res != nil {
 		t.Fatalf("auto mode blocked: %s", res.Content)
 	}
 	if len(notices) != 1 || !strings.Contains(notices[0], "root") {

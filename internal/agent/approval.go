@@ -84,7 +84,7 @@ func (a *Agent) checkApproval(ctx context.Context, call llm.ToolCall, tool tools
 		mode = "auto"
 	}
 
-	danger := dangerIn(call.Name, call.Arguments)
+	danger := dangerInTool(tool, call.Arguments)
 
 	switch mode {
 	case "auto":
@@ -176,11 +176,26 @@ func approvalMessage(r *ApprovalRequest) string {
 // dangerous names commands that are worth stopping for even when approval is
 // otherwise off. Each entry says, in words that finish "…and it", what the
 // command does — the message is only useful if it explains the risk.
+//
+// A reason from this table does also force a call through approval, but that
+// decides nothing on its own: every tool that reaches a shell already requires
+// approval, so those calls are gated whether or not the table recognises them.
+// What the table decides is what the person is told, which is why an entry that
+// describes a command wrongly is worse than no entry at all. No list of
+// patterns can enumerate what a shell can do, so matching nothing here never
+// amounts to safe.
 var dangerous = []struct {
 	re  *regexp.Regexp
 	why string
 }{
-	{regexp.MustCompile(`\brm\s+(-[a-zA-Z]*[rf][a-zA-Z]*\s+)+(/|~|\$HOME|\*)(\s|$)`), "it deletes a whole tree from your home or root"},
+	// A bare target is the whole of something: / is the machine, ~ and $HOME
+	// the account, * everything in the current directory.
+	{regexp.MustCompile(`\brm\s+(-[a-zA-Z]*[rf][a-zA-Z]*\s+)+(/|~|\$HOME|\*)(\s|$)`), "it deletes everything at that path"},
+	// A recursive delete takes the named directory and everything under it,
+	// wherever it sits: rm -rf /home/someone empties an account. Only -r earns
+	// this reason, because rm -f on a path removes the files named and nothing
+	// more, and describing routine cleanup as a wipe teaches people to skim.
+	{regexp.MustCompile(`\brm\s+(-[a-zA-Z]*[rR][a-zA-Z]*\s+)+(/|~|\$HOME|\*)\S*`), "it deletes a whole directory tree"},
 	{regexp.MustCompile(`\bmkfs(\.\w+)?\b`), "it formats a filesystem"},
 	{regexp.MustCompile(`\bdd\b[^\n]*\bof=/dev/`), "it writes directly to a device"},
 	{regexp.MustCompile(`>\s*/dev/(sd|nvme|hd)`), "it writes directly to a disk"},
@@ -194,19 +209,34 @@ var dangerous = []struct {
 	{regexp.MustCompile(`\bsudo\b`), "it runs as root"},
 }
 
-// dangerIn reports why a call is destructive, or an empty string when it is
-// ordinary. Only the terminal is scanned: it is the tool that can do anything.
+// unreadableArguments is the reason for a call nobody can decode. A call that
+// cannot be read is unknown, and unknown must not pass as ordinary.
+const unreadableArguments = "its arguments could not be read, so it could not be checked"
+
+// dangerIn reports why the named call is destructive, or an empty string when
+// it is ordinary. It resolves the name against the process registry; a caller
+// that already holds the tool passes it to dangerInTool, so that the object
+// scanned is the object about to run.
 func dangerIn(toolName, arguments string) string {
-	if toolName != "terminal" {
+	tool, ok := tools.Default().Get(toolName)
+	if !ok {
 		return ""
 	}
-	var args struct {
-		Command string `json:"command"`
-	}
-	if json.Unmarshal([]byte(arguments), &args) != nil {
+	return dangerInTool(tool, arguments)
+}
+
+// dangerInTool reports why a call is destructive, or an empty string when it
+// is ordinary. Every tool that runs shell commands is scanned and no other,
+// whatever any of them is called: the danger is in what reaches a shell, not
+// in which tool carried it there.
+func dangerInTool(tool tools.Tool, arguments string) string {
+	if !tools.RunsShellCommands(tool) {
 		return ""
 	}
-	cmd := args.Command
+	cmd, ok := tools.CommandOf(tool, json.RawMessage(arguments))
+	if !ok {
+		return unreadableArguments
+	}
 	if strings.TrimSpace(cmd) == "" {
 		return ""
 	}

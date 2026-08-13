@@ -84,6 +84,10 @@ func (httpRequestTool) Schema() map[string]any {
 // state-changing requests (POST/PUT/DELETE) to external services.
 func (httpRequestTool) RequiresApproval() bool { return true }
 
+// UntrustedOutput reports that a response body is written by the service being
+// called.
+func (httpRequestTool) UntrustedOutput() bool { return true }
+
 func (httpRequestTool) Execute(ctx context.Context, in Input) Result {
 	var args struct {
 		Method      string            `json:"method"`

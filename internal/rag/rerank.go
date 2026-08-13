@@ -13,6 +13,7 @@ import (
 
 	"github.com/enowdev/antares/internal/config"
 	"github.com/enowdev/antares/internal/llm"
+	"github.com/enowdev/antares/internal/textutil"
 	"github.com/enowdev/antares/internal/tools"
 	"github.com/enowdev/antares/internal/version"
 )
@@ -147,10 +148,7 @@ func (r *llmReranker) rerank(ctx context.Context, query string, in []tools.RAGRe
 	var b strings.Builder
 	fmt.Fprintf(&b, "Query: %s\n\nPassages:\n", query)
 	for i, c := range in {
-		body := c.Content
-		if len(body) > 1200 {
-			body = body[:1200]
-		}
+		body := textutil.TruncateRunes(c.Content, 1200)
 		fmt.Fprintf(&b, "[%d] %s\n\n", i, strings.ReplaceAll(body, "\n", " "))
 	}
 

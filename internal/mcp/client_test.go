@@ -170,19 +170,24 @@ func TestRefreshReplacesToolsAndReadiness(t *testing.T) {
 func helperConfig(mode string) *config.Config {
 	return &config.Config{MCP: config.MCP{
 		Enabled: true,
-		Servers: map[string]config.MCPServer{
-			"fake": {
-				Transport: "stdio",
-				Command:   os.Args[0],
-				Args:      []string{"-test.run=TestHelperServer"},
-				Env: map[string]string{
-					"ANTARES_MCP_HELPER":      "1",
-					"ANTARES_MCP_HELPER_MODE": mode,
-				},
-				Enabled: true,
-			},
-		},
+		Servers: map[string]config.MCPServer{"fake": helperServer(mode)},
 	}}
+}
+
+// helperServer configures one instance of the fixture. mode picks how it
+// behaves: "offline" fails tools/list, "no-resources" holds no resources, and
+// anything else is a healthy server.
+func helperServer(mode string) config.MCPServer {
+	return config.MCPServer{
+		Transport: "stdio",
+		Command:   os.Args[0],
+		Args:      []string{"-test.run=TestHelperServer"},
+		Env: map[string]string{
+			"ANTARES_MCP_HELPER":      "1",
+			"ANTARES_MCP_HELPER_MODE": mode,
+		},
+		Enabled: true,
+	}
 }
 
 func TestUnknownTransport(t *testing.T) {
@@ -391,6 +396,13 @@ func TestHelperServer(t *testing.T) {
 				// transport self-closes.
 				continue
 			}
+			// "raw" replies with the result frame the caller supplied, so a test
+			// can drive Call with any content shape the protocol allows.
+			if p.Name == "raw" {
+				result, _ := p.Arguments["result"].(string)
+				reply(req.ID, json.RawMessage(result))
+				continue
+			}
 			if p.Name != "echo" {
 				reply(req.ID, map[string]any{
 					"isError": true,
@@ -402,6 +414,31 @@ func TestHelperServer(t *testing.T) {
 			reply(req.ID, map[string]any{
 				"content": []map[string]any{{"type": "text", "text": "echo: " + text}},
 			})
+		case "resources/read":
+			var p struct {
+				URI string `json:"uri"`
+			}
+			_ = json.Unmarshal(req.Params, &p)
+			// A server in "no-resources" mode holds nothing, whatever it is
+			// asked for, so a test can watch a search cross it to reach a
+			// server that does answer.
+			if os.Getenv("ANTARES_MCP_HELPER_MODE") == "no-resources" {
+				reply(req.ID, map[string]any{"contents": []any{}})
+				continue
+			}
+			// A "raw:" uri carries the result frame to answer with, so a test
+			// can drive ReadResource with any contents shape.
+			if result, ok := strings.CutPrefix(p.URI, "raw:"); ok {
+				reply(req.ID, json.RawMessage(result))
+				continue
+			}
+			out := map[string]any{
+				"jsonrpc": "2.0",
+				"id":      req.ID,
+				"error":   map[string]any{"code": -32002, "message": "no such resource " + p.URI},
+			}
+			b, _ := json.Marshal(out)
+			os.Stdout.Write(append(b, '\n'))
 		}
 	}
 }

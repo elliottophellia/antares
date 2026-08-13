@@ -24,6 +24,14 @@ import (
 // ErrUnsupported is returned by adapters that lack a capability.
 var ErrUnsupported = errors.New("operation not supported by this provider")
 
+// ErrStreamTruncated is returned when a response body ended before the provider
+// signalled the answer was finished. A gateway that loses its upstream closes
+// the body cleanly, so end of body on its own says nothing about whether the
+// answer is complete; only the provider's terminal marker does. Retryable
+// classifies it as worth another attempt, since a cut turn produced no usable
+// answer and replaying the request is safe.
+var ErrStreamTruncated = errors.New("the provider's response ended before it was complete")
+
 // Options configures an adapter instance.
 type Options struct {
 	Kind       string
@@ -477,7 +485,18 @@ func sseLines(r io.Reader, fn func(event, data string) error) error {
 		}
 	}
 	if err := sc.Err(); err != nil {
-		return err
+		// A read that dies part-way through is a body that stopped early,
+		// whatever the socket called it: unexpected EOF, a peer reset, a
+		// chunked frame that never landed. Left raw it matches nothing
+		// Retryable looks for and fails the turn outright. Cancellation and
+		// the idle timeout are the caller's own doing, and a line too long for
+		// the buffer arrives the same oversized way however often it is asked
+		// for, so none of those three are truncation and none is worth a retry.
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) ||
+			errors.Is(err, bufio.ErrTooLong) {
+			return err
+		}
+		return fmt.Errorf("%w: %w", ErrStreamTruncated, err)
 	}
 	if err := flush(); err != nil && !errors.Is(err, io.EOF) {
 		return err
@@ -494,12 +513,13 @@ func truncate(s string, n int) string {
 
 // toolCallAccumulator reassembles streamed tool-call fragments in order.
 type toolCallAccumulator struct {
-	order []int
-	calls map[int]*ToolCall
+	order    []int
+	calls    map[int]*ToolCall
+	complete map[int]bool
 }
 
 func newToolCallAccumulator() *toolCallAccumulator {
-	return &toolCallAccumulator{calls: map[int]*ToolCall{}}
+	return &toolCallAccumulator{calls: map[int]*ToolCall{}, complete: map[int]bool{}}
 }
 
 func (a *toolCallAccumulator) ensure(idx int) *ToolCall {
@@ -512,17 +532,39 @@ func (a *toolCallAccumulator) ensure(idx int) *ToolCall {
 	return c
 }
 
-func (a *toolCallAccumulator) result() []ToolCall {
+// markComplete records that the provider said this call is fully sent, which is
+// the only thing that tells a tool taking no arguments apart from a tool whose
+// arguments were still on the way when the connection ended. Anthropic closes
+// each call with content_block_stop; the OpenAI dialect has no per-call marker,
+// so its adapter marks every call at the stream's terminal.
+func (a *toolCallAccumulator) markComplete(idx int) { a.complete[idx] = true }
+
+func (a *toolCallAccumulator) markAllComplete() {
+	for _, idx := range a.order {
+		a.complete[idx] = true
+	}
+}
+
+// result returns the reassembled calls, or an error if any of them is a
+// fragment. Filling in absent arguments with "{}" would hand the caller a
+// dispatchable call the model never finished asking for — write_file with no
+// path — so a call the provider never completed fails the whole stream instead.
+func (a *toolCallAccumulator) result() ([]ToolCall, error) {
 	out := make([]ToolCall, 0, len(a.order))
 	for _, idx := range a.order {
 		c := a.calls[idx]
 		if c.Name == "" && c.Arguments == "" {
 			continue
 		}
-		if strings.TrimSpace(c.Arguments) == "" {
-			c.Arguments = "{}"
+		if !a.complete[idx] {
+			if c.Name == "" {
+				return nil, fmt.Errorf("%w: a tool call arrived without its name", ErrStreamTruncated)
+			}
+			if strings.TrimSpace(c.Arguments) == "" {
+				return nil, fmt.Errorf("%w: the tool call %q arrived without its arguments", ErrStreamTruncated, c.Name)
+			}
 		}
 		out = append(out, *c)
 	}
-	return out
+	return out, nil
 }

@@ -66,12 +66,19 @@ func (lr *liveRun) follow(ctx context.Context, cursor int, send func(agent.Event
 	i := cursor // absolute event index
 	for {
 		lr.mu.Lock()
-		// If the cursor points at events already trimmed, fast-forward to the
-		// oldest retained event rather than reading a negative slice index.
-		if i < lr.base {
-			i = lr.base
-		}
-		for i-lr.base < len(lr.events) {
+		for {
+			// If the cursor points at events already trimmed, fast-forward to the
+			// oldest retained event rather than reading a negative slice index.
+			// This has to run on every re-acquisition of the lock, not just on
+			// entry: the lock is dropped around send below, so a client too slow
+			// to drain its socket can be overtaken there by a publisher trimming
+			// the window.
+			if i < lr.base {
+				i = lr.base
+			}
+			if i-lr.base >= len(lr.events) {
+				break
+			}
 			e := lr.events[i-lr.base]
 			i++
 			// A reconnect may have thousands of token-sized deltas waiting. Collapse

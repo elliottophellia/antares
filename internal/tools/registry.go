@@ -98,6 +98,24 @@ type Approval interface {
 	RequiresApproval() bool
 }
 
+// ShellCommander is implemented by a tool that hands a command to a shell,
+// whichever machine that shell runs on. Anything inspecting commands has to
+// find its subjects by this capability rather than by name: a command sent to
+// a remote host destroys as thoroughly as the same command run locally.
+type ShellCommander interface {
+	// ShellCommand returns the command these arguments would run. It reports
+	// false when the arguments cannot be read, which is unknown rather than
+	// harmless and must not be treated as "no command".
+	ShellCommand(args json.RawMessage) (string, bool)
+}
+
+// UntrustedOutputer is implemented by a tool whose result carries content from
+// outside this machine — a page, a search snippet, an API response — which
+// whoever wrote it may have seeded with instructions aimed at the model.
+type UntrustedOutputer interface {
+	UntrustedOutput() bool
+}
+
 // Registry holds the process-wide tool set.
 type Registry struct {
 	mu    sync.RWMutex

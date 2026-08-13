@@ -11,6 +11,8 @@ import (
 	"sort"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/enowdev/antares/internal/textutil"
 )
 
 // ---- glob -------------------------------------------------------------------
@@ -155,6 +157,11 @@ func globToRegexp(pattern string) (*regexp.Regexp, error) {
 
 // ---- grep -------------------------------------------------------------------
 
+// maxGrepFileBytes caps the size of a file grep will open, so a single huge log
+// cannot stall a search across a whole tree. A file above the cap is never
+// read, which is why the count of them has to reach the caller.
+const maxGrepFileBytes = 8 * 1024 * 1024
+
 type grepTool struct{}
 
 func (grepTool) Name() string { return "grep" }
@@ -218,6 +225,7 @@ func (grepTool) Execute(ctx context.Context, in Input) Result {
 		b        strings.Builder
 		matches  int
 		files    int
+		skipped  int
 		stopped  bool
 		warnings []string
 	)
@@ -308,13 +316,21 @@ func (grepTool) Execute(ctx context.Context, in Input) Result {
 			if includeRe != nil && !includeRe.MatchString(rel) && !includeRe.MatchString(filepath.Base(rel)) {
 				return nil
 			}
-			if info, err := d.Info(); err == nil && info.Size() > 8*1024*1024 {
+			if info, err := d.Info(); err == nil && info.Size() > maxGrepFileBytes {
+				skipped++
 				return nil
 			}
 			return searchFile(p, rel)
 		})
 	} else {
 		_ = searchFile(root, relTo(in.Workspace, root))
+	}
+
+	// Nothing opened these files, so a bare "no matches" would report them as
+	// match-free. One line for the whole run: a directory of large files would
+	// otherwise bury the result under a list of paths.
+	if skipped > 0 {
+		warnings = append(warnings, fmt.Sprintf("%d file(s) larger than %d MB were not searched, so this result cannot rule out a match in them", skipped, maxGrepFileBytes/(1024*1024)))
 	}
 
 	warn := ""
@@ -331,9 +347,16 @@ func (grepTool) Execute(ctx context.Context, in Input) Result {
 	return Text(header + "\n" + b.String() + warn)
 }
 
+// maxGrepLineChars caps one printed line. It is a character budget: a byte
+// budget applied to a line of CJK, or to a comment with an accent in it, both
+// keeps a third of what it promises and can cut inside a rune, and grep is in
+// every toolset including minimal.
+const maxGrepLineChars = 400
+
 func truncateLine(s string) string {
-	if len(s) <= 400 {
+	out := textutil.TruncateRunes(s, maxGrepLineChars)
+	if len(out) == len(s) {
 		return s
 	}
-	return s[:400] + "…"
+	return out + "…"
 }

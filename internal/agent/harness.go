@@ -126,6 +126,21 @@ func processObservation(c llm.ToolCall) bool {
 	}
 }
 
+// check records a batch of calls and reports both of the guard's answers: the
+// tool names worth nudging about, and whether one of them has now repeated so
+// far past the limit that nudging has demonstrably failed and the run must stop.
+//
+// Both come from here because they cannot be derived from each other. record
+// reports a key once, on the turn its count reaches the limit, and never again
+// — so a caller that only asked whether to stop when it had a name to nudge
+// could never see that same key go on to reach limit*2. The abort would then
+// need a second, different call to trip first, and a model stuck on one call
+// would run to the turn ceiling with a single nudge and no stop.
+func (r *repeatTracker) check(calls []llm.ToolCall) (stuck []string, stop bool) {
+	stuck = r.record(calls)
+	return stuck, r.exceeded()
+}
+
 // exceeded reports a call repeated far past the limit, where nudging has
 // already failed and the run should stop.
 func (r *repeatTracker) exceeded() bool {
@@ -151,28 +166,12 @@ func normaliseArgs(raw string) string {
 	return string(b)
 }
 
-// repeatKey builds the fingerprint for a tool call. For write_file and
-// edit_file the key uses only the tool name and the target path — not the
-// full arguments — so repeated writes to the same file with different
-// content are recognised as the same stuck call. Other tools use the full
-// normalised arguments as before.
+// repeatKey builds the fingerprint for a tool call. Every tool is fingerprinted
+// the same way, on the full normalised arguments, and no tool gets a coarser
+// key: three different edits to one file are three pieces of work, not one call
+// made three times, and a key that discards the arguments cannot tell the
+// difference.
 func repeatKey(c llm.ToolCall) string {
-	switch c.Name {
-	case "write_file", "edit_file":
-		var args struct {
-			Path string `json:"path"`
-		}
-		if json.Unmarshal([]byte(c.Arguments), &args) == nil && args.Path != "" {
-			return c.Name + "\x00" + args.Path
-		}
-	case "vps_upload":
-		var args struct {
-			RemotePath string `json:"remote_path"`
-		}
-		if json.Unmarshal([]byte(c.Arguments), &args) == nil && args.RemotePath != "" {
-			return c.Name + "\x00" + args.RemotePath
-		}
-	}
 	return c.Name + "\x00" + normaliseArgs(c.Arguments)
 }
 

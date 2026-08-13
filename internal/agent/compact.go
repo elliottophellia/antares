@@ -6,10 +6,12 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/enowdev/antares/internal/llm"
 	"github.com/enowdev/antares/internal/providers"
 	"github.com/enowdev/antares/internal/store"
+	"github.com/enowdev/antares/internal/textutil"
 )
 
 // contextWindowFor returns the active model's token budget for the usage event.
@@ -279,18 +281,25 @@ func (a *Agent) prunedToolResults(history []llm.Message) []llm.Message {
 	copy(out, history)
 	for i := 0; i < len(out)-protect; i++ {
 		m := out[i]
-		if m.Role != llm.RoleTool || len(m.Content) <= minChars {
+		if m.Role != llm.RoleTool {
+			continue
+		}
+		// Budget and notice both count characters, so the message never claims
+		// to have dropped text it kept.
+		chars := utf8.RuneCountInString(m.Content)
+		if chars <= minChars {
 			continue
 		}
 		out[i].Content = truncate(m.Content, minChars/2) +
-			fmt.Sprintf("\n\n[tool result pruned: %d characters removed to free context]", len(m.Content)-minChars/2)
+			fmt.Sprintf("\n\n[tool result pruned: %d characters removed to free context]", chars-minChars/2)
 	}
 	return out
 }
 
 func truncate(s string, n int) string {
-	if len(s) <= n {
+	out := textutil.TruncateRunes(s, n)
+	if out == s {
 		return s
 	}
-	return s[:n] + "…"
+	return out + "…"
 }

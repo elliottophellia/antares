@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -106,6 +107,48 @@ func NeedsApproval(t Tool) bool {
 		return a.RequiresApproval()
 	}
 	return false
+}
+
+// RunsShellCommands reports whether a tool hands commands to a shell.
+func RunsShellCommands(t Tool) bool {
+	_, ok := t.(ShellCommander)
+	return ok
+}
+
+// CommandOf returns the command a call would run at a shell. It reports false
+// both for a tool that runs no commands and for one that does but whose
+// arguments could not be read; RunsShellCommands tells those two apart, and a
+// caller that inspects commands must not read either as "nothing to run".
+func CommandOf(t Tool, args json.RawMessage) (string, bool) {
+	c, ok := t.(ShellCommander)
+	if !ok {
+		return "", false
+	}
+	return c.ShellCommand(args)
+}
+
+// ReturnsUntrustedOutput reports whether a tool's result carries content from
+// outside this machine.
+func ReturnsUntrustedOutput(t Tool) bool {
+	u, ok := t.(UntrustedOutputer)
+	return ok && u.UntrustedOutput()
+}
+
+// commandArgument decodes the "command" argument shared by the tools that run
+// shell commands. It reads through Input.Bind rather than alongside it: an
+// inspection that parsed these bytes even slightly more strictly than Execute
+// does would let a call be dismissed as unreadable while the shell went ahead
+// and ran it. Absent arguments read as no command, which is what Bind leaves
+// behind, so only arguments that are present and malformed are unreadable.
+func commandArgument(args json.RawMessage) (string, bool) {
+	var decoded struct {
+		Command string `json:"command"`
+	}
+	in := Input{Args: args}
+	if in.Bind(&decoded) != nil {
+		return "", false
+	}
+	return decoded.Command, true
 }
 
 // ---- delegate_task ----------------------------------------------------------

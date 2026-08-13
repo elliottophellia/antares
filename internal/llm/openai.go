@@ -297,10 +297,14 @@ func (c *openAIClient) Stream(ctx context.Context, req Request, emit func(Event)
 		finish    string
 		model     = req.Model
 		started   = map[int]bool{}
+		// Either terminal is enough: real OpenAI sends both, and compatible
+		// servers exist that send only one. Requiring both would reject them.
+		sawTerminal bool
 	)
 
 	err = sseLines(httpResp.Body, func(_, data string) error {
 		if data == "[DONE]" {
+			sawTerminal = true
 			return io.EOF
 		}
 		var chunk struct {
@@ -337,6 +341,7 @@ func (c *openAIClient) Stream(ctx context.Context, req Request, emit func(Event)
 		for _, ch := range chunk.Choices {
 			if ch.FinishReason != "" {
 				finish = ch.FinishReason
+				sawTerminal = true
 			}
 			if r := firstNonEmpty(ch.Delta.Reasoning, ch.Delta.ReasoningContent); r != "" {
 				reasoning.WriteString(r)
@@ -377,8 +382,22 @@ func (c *openAIClient) Stream(ctx context.Context, req Request, emit func(Event)
 	if err != nil {
 		return nil, err
 	}
+	if !sawTerminal {
+		return nil, fmt.Errorf("%w: the stream ended without [DONE] or a finish_reason", ErrStreamTruncated)
+	}
+	// The dialect has no per-call terminator, so the stream's own terminal is
+	// what says every call it carried was fully sent. At the token cap it says
+	// no such thing: the answer can stop between a call's name and its
+	// arguments and still be framed correctly, so leave those calls unmarked
+	// and let result() refuse whatever the model did not finish asking for.
+	if finish != "length" {
+		acc.markAllComplete()
+	}
 
-	calls := acc.result()
+	calls, err := acc.result()
+	if err != nil {
+		return nil, err
+	}
 	for i, call := range calls {
 		if err := emit(Event{Type: EventToolCallEnd, Index: i, ToolCallID: call.ID, ToolName: call.Name, Delta: call.Arguments}); err != nil {
 			return nil, err
