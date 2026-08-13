@@ -8,9 +8,11 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/enowdev/antares/internal/browser"
 	"github.com/enowdev/antares/internal/config"
+	"github.com/enowdev/antares/internal/textutil"
 )
 
 // browserSessions keeps one browser per conversation. A page that survives
@@ -381,11 +383,14 @@ func saveScreenshot(workspace string, png []byte) (string, error) {
 	return path, nil
 }
 
+// truncateTool caps tool output at max characters and says how long the whole
+// text was, so the model knows what it is missing.
 func truncateTool(s string, max int) string {
-	if len(s) <= max {
+	out := textutil.TruncateRunes(s, max)
+	if out == s {
 		return s
 	}
-	return s[:max] + fmt.Sprintf("\n\n… truncated, %d characters total", len(s))
+	return out + fmt.Sprintf("\n\n… truncated, %d characters total", utf8.RuneCountInString(s))
 }
 
 // challengeDetectJS reports the kind of bot-challenge on the current page, or ""
