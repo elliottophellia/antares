@@ -317,15 +317,20 @@ function AddMcpDialog({
     setError(undefined)
     try {
       const env: Record<string, string> = {}
-      for (const line of envText.split('\n')) {
-        const trimmed = line.trim()
-        if (!trimmed) continue
-        const eq = trimmed.indexOf('=')
-        if (eq <= 0) {
-          setError(t('mcp.envParseError'))
-          return
+      // Only stdio servers take an environment. A remote server is configured
+      // with headers instead, and the backend drops anything sent here.
+      if (transport === 'stdio') {
+        for (const line of envText.split('\n')) {
+          const trimmed = line.trim()
+          if (!trimmed || trimmed.startsWith('#')) continue
+          const eq = trimmed.indexOf('=')
+          const key = eq > 0 ? trimmed.slice(0, eq).trim() : ''
+          if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) {
+            setError(t('mcp.envParseError'))
+            return
+          }
+          env[key] = trimmed.slice(eq + 1).trim()
         }
-        env[trimmed.slice(0, eq)] = trimmed.slice(eq + 1)
       }
       const body =
         transport === 'stdio'
@@ -336,7 +341,7 @@ function AddMcpDialog({
               args: args.split(/\s+/).filter(Boolean),
               env,
             }
-          : { name, transport, url, env }
+          : { name, transport, url }
       const r = await post<{ ok: boolean; error?: string }>('/mcp/servers', body)
       if (!r.ok) {
         setError(r.error ?? t('mcp.addFailed'))
@@ -420,6 +425,17 @@ function AddMcpDialog({
                   className="font-mono text-xs"
                 />
               </div>
+              <div className="grid gap-1.5">
+                <Label htmlFor="mcp-env">{t('mcp.fieldEnv')}</Label>
+                <Textarea
+                  id="mcp-env"
+                  value={envText}
+                  onChange={(e) => setEnvText(e.target.value)}
+                  placeholder={t('mcp.fieldEnvPlaceholder')}
+                  className="min-h-[60px] resize-y font-mono text-xs"
+                  rows={3}
+                />
+              </div>
             </>
           ) : (
             <div className="grid gap-1.5">
@@ -435,18 +451,6 @@ function AddMcpDialog({
           )}
 
           {error ? <p className="text-xs text-destructive">{error}</p> : null}
-
-          <div className="grid gap-1.5">
-            <Label htmlFor="mcp-env">{t('mcp.fieldEnv')}</Label>
-            <Textarea
-              id="mcp-env"
-              value={envText}
-              onChange={(e) => setEnvText(e.target.value)}
-              placeholder={t('mcp.fieldEnvPlaceholder')}
-              className="min-h-[60px] resize-y font-mono text-xs"
-              rows={3}
-            />
-          </div>
         </DialogBody>
         <DialogFooter>
           <DialogClose asChild>

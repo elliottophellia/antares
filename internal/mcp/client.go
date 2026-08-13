@@ -15,6 +15,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -391,7 +392,8 @@ type stdioTransport struct {
 	// fast and the process is reaped. Any successful reply resets it to zero.
 	timeouts   int
 	stderr     stderrCapture
-	stderrDone chan struct{}
+	stderrDone chan struct{} // closed when the stderr scanner has drained the pipe
+	exited     chan struct{} // closed once the child has been waited on
 	readerErr  error
 }
 
@@ -442,13 +444,22 @@ func newStdioTransport(cfg ServerConfig) (transport, error) {
 		return nil, err
 	}
 	// Server logs go to stderr; surface them at debug level rather than dropping.
-	stderr, err := cmd.StderrPipe()
+	// This is a pipe we own rather than cmd.StderrPipe because Wait closes the
+	// pipes it hands out, and reaping the child would then race the scanner and
+	// truncate exactly the diagnostics we report when a server dies at startup.
+	stderrR, stderrW, err := os.Pipe()
 	if err != nil {
 		return nil, err
 	}
+	cmd.Stderr = stderrW
 	if err := cmd.Start(); err != nil {
+		stderrR.Close()
+		stderrW.Close()
 		return nil, fmt.Errorf("start %s: %w", cfg.Command, err)
 	}
+	// Drop the parent's writer so the child holds the only one and the scanner
+	// sees EOF when it exits.
+	stderrW.Close()
 	t := &stdioTransport{
 		cmd:        cmd,
 		stdin:      stdin,
@@ -456,10 +467,12 @@ func newStdioTransport(cfg ServerConfig) (transport, error) {
 		pending:    map[int64]chan *rpcResponse{},
 		readerDone: make(chan struct{}),
 		stderrDone: make(chan struct{}),
+		exited:     make(chan struct{}),
 	}
 	go func() {
 		defer close(t.stderrDone)
-		sc := bufio.NewScanner(stderr)
+		defer stderrR.Close()
+		sc := bufio.NewScanner(stderrR)
 		for sc.Scan() {
 			t.stderr.append(sc.Text())
 			slog.Debug("mcp server stderr", "command", cfg.Command, "line", sc.Text())
@@ -467,23 +480,38 @@ func newStdioTransport(cfg ServerConfig) (transport, error) {
 	}()
 	// Reap the child if it exits on its own so it never sits as a zombie until
 	// the next Close/Refresh. Wait is idempotent via waitOnce.
-	go func() { _ = t.reap() }()
+	go func() {
+		defer close(t.exited)
+		_ = t.reap()
+	}()
 	return t, nil
 }
+
+// envRef matches only the ${NAME} form the catalogue uses. Bare $NAME is left
+// alone so arguments holding a literal dollar sign — passwords, regexes,
+// connection strings — survive verbatim.
+var envRef = regexp.MustCompile(`\$\{([A-Za-z_][A-Za-z0-9_]*)\}`)
 
 func expandArgs(args []string) []string {
 	home, _ := os.UserHomeDir()
 	out := make([]string, len(args))
 	for i, arg := range args {
-		arg = os.Expand(arg, func(key string) string {
-			if key == "HOME" && os.Getenv(key) == "" {
+		arg = envRef.ReplaceAllStringFunc(arg, func(ref string) string {
+			key := ref[2 : len(ref)-1]
+			if v, ok := os.LookupEnv(key); ok {
+				return v
+			}
+			if key == "HOME" {
 				return home
 			}
-			return os.Getenv(key)
+			// An undefined variable stays literal; collapsing it to an empty
+			// string would silently hand the server a wrong path.
+			return ref
 		})
-		if arg == "~" {
+		switch {
+		case arg == "~":
 			arg = home
-		} else if strings.HasPrefix(arg, "~/") || strings.HasPrefix(arg, `~\`) {
+		case strings.HasPrefix(arg, "~/"), strings.HasPrefix(arg, `~\`):
 			arg = filepath.Join(home, arg[2:])
 		}
 		out[i] = arg
@@ -565,9 +593,23 @@ func (t *stdioTransport) failPending(readErr error) {
 	t.pendingMu.Unlock()
 }
 
+// exitGrace bounds how long a failed read waits for the child's exit status and
+// stderr tail. A server that closed stdout but kept running must not wedge the
+// reader goroutine, which still has to close readerDone so callers fail fast.
+const exitGrace = 2 * time.Second
+
 func (t *stdioTransport) processError(readErr error) error {
+	grace := time.After(exitGrace)
+	select {
+	case <-t.exited:
+	case <-grace:
+		return errors.New("MCP server closed stdout while still running")
+	}
+	select {
+	case <-t.stderrDone:
+	case <-grace:
+	}
 	waitErr := t.reap()
-	<-t.stderrDone
 	stderr := t.stderr.String()
 	switch {
 	case waitErr != nil && stderr != "":

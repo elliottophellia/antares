@@ -85,43 +85,85 @@ func connectAll(ctx context.Context, cfg *config.Config) (map[string]*Client, ma
 	return clients, errs
 }
 
+// upgradeBuiltinServers repoints configurations still carrying the old
+// unpinned catalogue defaults at the pinned ones. Only the package reference is
+// rewritten — arguments the user edited (the directory the filesystem server
+// exposes, --repository, a connection string) are carried over untouched, and a
+// custom command or URL is left alone entirely.
 func upgradeBuiltinServers(cfg *config.Config) {
 	for name, server := range cfg.MCP.Servers {
 		entry, ok := hub.LookupMCP(name)
-		if !ok || !isStaleBuiltin(server, entry) {
+		if !ok {
 			continue
 		}
-		server.Command = entry.Command
-		server.Args = append([]string(nil), entry.Args...)
-		server.URL = entry.URL
 		if entry.URL != "" {
+			if !isLegacyEndpoint(server, entry) {
+				continue
+			}
 			server.Transport = "http"
+			server.URL = entry.URL
+			cfg.MCP.Servers[name] = server
+			slog.Info("mcp: migrated built-in server to its current endpoint", "server", name, "url", entry.URL)
+			continue
 		}
+		args, upgraded := pinnedArgs(server, entry)
+		if !upgraded {
+			continue
+		}
+		server.Args = args
 		cfg.MCP.Servers[name] = server
+		slog.Info("mcp: pinned built-in server package", "server", name, "args", args)
 	}
 }
 
-func isStaleBuiltin(server config.MCPServer, entry hub.Entry) bool {
-	if entry.URL != "" {
-		return server.Command == "" && server.URL != entry.URL
-	}
-	if server.Command != entry.Command || len(server.Args) == 0 || len(entry.Args) == 0 {
+// isLegacyEndpoint reports whether a hosted server still points at the retired
+// SSE endpoint of the same host. A genuinely custom URL is not touched.
+func isLegacyEndpoint(server config.MCPServer, entry hub.Entry) bool {
+	if server.Command != "" || server.URL == entry.URL {
 		return false
 	}
-	// Catalogue entries now pin every package. Upgrade only an exact unpinned
-	// package reference; custom commands remain intact.
-	if server.Command == "npx" {
-		return len(server.Args) > 1 && server.Args[0] == "-y" && len(entry.Args) > 1 &&
-			strings.HasPrefix(entry.Args[1], server.Args[1]+"@")
+	return strings.TrimSuffix(server.URL, "/sse") == strings.TrimSuffix(entry.URL, "/mcp")
+}
+
+// pinnedArgs returns the server's arguments with the unpinned package reference
+// swapped for the catalogue's pinned one, preserving every argument the user
+// supplied after it. The second result is false when nothing needs upgrading,
+// which also makes a second pass over an already-pinned config a no-op.
+func pinnedArgs(server config.MCPServer, entry hub.Entry) ([]string, bool) {
+	if server.Command != entry.Command || len(server.Args) == 0 || len(entry.Args) == 0 {
+		return nil, false
 	}
-	if server.Command == "uvx" && !strings.HasPrefix(server.Args[0], "-") {
-		for _, arg := range entry.Args {
+	switch server.Command {
+	case "npx":
+		// npx -y <package> [user args...]
+		if server.Args[0] != "-y" || len(server.Args) < 2 || len(entry.Args) < 2 {
+			return nil, false
+		}
+		if !strings.HasPrefix(entry.Args[1], server.Args[1]+"@") {
+			return nil, false
+		}
+		out := append([]string(nil), server.Args...)
+		out[1] = entry.Args[1]
+		return out, true
+	case "uvx":
+		// uvx <package> [user args...] becomes
+		// uvx --from <pinned package> --with <pinned sdk> <package> [user args...]
+		if strings.HasPrefix(server.Args[0], "-") {
+			return nil, false
+		}
+		exe := -1
+		for i, arg := range entry.Args {
 			if arg == server.Args[0] {
-				return true
+				exe = i
 			}
 		}
+		if exe < 0 {
+			return nil, false
+		}
+		out := append([]string(nil), entry.Args[:exe+1]...)
+		return append(out, server.Args[1:]...), true
 	}
-	return false
+	return nil, false
 }
 
 // Close shuts every server down and removes its tools from the registry.
