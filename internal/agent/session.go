@@ -248,10 +248,20 @@ func (a *Agent) persistAssistant(ctx context.Context, sessionID, model string, r
 }
 
 func (a *Agent) recordUsage(ctx context.Context, sessionID, provider, model string, u llm.Usage) {
+	a.recordUsageSource(ctx, sessionID, provider, model, u, "chat")
+}
+
+// recordUsageSource records one billable call, tagged by where it came from so
+// background work (compaction, titles) is counted in the totals but stays
+// distinguishable from the user's own turns.
+func (a *Agent) recordUsageSource(ctx context.Context, sessionID, provider, model string, u llm.Usage, source string) {
+	if a.db == nil {
+		return
+	}
 	if err := a.db.RecordUsage(ctx, &store.Usage{
 		ID: newID("use"), SessionID: sessionID, Provider: provider, Model: model,
 		TokensIn: u.InputTokens, TokensOut: u.OutputTokens, CacheRead: u.CacheReadTokens,
-		Cost: estimateCost(model, u), Source: "chat",
+		Cost: estimateCost(model, u), Source: source,
 	}); err != nil {
 		slog.Debug("record usage failed", "error", err)
 	}

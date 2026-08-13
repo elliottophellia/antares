@@ -79,7 +79,11 @@ func (a *Agent) maybeCompact(ctx context.Context, history []llm.Message, system,
 			"compacting %d older messages to free context (~%d tokens)", len(middle), used)})
 	}
 
-	summary, err := a.summarise(ctx, middle)
+	sid := ""
+	if sess != nil {
+		sid = sess.ID
+	}
+	summary, _, err := a.summarise(ctx, sid, middle)
 	if err != nil {
 		slog.Warn("context compaction failed; pruning oversized tool outputs instead of dropping history", "error", err)
 		// Fall back to pruning oversized tool results in the middle section so
@@ -196,7 +200,7 @@ func (a *Agent) CompactNow(ctx context.Context, sessionID string, emit Emit) err
 	_ = emit(Event{Type: EventNotice, Message: fmt.Sprintf(
 		"Compacting %d older messages to free context (~%d tokens in use)…", len(middle), before)})
 
-	summary, err := a.summarise(ctx, middle)
+	summary, sumUsage, err := a.summarise(ctx, sessionID, middle)
 	if err != nil {
 		return fmt.Errorf("summarise: %w", err)
 	}
@@ -219,10 +223,20 @@ func (a *Agent) CompactNow(ctx context.Context, sessionID string, emit Emit) err
 	if freed < 0 {
 		freed = 0
 	}
-	slog.Info("context compacted on demand", "session", sessionID, "before", before, "after", after, "freed", freed)
+	slog.Info("context compacted on demand", "session", sessionID,
+		"before", before, "after", after, "freed", freed,
+		"summary_tokens_in", sumUsage.InputTokens, "summary_tokens_out", sumUsage.OutputTokens)
 
+	// Name the cost of the summarising call itself: it is a real provider
+	// request, already recorded against the session, and the person asked for
+	// it, so it should not be silent.
+	costNote := ""
+	if sumUsage.InputTokens > 0 || sumUsage.OutputTokens > 0 {
+		costNote = fmt.Sprintf(" The summary itself cost ~%d input and %d output tokens.",
+			sumUsage.InputTokens, sumUsage.OutputTokens)
+	}
 	_ = emit(Event{Type: EventNotice, Message: fmt.Sprintf(
-		"Compacted %d messages into a summary — freed about %d tokens.", len(middle), freed)})
+		"Compacted %d messages into a summary — freed about %d tokens.%s", len(middle), freed, costNote)})
 	// The gauge plots the latest turn's input, so report the estimate for the
 	// next turn: the same estimator maybeCompact uses for its own threshold.
 	_ = emit(Event{Type: EventUsage, ContextTokens: after, ContextWindow: window})
@@ -322,11 +336,14 @@ func rebalanceToolBoundary(middle, tail []llm.Message) ([]llm.Message, []llm.Mes
 	return middle, tail
 }
 
-// summarise asks the auxiliary (or main) model to condense a message span.
-func (a *Agent) summarise(ctx context.Context, msgs []llm.Message) (string, error) {
-	client, model, _, err := a.newAuxClient("")
+// summarise asks the auxiliary (or main) model to condense a message span. It
+// is a real provider call with its own token cost, so that cost is recorded
+// against the session (tagged "compaction") and returned to the caller — the
+// summary is not free, and the usage totals must say so.
+func (a *Agent) summarise(ctx context.Context, sessionID string, msgs []llm.Message) (string, llm.Usage, error) {
+	client, model, provider, err := a.newAuxClient(sessionID)
 	if err != nil {
-		return "", err
+		return "", llm.Usage{}, err
 	}
 
 	var transcript strings.Builder
@@ -368,12 +385,17 @@ Write in the same language the user used.
 		Temperature: 0.2,
 	})
 	if err != nil {
-		return "", err
+		return "", llm.Usage{}, err
 	}
 	if strings.TrimSpace(resp.Content) == "" {
-		return "", fmt.Errorf("summariser returned empty output")
+		return "", llm.Usage{}, fmt.Errorf("summariser returned empty output")
 	}
-	return resp.Content, nil
+	// A quiet sub-agent session (no id) is never billed to a conversation, but
+	// a real one must carry the summary's cost.
+	if sessionID != "" {
+		a.recordUsageSource(ctx, sessionID, provider, model, resp.Usage, "compaction")
+	}
+	return resp.Content, resp.Usage, nil
 }
 
 // prunedToolResults shrinks large tool outputs that are far from the tail.

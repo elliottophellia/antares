@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/enowdev/antares/internal/config"
 	"github.com/enowdev/antares/internal/llm"
@@ -120,5 +121,35 @@ func TestCompactNowReportsNothingForShortSession(t *testing.T) {
 	}
 	if _, ok := fresh.Meta[contextCompactMetaKey]; ok {
 		t.Fatal("a short session must not receive a persisted compaction")
+	}
+}
+
+// The summarising call is a real provider request; its cost must land in the
+// usage totals so /usage and the cost readout account for compaction.
+func TestRecordUsageSourceCountsCompaction(t *testing.T) {
+	ctx := context.Background()
+	db, err := store.Open(ctx, "memory", "", 1, 5000, false)
+	if err != nil {
+		t.Fatalf("open memory store: %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+
+	a := &Agent{db: db}
+	a.cfg.Store(config.Default())
+
+	a.recordUsageSource(ctx, "s1", "openai", "gpt-x",
+		llm.Usage{InputTokens: 1200, OutputTokens: 300}, "compaction")
+
+	rows, err := db.UsageByModel(ctx, time.Now().Add(-time.Hour))
+	if err != nil {
+		t.Fatalf("usage by model: %v", err)
+	}
+	var in, out int64
+	for _, r := range rows {
+		in += r.TokensIn
+		out += r.TokensOut
+	}
+	if in != 1200 || out != 300 {
+		t.Fatalf("recorded usage in=%d out=%d, want 1200/300 — compaction cost was not counted", in, out)
 	}
 }
