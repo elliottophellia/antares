@@ -28,14 +28,20 @@ to strip before using a region as an `edit_file` anchor. The same numbers are
 in the result's metadata (`path`, `first_line`, `last_line`, `total_lines`) for
 callers that would otherwise parse the header.
 
-`edit_file` matches `old_string` byte for byte and writes `new_string` byte for
-byte. One recovery exists: if the file uses CRLF and an anchor whose every break
-is LF did not match, it is retried with those breaks expanded to CRLF, since a
-model emits `\n` whatever it read. That runs only after the exact match has
-failed, translates `new_string` only because `old_string` had to be, and says so
-in its result. So when the anchor matched exactly, a `new_string` written with
-LF lands in a CRLF file as LF; the result notes that rather than rewriting bytes
-the caller asked for.
+Two things below the header are the tool's rather than the file's: a clipped
+read appends `… N more lines (use offset=N to continue)`, and a read that hit
+the byte cap appends `… file truncated at 400 KB`. Each sits after a blank line
+and begins with `…`, which is how the model is told to recognise them; an
+anchor must never be taken from one.
+
+`edit_file` matches `old_string` byte for byte, and writes `new_string` byte for
+byte on every path but one. That path is the single recovery: if the file uses
+CRLF and an anchor whose every break is LF did not match, it is retried with
+those breaks expanded to CRLF, since a model emits `\n` whatever it read. It
+runs only after the exact match has failed, translates `new_string` only because
+`old_string` had to be, and says so in its result. So when the anchor matched
+exactly, a `new_string` written with LF lands in a CRLF file as LF; the result
+notes that rather than rewriting bytes the caller asked for.
 
 An anchor that is not found is an anchor that is wrong — stale, misremembered,
 or reformatted. The fix is another `read_file`, not more surrounding context.

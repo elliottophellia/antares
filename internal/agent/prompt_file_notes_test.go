@@ -82,6 +82,121 @@ func TestPromptSendsAFailedMatchBackToTheFile(t *testing.T) {
 	}
 }
 
+// claimAround returns the single sentence of the prompt that makes a claim
+// mentioning needle. A claim has to be judged whole: an assertion that searches
+// the entire prompt is satisfied by a true clause sitting next to a false one,
+// which is how a sentence that scoped a translation to old_string alone stayed
+// green while the tool was translating new_string too.
+func claimAround(t *testing.T, prompt, needle string) string {
+	t.Helper()
+	at := strings.Index(prompt, needle)
+	if at < 0 {
+		t.Fatalf("prompt makes no claim mentioning %q", needle)
+	}
+	start := 0
+	if i := strings.LastIndex(prompt[:at], ". "); i >= 0 {
+		start = i + 2
+	}
+	if i := strings.LastIndex(prompt[:at], "\n"); i >= start {
+		start = i + 1
+	}
+	end := len(prompt)
+	if i := strings.Index(prompt[at:], ". "); i >= 0 {
+		end = at + i + 1
+	}
+	if i := strings.Index(prompt[at:], "\n"); i >= 0 && at+i < end {
+		end = at + i
+	}
+	return strings.TrimSpace(prompt[start:end])
+}
+
+// read_file appends a note of its own whenever it clips a read, so the lines
+// below the header are not all file content — and the bullet making that claim
+// is the same one that sends the model through large files with offset and
+// limit, which is precisely when the note appears. Taken literally, an
+// unqualified claim invites "… 2 more lines" into an anchor.
+func TestPromptExemptsTheToolsOwnTrailingNoteFromTheContentClaim(t *testing.T) {
+	const noteMarker = "…"
+
+	workspace := t.TempDir()
+	if err := os.WriteFile(filepath.Join(workspace, "notes.txt"), []byte("one\ntwo\nthree\nfour\nfive\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	read, ok := tools.Default().Get("read_file")
+	if !ok {
+		t.Fatal("read_file is not registered")
+	}
+	res := read.Execute(context.Background(), tools.Input{
+		Workspace: workspace,
+		Args:      []byte(`{"path":"notes.txt","offset":2,"limit":2}`),
+	})
+	if res.IsError {
+		t.Fatalf("read_file: %s", res.Content)
+	}
+	_, below, ok := strings.Cut(res.Content, "\n\n")
+	if !ok {
+		t.Fatalf("read_file output has no header line followed by a blank line: %q", res.Content)
+	}
+	const inTheFile = "two\nthree\n"
+	if !strings.HasPrefix(below, inTheFile) {
+		t.Fatalf("read_file did not return the range's own bytes first: %q", below)
+	}
+	added := strings.TrimPrefix(below, inTheFile)
+	if strings.TrimSpace(added) == "" {
+		t.Fatal("a clipped read no longer appends a note; the prompt's exception for one is stale and should go")
+	}
+	for _, line := range strings.Split(strings.Trim(added, "\n"), "\n") {
+		if !strings.HasPrefix(line, noteMarker) {
+			t.Fatalf("read_file appends a line the prompt gives the model no way to tell from content: %q", line)
+		}
+	}
+
+	claim := claimAround(t, filePrompt(t), "that blank line")
+	if !strings.Contains(claim, noteMarker) {
+		t.Errorf("prompt claims file content below the header without exempting the %q note read_file just appended: %q", noteMarker, claim)
+	}
+}
+
+// The recovery stage translates new_string because it had to translate
+// old_string, so "written byte for byte" is false on exactly the path the rest
+// of the same sentence describes. The tool is right to do it — the alternative
+// is refusing an anchor it can match losslessly — so it is the sentence that
+// has to change.
+func TestPromptQualifiesTheByteForByteWriteTheRecoveryStageBreaks(t *testing.T) {
+	workspace := t.TempDir()
+	path := filepath.Join(workspace, "win.txt")
+	if err := os.WriteFile(path, []byte("alpha\r\nbeta\r\ngamma\r\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	edit, ok := tools.Default().Get("edit_file")
+	if !ok {
+		t.Fatal("edit_file is not registered")
+	}
+	// An all-LF anchor against a CRLF file: only the recovery stage can match it.
+	res := edit.Execute(context.Background(), tools.Input{
+		Workspace: workspace,
+		Args:      []byte(`{"path":"win.txt","old_string":"beta\ngamma","new_string":"beta\nGAMMA"}`),
+	})
+	if res.IsError {
+		t.Fatalf("edit_file: %s", res.Content)
+	}
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(after), "beta\nGAMMA") {
+		t.Fatal("new_string reached disk byte for byte here; the prompt's exception for the recovery stage is stale and should go")
+	}
+	if want := "alpha\r\nbeta\r\nGAMMA\r\n"; string(after) != want {
+		t.Fatalf("recovery stage wrote %q, want %q", after, want)
+	}
+
+	claim := claimAround(t, filePrompt(t), "byte for byte")
+	if !strings.Contains(claim, "new_string's line breaks are expanded to CRLF") {
+		t.Errorf("prompt promises a byte-for-byte write and does not name the translation edit_file just applied to new_string: %q", claim)
+	}
+}
+
 // Nothing above is worth asserting if read_file has gone back to decorating
 // lines: the prompt would be lying again, in the same way and to the same cost.
 func TestPromptClaimOfVerbatimReadsHoldsAgainstTheRealTool(t *testing.T) {
