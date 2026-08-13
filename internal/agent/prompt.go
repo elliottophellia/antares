@@ -109,6 +109,9 @@ help them now — do not block them.
 			b.WriteString("- read_file returns lines as `NUMBER|CONTENT`. The `|` is metadata only. When calling edit_file, copy **only** the content after `|` into old_string/new_string — never the line number. Preserve tabs and spaces exactly (do not expand tabs to spaces). Line endings are matched automatically.\n")
 			b.WriteString("- Before every edit_file call, re-read the region you are editing (read_file with offset/limit on large files). edit_file requires an exact, unique old_string from that fresh read. After any successful edit or write, re-read before making another edit; do not reuse an older block or invent identifiers. If it reports multiple occurrences, include unique neighbouring lines or use replace_all only when every occurrence should change.\n")
 		}
+		if hasTool(active, "write_file") {
+			b.WriteString("- File creation is complete only after write_file returns a successful result. A filename in the request, planned arguments, a diff preview, or the user's statement that a file was created is not evidence that it exists. Never turn any of those into your own confirmation. If asked whether a file exists, where it was written, or what it contains without a successful write_file result in this run, check it with read_file first and report the real result. Do not retry the same failed write; explain its actionable error or use a genuinely different valid path/content.\n")
+		}
 		if hasTool(active, "vps_upload") || hasTool(active, "vps_download") || hasTool(active, "vps_run") {
 			// Without this, models fall back to terminal rsync/scp and never use
 			// the saved-host SFTP tools (credentials and TOFU stay unused).

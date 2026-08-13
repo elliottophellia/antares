@@ -7,6 +7,7 @@ import (
 
 	"github.com/enowdev/antares/internal/config"
 	"github.com/enowdev/antares/internal/store"
+	"github.com/enowdev/antares/internal/tools"
 )
 
 // The tool-call guardrail auto-continue hinges on incompleteTodos: it decides
@@ -112,5 +113,27 @@ func TestAbsoluteCeilingDisabledWhenZero(t *testing.T) {
 	cfg.Guardrails.AbsoluteMaxToolCalls = 0
 	if cfg.Guardrails.AbsoluteMaxToolCalls != 0 {
 		t.Fatal("AbsoluteMaxToolCalls should be 0 when disabled")
+	}
+}
+
+func TestSystemPromptRequiresSuccessfulWriteBeforeClaimingCreation(t *testing.T) {
+	cfg := config.Default()
+	cfg.Memory.Enabled = false
+	a := agentWithConfig(cfg)
+	sess := &store.Session{ID: "s", Workspace: "/workspace", Meta: store.Meta{}}
+	write, ok := tools.Default().Get("write_file")
+	if !ok {
+		t.Fatal("write_file is not registered")
+	}
+	prompt := a.buildSystemPrompt(context.Background(), Request{}, sess, []tools.Tool{write})
+	for _, want := range []string{
+		"only after write_file returns a successful result",
+		"user's statement that a file was created is not evidence",
+		"check it with read_file first",
+		"Do not retry the same failed write",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("system prompt missing %q", want)
+		}
 	}
 }

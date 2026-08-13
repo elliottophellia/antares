@@ -7,12 +7,15 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -179,10 +182,11 @@ type rpcRequest struct {
 
 // rpcResponse is a JSON-RPC 2.0 response.
 type rpcResponse struct {
-	JSONRPC string          `json:"jsonrpc"`
-	ID      *int64          `json:"id"`
-	Result  json.RawMessage `json:"result"`
-	Error   *rpcError       `json:"error"`
+	JSONRPC      string          `json:"jsonrpc"`
+	ID           *int64          `json:"id"`
+	Result       json.RawMessage `json:"result"`
+	Error        *rpcError       `json:"error"`
+	transportErr error
 }
 
 type rpcError struct {
@@ -504,7 +508,35 @@ type stdioTransport struct {
 	// otherwise make every future call wait the full timeout forever. After
 	// maxConsecutiveTimeouts the transport self-closes so the next caller fails
 	// fast and the process is reaped. Any successful reply resets it to zero.
-	timeouts int
+	timeouts   int
+	stderr     stderrCapture
+	stderrDone chan struct{} // closed when the stderr scanner has drained the pipe
+	exited     chan struct{} // closed once the child has been waited on
+	readerErr  error
+}
+
+type stderrCapture struct {
+	mu  sync.Mutex
+	buf []byte
+}
+
+const maxStderrBytes = 16 << 10
+
+func (c *stderrCapture) append(line string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.buf = append(c.buf, line...)
+	c.buf = append(c.buf, '\n')
+	if len(c.buf) > maxStderrBytes {
+		copy(c.buf, c.buf[len(c.buf)-maxStderrBytes:])
+		c.buf = c.buf[:maxStderrBytes]
+	}
+}
+
+func (c *stderrCapture) String() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return strings.TrimSpace(string(c.buf))
 }
 
 // maxConsecutiveTimeouts is how many back-to-back ctx.Done timeouts a stdio
@@ -515,7 +547,7 @@ func newStdioTransport(cfg ServerConfig) (transport, error) {
 	if strings.TrimSpace(cfg.Command) == "" {
 		return nil, fmt.Errorf("stdio transport needs a command")
 	}
-	cmd := exec.Command(cfg.Command, cfg.Args...)
+	cmd := exec.Command(cfg.Command, expandArgs(cfg.Args)...)
 	cmd.Env = os.Environ()
 	for k, v := range cfg.Env {
 		cmd.Env = append(cmd.Env, k+"="+v)
@@ -530,31 +562,79 @@ func newStdioTransport(cfg ServerConfig) (transport, error) {
 		return nil, err
 	}
 	// Server logs go to stderr; surface them at debug level rather than dropping.
-	stderr, err := cmd.StderrPipe()
+	// This is a pipe we own rather than cmd.StderrPipe because Wait closes the
+	// pipes it hands out, and reaping the child would then race the scanner and
+	// truncate exactly the diagnostics we report when a server dies at startup.
+	stderrR, stderrW, err := os.Pipe()
 	if err != nil {
 		return nil, err
 	}
+	cmd.Stderr = stderrW
 	if err := cmd.Start(); err != nil {
+		stderrR.Close()
+		stderrW.Close()
 		return nil, fmt.Errorf("start %s: %w", cfg.Command, err)
 	}
-	go func() {
-		sc := bufio.NewScanner(stderr)
-		for sc.Scan() {
-			slog.Debug("mcp server stderr", "command", cfg.Command, "line", sc.Text())
-		}
-	}()
-
+	// Drop the parent's writer so the child holds the only one and the scanner
+	// sees EOF when it exits.
+	stderrW.Close()
 	t := &stdioTransport{
 		cmd:        cmd,
 		stdin:      stdin,
 		stdout:     bufio.NewReaderSize(stdout, 1<<20),
 		pending:    map[int64]chan *rpcResponse{},
 		readerDone: make(chan struct{}),
+		stderrDone: make(chan struct{}),
+		exited:     make(chan struct{}),
 	}
+	go func() {
+		defer close(t.stderrDone)
+		defer stderrR.Close()
+		sc := bufio.NewScanner(stderrR)
+		for sc.Scan() {
+			t.stderr.append(sc.Text())
+			slog.Debug("mcp server stderr", "command", cfg.Command, "line", sc.Text())
+		}
+	}()
 	// Reap the child if it exits on its own so it never sits as a zombie until
 	// the next Close/Refresh. Wait is idempotent via waitOnce.
-	go func() { _ = t.reap() }()
+	go func() {
+		defer close(t.exited)
+		_ = t.reap()
+	}()
 	return t, nil
+}
+
+// envRef matches only the ${NAME} form the catalogue uses. Bare $NAME is left
+// alone so arguments holding a literal dollar sign — passwords, regexes,
+// connection strings — survive verbatim.
+var envRef = regexp.MustCompile(`\$\{([A-Za-z_][A-Za-z0-9_]*)\}`)
+
+func expandArgs(args []string) []string {
+	home, _ := os.UserHomeDir()
+	out := make([]string, len(args))
+	for i, arg := range args {
+		arg = envRef.ReplaceAllStringFunc(arg, func(ref string) string {
+			key := ref[2 : len(ref)-1]
+			if v, ok := os.LookupEnv(key); ok {
+				return v
+			}
+			if key == "HOME" {
+				return home
+			}
+			// An undefined variable stays literal; collapsing it to an empty
+			// string would silently hand the server a wrong path.
+			return ref
+		})
+		switch {
+		case arg == "~":
+			arg = home
+		case strings.HasPrefix(arg, "~/"), strings.HasPrefix(arg, `~\`):
+			arg = filepath.Join(home, arg[2:])
+		}
+		out[i] = arg
+	}
+	return out
 }
 
 func (t *stdioTransport) reap() error {
@@ -614,19 +694,53 @@ func (t *stdioTransport) startReader() {
 }
 
 // failPending delivers an error to every waiting caller and clears the map.
-func (t *stdioTransport) failPending(err error) {
+func (t *stdioTransport) failPending(readErr error) {
+	err := t.processError(readErr)
 	t.pendingMu.Lock()
+	t.readerErr = err
 	for id, ch := range t.pending {
 		// Non-blocking: the caller may have already returned on ctx.Done and
 		// stopped reading. The channel is buffered(1), so a live caller still
 		// receives this; an abandoned one must not wedge the reader goroutine.
 		select {
-		case ch <- &rpcResponse{Error: &rpcError{Message: err.Error()}}:
+		case ch <- &rpcResponse{transportErr: err}:
 		default:
 		}
 		delete(t.pending, id)
 	}
 	t.pendingMu.Unlock()
+}
+
+// exitGrace bounds how long a failed read waits for the child's exit status and
+// stderr tail. A server that closed stdout but kept running must not wedge the
+// reader goroutine, which still has to close readerDone so callers fail fast.
+const exitGrace = 2 * time.Second
+
+func (t *stdioTransport) processError(readErr error) error {
+	grace := time.After(exitGrace)
+	select {
+	case <-t.exited:
+	case <-grace:
+		return errors.New("MCP server closed stdout while still running")
+	}
+	select {
+	case <-t.stderrDone:
+	case <-grace:
+	}
+	waitErr := t.reap()
+	stderr := t.stderr.String()
+	switch {
+	case waitErr != nil && stderr != "":
+		return fmt.Errorf("MCP server exited (%v): %s", waitErr, stderr)
+	case waitErr != nil:
+		return fmt.Errorf("MCP server exited: %w", waitErr)
+	case stderr != "":
+		return fmt.Errorf("MCP server closed stdout: %s", stderr)
+	case readErr != nil && !errors.Is(readErr, io.EOF):
+		return fmt.Errorf("MCP server output failed: %w", readErr)
+	default:
+		return errors.New("MCP server exited before replying")
+	}
 }
 
 func (t *stdioTransport) send(ctx context.Context, req rpcRequest) (*rpcResponse, error) {
@@ -693,9 +807,19 @@ func (t *stdioTransport) send(ctx context.Context, req rpcRequest) (*rpcResponse
 		}
 		return nil, ctx.Err()
 	case <-t.readerDone:
-		// The background reader exited (EOF, child died). Surface the failure.
-		return nil, fmt.Errorf("mcp connection lost")
+		// The background reader exited (EOF, child died). Surface its exit status
+		// and bounded stderr tail instead of reducing every startup crash to EOF.
+		t.pendingMu.Lock()
+		err := t.readerErr
+		t.pendingMu.Unlock()
+		if err == nil {
+			err = errors.New("MCP server connection lost")
+		}
+		return nil, err
 	case r := <-ch:
+		if r.transportErr != nil {
+			return nil, r.transportErr
+		}
 		t.pendingMu.Lock()
 		t.timeouts = 0
 		t.pendingMu.Unlock()

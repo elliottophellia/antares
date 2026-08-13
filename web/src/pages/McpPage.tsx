@@ -28,6 +28,7 @@ import {
   Tabs,
   TabsList,
   TabsTrigger,
+  Textarea,
 } from '@/components/ui/primitives'
 import {
   Dialog,
@@ -267,12 +268,14 @@ function McpDocs() {
       transport: stdio
       command: npx
       args: ["-y", "@modelcontextprotocol/server-filesystem", "/home/you/data"]
+      # env:                              # optional
+      #   MY_VAR: "value"
     remote:
       enabled: true
       transport: http
       url: https://example.com/mcp
       headers:
-        Authorization: "Bearer …"`}
+        Authorization: "Bearer ..."`}
         </pre>
         <p className="mt-3 text-xs text-muted-foreground">{t('mcp.docsHint')}</p>
       </CardContent>
@@ -295,6 +298,7 @@ function AddMcpDialog({
   const [command, setCommand] = useState('')
   const [args, setArgs] = useState('')
   const [url, setUrl] = useState('')
+  const [envText, setEnvText] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string>()
 
@@ -304,6 +308,7 @@ function AddMcpDialog({
     setCommand('')
     setArgs('')
     setUrl('')
+    setEnvText('')
     setError(undefined)
   }
 
@@ -311,6 +316,22 @@ function AddMcpDialog({
     setBusy(true)
     setError(undefined)
     try {
+      const env: Record<string, string> = {}
+      // Only stdio servers take an environment. A remote server is configured
+      // with headers instead, and the backend drops anything sent here.
+      if (transport === 'stdio') {
+        for (const line of envText.split('\n')) {
+          const trimmed = line.trim()
+          if (!trimmed || trimmed.startsWith('#')) continue
+          const eq = trimmed.indexOf('=')
+          const key = eq > 0 ? trimmed.slice(0, eq).trim() : ''
+          if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) {
+            setError(t('mcp.envParseError'))
+            return
+          }
+          env[key] = trimmed.slice(eq + 1).trim()
+        }
+      }
       const body =
         transport === 'stdio'
           ? {
@@ -318,6 +339,7 @@ function AddMcpDialog({
               transport,
               command,
               args: args.split(/\s+/).filter(Boolean),
+              env,
             }
           : { name, transport, url }
       const r = await post<{ ok: boolean; error?: string }>('/mcp/servers', body)
@@ -401,6 +423,17 @@ function AddMcpDialog({
                   onChange={(e) => setArgs(e.target.value)}
                   placeholder="-y @modelcontextprotocol/server-filesystem /home/you"
                   className="font-mono text-xs"
+                />
+              </div>
+              <div className="grid gap-1.5">
+                <Label htmlFor="mcp-env">{t('mcp.fieldEnv')}</Label>
+                <Textarea
+                  id="mcp-env"
+                  value={envText}
+                  onChange={(e) => setEnvText(e.target.value)}
+                  placeholder={t('mcp.fieldEnvPlaceholder')}
+                  className="min-h-[60px] resize-y font-mono text-xs"
+                  rows={3}
                 />
               </div>
             </>

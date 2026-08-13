@@ -1,7 +1,11 @@
 package tools
 
 import (
+	"context"
+	"encoding/json"
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -58,5 +62,65 @@ func TestOrdinarySessionStaysConfined(t *testing.T) {
 	}
 	if _, err := resolveRead(in, filepath.Join(outside, "x.txt")); err == nil {
 		t.Fatalf("ordinary read outside workspace must be refused")
+	}
+}
+
+func TestWriteFileCreatesEmptyFileAndParents(t *testing.T) {
+	workspace := t.TempDir()
+	args, err := json.Marshal(map[string]any{"path": "nested/empty.txt", "content": ""})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := (writeFileTool{}).Execute(context.Background(), Input{Workspace: workspace, Args: args})
+	if result.IsError {
+		t.Fatalf("write_file: %s", result.Content)
+	}
+	if !strings.Contains(result.Content, "0 bytes, 0 lines") {
+		t.Fatalf("empty-file result = %q, want zero bytes and zero lines", result.Content)
+	}
+	path := filepath.Join(workspace, "nested", "empty.txt")
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("created empty file missing: %v", err)
+	}
+	if info.IsDir() || info.Size() != 0 {
+		t.Fatalf("created empty target = %+v, want a zero-byte file", info)
+	}
+}
+
+func TestWriteFileRejectsDirectoryTargetWithoutMutation(t *testing.T) {
+	workspace := t.TempDir()
+	path := filepath.Join(workspace, "existing")
+	if err := os.Mkdir(path, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	args, err := json.Marshal(map[string]any{"path": "existing", "content": "should not write"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := (writeFileTool{}).Execute(context.Background(), Input{Workspace: workspace, Args: args})
+	if !result.IsError || !strings.Contains(result.Content, "target is a directory") {
+		t.Fatalf("directory target result = %+v, want actionable error", result)
+	}
+	entries, err := os.ReadDir(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("directory was mutated: %v", entries)
+	}
+}
+
+func TestWriteFileRejectsMissingContentBeforeFilesystemMutation(t *testing.T) {
+	workspace := t.TempDir()
+	result := (writeFileTool{}).Execute(context.Background(), Input{
+		Workspace: workspace,
+		Args:      []byte(`{"path":"nested/missing.txt"}`),
+	})
+	if !result.IsError || !strings.Contains(result.Content, "content is required") {
+		t.Fatalf("missing-content result = %+v, want actionable error", result)
+	}
+	if _, err := os.Stat(filepath.Join(workspace, "nested")); !os.IsNotExist(err) {
+		t.Fatalf("missing content mutated filesystem: %v", err)
 	}
 }

@@ -236,48 +236,57 @@ type writeFileTool struct{}
 
 func (writeFileTool) Name() string { return "write_file" }
 func (writeFileTool) Description() string {
-	return "Create or overwrite a file with the given content. Parent directories are created automatically."
+	return "Create or overwrite a file with the given content. Always provide content; use an empty string only to intentionally create a zero-byte file. Parent directories are created automatically."
 }
 func (writeFileTool) RequiresApproval() bool { return true }
 func (writeFileTool) Schema() map[string]any {
 	return schema(map[string]any{
 		"path":    prop("string", "Destination file path."),
-		"content": prop("string", "Full file content to write."),
+		"content": prop("string", "Complete file content. This field must be present; use an empty string only for an intentional zero-byte file."),
 		"append":  propDefault("boolean", "Append instead of overwriting.", false),
 	}, "path", "content")
 }
 
 func (writeFileTool) Execute(_ context.Context, in Input) Result {
 	var args struct {
-		Path    string `json:"path"`
-		Content string `json:"content"`
-		Append  bool   `json:"append"`
+		Path    string  `json:"path"`
+		Content *string `json:"content"`
+		Append  bool    `json:"append"`
 	}
 	if err := in.Bind(&args); err != nil {
 		return Errorf("%v", err)
 	}
+	if args.Content == nil {
+		return Errorf("content is required; provide the complete file content (use an empty string for an intentional empty file)")
+	}
+	content := *args.Content
 	path, err := resolveWrite(in, args.Path)
 	if err != nil {
 		return Errorf("%v", err)
+	}
+	existed := false
+	if info, statErr := os.Stat(path); statErr == nil {
+		if info.IsDir() {
+			return Errorf("cannot write %s: target is a directory; provide a file path", args.Path)
+		}
+		existed = true
+	} else if !os.IsNotExist(statErr) {
+		return Errorf("cannot inspect %s: %v", args.Path, statErr)
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return Errorf("cannot create parent directory: %v", err)
 	}
 
-	existed := false
-	if _, err := os.Stat(path); err == nil {
-		existed = true
-	}
 	if args.Append {
 		f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 		if err != nil {
 			return Errorf("cannot open %s: %v", args.Path, err)
 		}
 		defer f.Close()
-		if _, err := f.WriteString(args.Content); err != nil {
+		if _, err := f.WriteString(content); err != nil {
 			return Errorf("cannot append to %s: %v", args.Path, err)
 		}
-	} else if err := writeWithCheckpoint(in, path, []byte(args.Content), "write_file"); err != nil {
+	} else if err := writeWithCheckpoint(in, path, []byte(content), "write_file"); err != nil {
 		return Errorf("cannot write %s: %v", args.Path, err)
 	}
 
@@ -289,9 +298,13 @@ func (writeFileTool) Execute(_ context.Context, in Input) Result {
 		verb = "Appended to"
 	}
 	rel := relTo(in.Workspace, path)
+	lines := 0
+	if content != "" {
+		lines = strings.Count(content, "\n") + 1
+	}
 	return Result{
-		Content: fmt.Sprintf("%s %s (%d bytes, %d lines)", verb, rel, len(args.Content), strings.Count(args.Content, "\n")+1),
-		Meta:    map[string]any{"path": rel, "bytes": len(args.Content)},
+		Content: fmt.Sprintf("%s %s (%d bytes, %d lines)", verb, rel, len(content), lines),
+		Meta:    map[string]any{"path": rel, "bytes": len(content)},
 	}
 }
 

@@ -7,7 +7,7 @@
     "homepage": "https://github.com/modelcontextprotocol/servers/tree/main/src/filesystem",
     "author": "Model Context Protocol",
     "command": "npx",
-    "args": ["-y", "@modelcontextprotocol/server-filesystem", "${HOME}"],
+    "args": ["-y", "@modelcontextprotocol/server-filesystem@2026.7.10", "${HOME}"],
     "setup": "Edit the last argument to the directory you want exposed. Node is required."
   },
   {
@@ -18,8 +18,8 @@
     "homepage": "https://github.com/modelcontextprotocol/servers/tree/main/src/fetch",
     "author": "Model Context Protocol",
     "command": "uvx",
-    "args": ["mcp-server-fetch"],
-    "setup": "Needs uv (https://docs.astral.sh/uv/)."
+    "args": ["--from", "mcp-server-fetch==2026.7.10", "--with", "mcp==1.9.4", "mcp-server-fetch"],
+    "setup": "Needs uv (https://docs.astral.sh/uv/). Versions are pinned because newer MCP SDK releases break this server."
   },
   {
     "id": "git",
@@ -29,8 +29,8 @@
     "homepage": "https://github.com/modelcontextprotocol/servers/tree/main/src/git",
     "author": "Model Context Protocol",
     "command": "uvx",
-    "args": ["mcp-server-git", "--repository", "."],
-    "setup": "Point --repository at the checkout you want. Needs uv."
+    "args": ["--from", "mcp-server-git==2026.7.10", "--with", "mcp==1.9.4", "mcp-server-git", "--repository", "."],
+    "setup": "Point --repository at the checkout you want. Needs uv. Versions are pinned because newer MCP SDK releases break this server."
   },
   {
     "id": "github",
@@ -53,7 +53,7 @@
     "homepage": "https://github.com/modelcontextprotocol/servers/tree/main/src/postgres",
     "author": "Model Context Protocol",
     "command": "npx",
-    "args": ["-y", "@modelcontextprotocol/server-postgres", "postgresql://localhost/mydb"],
+    "args": ["-y", "@modelcontextprotocol/server-postgres@0.6.2", "postgresql://localhost/mydb"],
     "setup": "Replace the connection string with your own."
   },
   {
@@ -64,8 +64,8 @@
     "homepage": "https://github.com/modelcontextprotocol/servers/tree/main/src/sqlite",
     "author": "Model Context Protocol",
     "command": "uvx",
-    "args": ["mcp-server-sqlite", "--db-path", "./data.db"],
-    "setup": "Point --db-path at your database. Needs uv."
+    "args": ["--from", "mcp-server-sqlite==2025.4.25", "--with", "mcp==1.9.4", "mcp-server-sqlite", "--db-path", "./data.db"],
+    "setup": "Point --db-path at your database. Needs uv. Versions are pinned because newer MCP SDK releases break this server."
   },
   {
     "id": "memory",
@@ -75,7 +75,7 @@
     "homepage": "https://github.com/modelcontextprotocol/servers/tree/main/src/memory",
     "author": "Model Context Protocol",
     "command": "npx",
-    "args": ["-y", "@modelcontextprotocol/server-memory"]
+    "args": ["-y", "@modelcontextprotocol/server-memory@2026.7.4"]
   },
   {
     "id": "sequential-thinking",
@@ -85,7 +85,7 @@
     "homepage": "https://github.com/modelcontextprotocol/servers/tree/main/src/sequentialthinking",
     "author": "Model Context Protocol",
     "command": "npx",
-    "args": ["-y", "@modelcontextprotocol/server-sequential-thinking"]
+    "args": ["-y", "@modelcontextprotocol/server-sequential-thinking@2026.7.4"]
   },
   {
     "id": "time",
@@ -95,8 +95,8 @@
     "homepage": "https://github.com/modelcontextprotocol/servers/tree/main/src/time",
     "author": "Model Context Protocol",
     "command": "uvx",
-    "args": ["mcp-server-time"],
-    "setup": "Needs uv."
+    "args": ["--from", "mcp-server-time==2026.7.10", "--with", "mcp==1.23.0", "mcp-server-time"],
+    "setup": "Needs uv. Versions are pinned because newer MCP SDK releases break older server packages."
   },
   {
     "id": "slack",
@@ -106,7 +106,7 @@
     "homepage": "https://github.com/modelcontextprotocol/servers/tree/main/src/slack",
     "author": "Model Context Protocol",
     "command": "npx",
-    "args": ["-y", "@modelcontextprotocol/server-slack"],
+    "args": ["-y", "@modelcontextprotocol/server-slack@2025.4.25"],
     "env": { "SLACK_BOT_TOKEN": "", "SLACK_TEAM_ID": "" },
     "needs_keys": ["SLACK_BOT_TOKEN", "SLACK_TEAM_ID"],
     "setup": "Create a Slack app, add bot scopes, and install it to the workspace."
@@ -119,20 +119,10 @@
     "homepage": "https://github.com/modelcontextprotocol/servers/tree/main/src/brave-search",
     "author": "Model Context Protocol",
     "command": "npx",
-    "args": ["-y", "@modelcontextprotocol/server-brave-search"],
+    "args": ["-y", "@modelcontextprotocol/server-brave-search@0.6.2"],
     "env": { "BRAVE_API_KEY": "" },
     "needs_keys": ["BRAVE_API_KEY"],
     "setup": "Free tier keys at https://brave.com/search/api/."
-  },
-  {
-    "id": "puppeteer",
-    "name": "Puppeteer",
-    "summary": "Browser automation through Puppeteer. Antares has its own browser tool; use this when you want the Puppeteer API instead.",
-    "tags": ["browser", "web"],
-    "homepage": "https://github.com/modelcontextprotocol/servers/tree/main/src/puppeteer",
-    "author": "Model Context Protocol",
-    "command": "npx",
-    "args": ["-y", "@modelcontextprotocol/server-puppeteer"]
   },
   {
     "id": "notion",
@@ -142,7 +132,7 @@
     "homepage": "https://github.com/makenotion/notion-mcp-server",
     "author": "Notion",
     "command": "npx",
-    "args": ["-y", "@notionhq/notion-mcp-server"],
+    "args": ["-y", "@notionhq/notion-mcp-server@2.5.1"],
     "env": { "NOTION_TOKEN": "" },
     "needs_keys": ["NOTION_TOKEN"],
     "setup": "Create an internal integration at https://www.notion.so/my-integrations and share the pages with it."
@@ -154,8 +144,8 @@
     "tags": ["issues", "productivity"],
     "homepage": "https://linear.app/docs/mcp",
     "author": "Linear",
-    "url": "https://mcp.linear.app/sse",
-    "setup": "A hosted server — it will ask you to authorise on first use."
+    "url": "https://mcp.linear.app/mcp",
+    "setup": "Hosted Streamable HTTP server. OAuth is required; bearer-token headers can be configured manually."
   },
   {
     "id": "sentry",
@@ -164,8 +154,8 @@
     "tags": ["observability"],
     "homepage": "https://docs.sentry.io/product/sentry-mcp/",
     "author": "Sentry",
-    "url": "https://mcp.sentry.dev/sse",
-    "setup": "A hosted server — it will ask you to authorise on first use."
+    "url": "https://mcp.sentry.dev/mcp",
+    "setup": "Hosted Streamable HTTP server. OAuth is required; bearer-token headers can be configured manually."
   },
   {
     "id": "playwright",
@@ -175,7 +165,7 @@
     "homepage": "https://github.com/microsoft/playwright-mcp",
     "author": "Microsoft",
     "command": "npx",
-    "args": ["-y", "@playwright/mcp@latest"]
+    "args": ["-y", "@playwright/mcp@0.0.79"]
   },
   {
     "id": "everything",
@@ -185,6 +175,6 @@
     "homepage": "https://github.com/modelcontextprotocol/servers/tree/main/src/everything",
     "author": "Model Context Protocol",
     "command": "npx",
-    "args": ["-y", "@modelcontextprotocol/server-everything"]
+    "args": ["-y", "@modelcontextprotocol/server-everything@2026.7.4"]
   }
 ]

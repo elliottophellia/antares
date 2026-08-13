@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"os"
 	"os/exec"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -195,6 +196,39 @@ func TestUnknownTransport(t *testing.T) {
 	}
 }
 
+func TestStdioStartupErrorIncludesChildStderr(t *testing.T) {
+	_, err := Connect(context.Background(), "broken", ServerConfig{
+		Transport: "stdio",
+		Command:   os.Args[0],
+		Args:      []string{"-test.run=TestHelperServer"},
+		Env: map[string]string{
+			"ANTARES_MCP_HELPER": "broken",
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "MCP server exited") {
+		t.Fatalf("error = %v, want child exit diagnostics", err)
+	}
+}
+
+func TestExpandArgsExpandsHomeAndEnvironment(t *testing.T) {
+	t.Setenv("MCP_TEST_PATH", "/tmp/mcp-test")
+	got := expandArgs([]string{"${MCP_TEST_PATH}", "${HOME}/data", "~/cache"})
+	if got[0] != "/tmp/mcp-test" || !strings.HasSuffix(got[1], "/data") || !strings.HasSuffix(got[2], "/cache") {
+		t.Fatalf("expanded args = %#v", got)
+	}
+}
+
+func TestExpandArgsLeavesLiteralsAndUnsetVariablesAlone(t *testing.T) {
+	os.Unsetenv("MCP_TEST_UNSET")
+	got := expandArgs([]string{"${MCP_TEST_UNSET}/data", "postgresql://u:p$sw0rd@host/db", "$HOME"})
+	want := []string{"${MCP_TEST_UNSET}/data", "postgresql://u:p$sw0rd@host/db", "$HOME"}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("arg %d = %q, want %q", i, got[i], want[i])
+		}
+	}
+}
+
 func TestToolNameNamespacing(t *testing.T) {
 	got := mcpToolName("my server", "read/file")
 	if got != "mcp__my_server__read_file" {
@@ -202,9 +236,103 @@ func TestToolNameNamespacing(t *testing.T) {
 	}
 }
 
+func TestUpgradeBuiltinServersReplacesOnlyStaleCommands(t *testing.T) {
+	cfg := config.Default()
+	cfg.MCP.Servers["fetch"] = config.MCPServer{Command: "uvx", Args: []string{"mcp-server-fetch"}, Enabled: true}
+	cfg.MCP.Servers["memory"] = config.MCPServer{Command: "npx", Args: []string{"-y", "@modelcontextprotocol/server-memory"}, Enabled: true}
+	cfg.MCP.Servers["linear"] = config.MCPServer{Transport: "http", URL: "https://mcp.linear.app/sse", Enabled: true}
+	cfg.MCP.Servers["git"] = config.MCPServer{Command: "custom-git", Args: []string{"mcp-server-git"}, Enabled: true}
+
+	upgradeBuiltinServers(cfg)
+
+	fetch := cfg.MCP.Servers["fetch"]
+	if len(fetch.Args) < 5 || fetch.Args[0] != "--from" || fetch.Args[3] != "mcp==1.9.4" {
+		t.Fatalf("fetch args were not upgraded: %#v", fetch.Args)
+	}
+	if memory := cfg.MCP.Servers["memory"]; len(memory.Args) != 2 || memory.Args[1] != "@modelcontextprotocol/server-memory@2026.7.4" {
+		t.Fatalf("memory args were not upgraded: %#v", memory.Args)
+	}
+	if linear := cfg.MCP.Servers["linear"]; linear.URL != "https://mcp.linear.app/mcp" {
+		t.Fatalf("linear URL was not upgraded: %q", linear.URL)
+	}
+	if git := cfg.MCP.Servers["git"]; git.Command != "custom-git" || len(git.Args) != 1 {
+		t.Fatalf("custom git config was changed: %+v", git)
+	}
+}
+
+// Pinning a package must never discard the arguments that decide what a server
+// actually exposes — the filesystem directory above all, since silently
+// resetting it to ${HOME} would widen what the agent can read.
+func TestUpgradeBuiltinServersKeepsUserArguments(t *testing.T) {
+	cfg := config.Default()
+	cfg.MCP.Servers["filesystem"] = config.MCPServer{
+		Command: "npx",
+		Args:    []string{"-y", "@modelcontextprotocol/server-filesystem", "/home/me/private-data"},
+		Enabled: true,
+	}
+	cfg.MCP.Servers["git"] = config.MCPServer{
+		Command: "uvx",
+		Args:    []string{"mcp-server-git", "--repository", "/home/me/myrepo"},
+		Enabled: true,
+	}
+	cfg.MCP.Servers["postgres"] = config.MCPServer{
+		Command: "npx",
+		Args:    []string{"-y", "@modelcontextprotocol/server-postgres", "postgresql://prod/realdb"},
+		Enabled: true,
+	}
+	cfg.MCP.Servers["sentry"] = config.MCPServer{
+		Transport: "http",
+		URL:       "https://mcp.internal.example/sentry",
+		Enabled:   true,
+	}
+
+	upgradeBuiltinServers(cfg)
+
+	fs := cfg.MCP.Servers["filesystem"]
+	if len(fs.Args) != 3 || fs.Args[1] != "@modelcontextprotocol/server-filesystem@2026.7.10" || fs.Args[2] != "/home/me/private-data" {
+		t.Errorf("filesystem args = %#v, want the pinned package and the user's directory", fs.Args)
+	}
+	git := cfg.MCP.Servers["git"]
+	if len(git.Args) < 2 || git.Args[len(git.Args)-1] != "/home/me/myrepo" || git.Args[len(git.Args)-2] != "--repository" {
+		t.Errorf("git args = %#v, want the user's --repository preserved", git.Args)
+	}
+	if pg := cfg.MCP.Servers["postgres"]; len(pg.Args) != 3 || pg.Args[2] != "postgresql://prod/realdb" {
+		t.Errorf("postgres args = %#v, want the user's connection string preserved", pg.Args)
+	}
+	if sentry := cfg.MCP.Servers["sentry"]; sentry.URL != "https://mcp.internal.example/sentry" {
+		t.Errorf("custom sentry URL was rewritten to %q", sentry.URL)
+	}
+}
+
+// Every start-up runs the upgrade, so a second pass over already-pinned
+// arguments must not stack another --from or re-append the package.
+func TestUpgradeBuiltinServersIsIdempotent(t *testing.T) {
+	cfg := config.Default()
+	cfg.MCP.Servers["fetch"] = config.MCPServer{Command: "uvx", Args: []string{"mcp-server-fetch"}, Enabled: true}
+	cfg.MCP.Servers["memory"] = config.MCPServer{Command: "npx", Args: []string{"-y", "@modelcontextprotocol/server-memory"}, Enabled: true}
+	cfg.MCP.Servers["linear"] = config.MCPServer{Transport: "http", URL: "https://mcp.linear.app/sse", Enabled: true}
+
+	upgradeBuiltinServers(cfg)
+	once := map[string][]string{}
+	for name, server := range cfg.MCP.Servers {
+		once[name] = append([]string(nil), server.Args...)
+	}
+
+	upgradeBuiltinServers(cfg)
+	for _, name := range []string{"fetch", "memory", "linear"} {
+		if got := cfg.MCP.Servers[name].Args; !slices.Equal(got, once[name]) {
+			t.Errorf("%s args changed on the second pass: %#v then %#v", name, once[name], got)
+		}
+	}
+}
+
 // TestHelperServer is not a real test: when ANTARES_MCP_HELPER is set it acts
 // as a minimal MCP server speaking newline-delimited JSON-RPC on stdio.
 func TestHelperServer(t *testing.T) {
+	if os.Getenv("ANTARES_MCP_HELPER") == "broken" {
+		os.Stderr.WriteString("synthetic startup failure\n")
+		os.Exit(2)
+	}
 	if os.Getenv("ANTARES_MCP_HELPER") != "1" {
 		t.Skip("helper process")
 	}
