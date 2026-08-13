@@ -10,8 +10,10 @@ import (
 	"regexp"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/enowdev/antares/internal/config"
+	"github.com/enowdev/antares/internal/textutil"
 	"github.com/enowdev/antares/internal/version"
 )
 
@@ -135,11 +137,19 @@ var htmlEntities = strings.NewReplacer(
 
 func htmlUnescape(s string) string { return htmlEntities.Replace(s) }
 
+// truncateText caps s at n characters and names how many it dropped. Both
+// halves used to be counted in bytes: the cut landed inside a rune on any page
+// that was not ASCII, and the count it reported as characters was the bytes
+// past the offset, which for CJK is three times the number of characters there.
+// Eight model-facing outputs share it, so a page, a response body, a snippet
+// and a knowledge hit all arrived the same way.
 func truncateText(s string, n int) string {
-	if len(s) <= n {
+	kept := textutil.TruncateRunes(s, n)
+	if len(kept) == len(s) {
 		return s
 	}
-	return s[:n] + fmt.Sprintf("\n\n… truncated (%d more characters)", len(s)-n)
+	removed := utf8.RuneCountInString(s) - utf8.RuneCountInString(kept)
+	return kept + fmt.Sprintf("\n\n… truncated (%d more characters)", removed)
 }
 
 // ---- web_search -------------------------------------------------------------
