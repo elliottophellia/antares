@@ -10,6 +10,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/enowdev/antares/internal/hub"
+
 	"github.com/enowdev/antares/internal/config"
 	"github.com/enowdev/antares/internal/tools"
 )
@@ -50,6 +52,7 @@ func connectAll(ctx context.Context, cfg *config.Config) (map[string]*Client, ma
 		names = append(names, name)
 	}
 	sort.Strings(names)
+	upgradeBuiltinServers(cfg)
 
 	var wg sync.WaitGroup
 	var mu sync.Mutex
@@ -80,6 +83,45 @@ func connectAll(ctx context.Context, cfg *config.Config) (map[string]*Client, ma
 	}
 	wg.Wait()
 	return clients, errs
+}
+
+func upgradeBuiltinServers(cfg *config.Config) {
+	for name, server := range cfg.MCP.Servers {
+		entry, ok := hub.LookupMCP(name)
+		if !ok || !isStaleBuiltin(server, entry) {
+			continue
+		}
+		server.Command = entry.Command
+		server.Args = append([]string(nil), entry.Args...)
+		server.URL = entry.URL
+		if entry.URL != "" {
+			server.Transport = "http"
+		}
+		cfg.MCP.Servers[name] = server
+	}
+}
+
+func isStaleBuiltin(server config.MCPServer, entry hub.Entry) bool {
+	if entry.URL != "" {
+		return server.Command == "" && server.URL != entry.URL
+	}
+	if server.Command != entry.Command || len(server.Args) == 0 || len(entry.Args) == 0 {
+		return false
+	}
+	// Catalogue entries now pin every package. Upgrade only an exact unpinned
+	// package reference; custom commands remain intact.
+	if server.Command == "npx" {
+		return len(server.Args) > 1 && server.Args[0] == "-y" && len(entry.Args) > 1 &&
+			strings.HasPrefix(entry.Args[1], server.Args[1]+"@")
+	}
+	if server.Command == "uvx" && !strings.HasPrefix(server.Args[0], "-") {
+		for _, arg := range entry.Args {
+			if arg == server.Args[0] {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // Close shuts every server down and removes its tools from the registry.

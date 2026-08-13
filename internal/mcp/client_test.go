@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"os"
 	"os/exec"
+	"strings"
 	"testing"
 	"time"
 
@@ -189,6 +190,28 @@ func TestUnknownTransport(t *testing.T) {
 	}
 }
 
+func TestStdioStartupErrorIncludesChildStderr(t *testing.T) {
+	_, err := Connect(context.Background(), "broken", ServerConfig{
+		Transport: "stdio",
+		Command:   os.Args[0],
+		Args:      []string{"-test.run=TestHelperServer"},
+		Env: map[string]string{
+			"ANTARES_MCP_HELPER": "broken",
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "MCP server exited") {
+		t.Fatalf("error = %v, want child exit diagnostics", err)
+	}
+}
+
+func TestExpandArgsExpandsHomeAndEnvironment(t *testing.T) {
+	t.Setenv("MCP_TEST_PATH", "/tmp/mcp-test")
+	got := expandArgs([]string{"${MCP_TEST_PATH}", "${HOME}/data", "~/cache"})
+	if got[0] != "/tmp/mcp-test" || !strings.HasSuffix(got[1], "/data") || !strings.HasSuffix(got[2], "/cache") {
+		t.Fatalf("expanded args = %#v", got)
+	}
+}
+
 func TestToolNameNamespacing(t *testing.T) {
 	got := mcpToolName("my server", "read/file")
 	if got != "mcp__my_server__read_file" {
@@ -196,9 +219,37 @@ func TestToolNameNamespacing(t *testing.T) {
 	}
 }
 
+func TestUpgradeBuiltinServersReplacesOnlyStaleCommands(t *testing.T) {
+	cfg := config.Default()
+	cfg.MCP.Servers["fetch"] = config.MCPServer{Command: "uvx", Args: []string{"mcp-server-fetch"}, Enabled: true}
+	cfg.MCP.Servers["memory"] = config.MCPServer{Command: "npx", Args: []string{"-y", "@modelcontextprotocol/server-memory"}, Enabled: true}
+	cfg.MCP.Servers["linear"] = config.MCPServer{Transport: "http", URL: "https://mcp.linear.app/sse", Enabled: true}
+	cfg.MCP.Servers["git"] = config.MCPServer{Command: "custom-git", Args: []string{"mcp-server-git"}, Enabled: true}
+
+	upgradeBuiltinServers(cfg)
+
+	fetch := cfg.MCP.Servers["fetch"]
+	if len(fetch.Args) < 5 || fetch.Args[0] != "--from" || fetch.Args[3] != "mcp==1.9.4" {
+		t.Fatalf("fetch args were not upgraded: %#v", fetch.Args)
+	}
+	if memory := cfg.MCP.Servers["memory"]; len(memory.Args) != 2 || memory.Args[1] != "@modelcontextprotocol/server-memory@2026.7.4" {
+		t.Fatalf("memory args were not upgraded: %#v", memory.Args)
+	}
+	if linear := cfg.MCP.Servers["linear"]; linear.URL != "https://mcp.linear.app/mcp" {
+		t.Fatalf("linear URL was not upgraded: %q", linear.URL)
+	}
+	if git := cfg.MCP.Servers["git"]; git.Command != "custom-git" || len(git.Args) != 1 {
+		t.Fatalf("custom git config was changed: %+v", git)
+	}
+}
+
 // TestHelperServer is not a real test: when ANTARES_MCP_HELPER is set it acts
 // as a minimal MCP server speaking newline-delimited JSON-RPC on stdio.
 func TestHelperServer(t *testing.T) {
+	if os.Getenv("ANTARES_MCP_HELPER") == "broken" {
+		os.Stderr.WriteString("synthetic startup failure\n")
+		os.Exit(2)
+	}
 	if os.Getenv("ANTARES_MCP_HELPER") != "1" {
 		t.Skip("helper process")
 	}
