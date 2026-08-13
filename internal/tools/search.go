@@ -11,6 +11,8 @@ import (
 	"sort"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/enowdev/antares/internal/textutil"
 )
 
 // ---- glob -------------------------------------------------------------------
@@ -345,9 +347,16 @@ func (grepTool) Execute(ctx context.Context, in Input) Result {
 	return Text(header + "\n" + b.String() + warn)
 }
 
+// maxGrepLineChars caps one printed line. It is a character budget: a byte
+// budget applied to a line of CJK, or to a comment with an accent in it, both
+// keeps a third of what it promises and can cut inside a rune, and grep is in
+// every toolset including minimal.
+const maxGrepLineChars = 400
+
 func truncateLine(s string) string {
-	if len(s) <= 400 {
+	out := textutil.TruncateRunes(s, maxGrepLineChars)
+	if len(out) == len(s) {
 		return s
 	}
-	return s[:400] + "…"
+	return out + "…"
 }
