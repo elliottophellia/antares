@@ -1192,8 +1192,9 @@ func firstNonEmpty(vals ...string) string {
 // ensureToolResults guarantees the invariant every OpenAI-compatible provider
 // enforces: an assistant message carrying tool_calls must be immediately
 // followed by one tool message per tool_call_id, and a tool message must answer
-// a call. A result is correlated with its call by id, never by position,
-// because the two are not always adjacent: the repetition guard appends its
+// a call. A result is bound to its call by id, and among results sharing an id
+// by which turn they fall inside — never by bare adjacency, because a result
+// and its call are not always neighbours: the repetition guard appends its
 // nudge to history before the results land, and compaction reshapes the tail.
 // Each assistant turn is therefore re-joined with its results in call order,
 // and whatever was interleaved keeps its relative order but follows them. A
@@ -1203,18 +1204,72 @@ func firstNonEmpty(vals ...string) string {
 // tool_calls message"; a result answering no call is dropped for the same
 // reason. This is a send-time repair and does not mutate what is persisted.
 func ensureToolResults(msgs []llm.Message) []llm.Message {
-	// Results are queued per id in transcript order rather than kept one per
-	// id: an id is only unique within a turn, and Gemini synthesises
+	// A call id is only unique within a turn — Gemini synthesises
 	// "call_<index>_<name>" when it omits one, so the same id recurs across
-	// turns. Each call takes the earliest result of its id left unclaimed.
-	pending := make(map[string][]int)
+	// turns — which makes an id alone too weak to bind a result to a call.
+	// Every result is therefore indexed by id in transcript order, and each
+	// call takes one in two passes: the whole transcript is bound to the
+	// results inside each turn's own span before any call is allowed to look
+	// outside it. Reversing that order lets a turn whose result was compacted
+	// away reach forward and take the result of a later turn sharing its id,
+	// leaving the live call with a stub and the model with stale output.
+	byID := make(map[string][]int)
 	for i, m := range msgs {
 		if m.Role == llm.RoleTool {
-			pending[m.ToolCallID] = append(pending[m.ToolCallID], i)
+			byID[m.ToolCallID] = append(byID[m.ToolCallID], i)
 		}
 	}
 
+	// A turn's span runs to the next assistant message: anything else between
+	// a turn and its results — the guard's nudge — was interleaved, but a new
+	// assistant message means the turn ended.
+	type turn struct {
+		at    int
+		end   int
+		bound []int // parallel to the turn's ToolCalls; -1 until a result binds
+	}
+	var turns []turn
+	for i, m := range msgs {
+		if m.Role != llm.RoleAssistant {
+			continue
+		}
+		if n := len(turns); n > 0 {
+			turns[n-1].end = i
+		}
+		t := turn{at: i, end: len(msgs), bound: make([]int, len(m.ToolCalls))}
+		for j := range t.bound {
+			t.bound[j] = -1
+		}
+		turns = append(turns, t)
+	}
+
+	claimed := make([]bool, len(msgs))
+	bind := func(t *turn, inSpan bool) {
+		for j := range t.bound {
+			if t.bound[j] >= 0 {
+				continue
+			}
+			for _, ri := range byID[msgs[t.at].ToolCalls[j].ID] {
+				if claimed[ri] || (inSpan && (ri < t.at || ri >= t.end)) {
+					continue
+				}
+				claimed[ri] = true
+				t.bound[j] = ri
+				break
+			}
+		}
+	}
+	for i := range turns {
+		bind(&turns[i], true)
+	}
+	// Only now may a call reach outside its span, for the result that a later
+	// assistant message was appended in front of.
+	for i := range turns {
+		bind(&turns[i], false)
+	}
+
 	out := make([]llm.Message, 0, len(msgs))
+	next := 0
 	for _, m := range msgs {
 		// Tool messages are emitted below, beside the call they answer. One
 		// reaching here answers no call in this transcript — its assistant
@@ -1226,10 +1281,11 @@ func ensureToolResults(msgs []llm.Message) []llm.Message {
 		if m.Role != llm.RoleAssistant {
 			continue
 		}
-		for _, tc := range m.ToolCalls {
-			if q := pending[tc.ID]; len(q) > 0 {
-				pending[tc.ID] = q[1:]
-				out = append(out, msgs[q[0]])
+		t := turns[next]
+		next++
+		for j, tc := range m.ToolCalls {
+			if t.bound[j] >= 0 {
+				out = append(out, msgs[t.bound[j]])
 				continue
 			}
 			out = append(out, llm.Message{

@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"encoding/json"
 	"reflect"
 	"strings"
 	"testing"
@@ -18,15 +19,29 @@ func toolIDs(msgs []llm.Message) []string {
 	return ids
 }
 
+// noResultStub is the content ensureToolResults gives a call the transcript
+// holds no result for. Spelled out here rather than shared with the production
+// constant so a reworded stub has to be reviewed, not just propagated.
+const noResultStub = "[no result was recorded for this tool call]"
+
 // countStubs reports how many tool messages carry the missing-result marker.
 func countStubs(msgs []llm.Message) int {
 	n := 0
 	for _, m := range msgs {
-		if m.Role == llm.RoleTool && m.Content == "[no result was recorded for this tool call]" {
+		if m.Role == llm.RoleTool && m.Content == noResultStub {
 			n++
 		}
 	}
 	return n
+}
+
+// roleAndContent renders the emitted sequence for tests that pin whole shapes.
+func roleAndContent(msgs []llm.Message) []string {
+	out := make([]string, 0, len(msgs))
+	for _, m := range msgs {
+		out = append(out, m.Role+":"+m.Content)
+	}
+	return out
 }
 
 func TestEnsureToolResults_StubsDanglingCall(t *testing.T) {
@@ -144,8 +159,11 @@ func TestEnsureToolResultsStubsOnlyMissingCallsAndTellsTheTruth(t *testing.T) {
 	if stub == "" {
 		t.Fatal("missing call c2 was not stubbed")
 	}
-	if strings.Contains(stub, "interrupted") {
-		t.Fatalf("stub asserts an interruption that did not happen: %q", stub)
+	// Pinned exactly: the stub may state that no result was recorded and
+	// nothing else. Any other wording — an interruption, a failure, a refusal —
+	// tells the model something the transcript does not support.
+	if stub != noResultStub {
+		t.Fatalf("stub = %q, want %q", stub, noResultStub)
 	}
 }
 
@@ -210,14 +228,53 @@ func TestEnsureToolResults_InterleavedMessagesKeepTheirOrder(t *testing.T) {
 		{Role: llm.RoleUser, Content: "second nudge"},
 		{Role: llm.RoleTool, ToolCallID: "a", Name: "grep", Content: "ok"},
 	}
-	out := ensureToolResults(in)
-	var order []string
-	for _, m := range out {
-		order = append(order, m.Role+":"+m.Content)
-	}
+	order := roleAndContent(ensureToolResults(in))
 	want := []string{"assistant:", "tool:ok", "user:first nudge", "user:second nudge"}
 	if !reflect.DeepEqual(order, want) {
 		t.Fatalf("order = %q, want %q", order, want)
+	}
+}
+
+// Compaction splices the first protectFirstN messages in verbatim
+// (compact.go:73,104) and rebalanceToolBoundary only repairs the middle/tail
+// boundary, so the head can end on a tool-call turn whose result was
+// summarised away. That dangling call must not reach forward and take the
+// result belonging to the live call of the same id.
+func TestEnsureToolResults_DanglingHeadCallDoesNotStealALaterResult(t *testing.T) {
+	in := []llm.Message{
+		{Role: llm.RoleAssistant, ToolCalls: []llm.ToolCall{{ID: "call_0_read_file", Name: "read_file"}}},
+		{Role: llm.RoleUser, Content: "[Compacted summary of the earlier conversation]"},
+		{Role: llm.RoleAssistant, ToolCalls: []llm.ToolCall{{ID: "call_0_read_file", Name: "read_file"}}},
+		{Role: llm.RoleTool, ToolCallID: "call_0_read_file", Name: "read_file", Content: "FRESH CONTENT FOR THE LATEST CALL"},
+	}
+	got := roleAndContent(ensureToolResults(in))
+	want := []string{
+		"assistant:",
+		"tool:" + noResultStub,
+		"user:[Compacted summary of the earlier conversation]",
+		"assistant:",
+		"tool:FRESH CONTENT FOR THE LATEST CALL",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("the live call was not answered with its own result:\n got %q\nwant %q", got, want)
+	}
+}
+
+// persistContextCompact cuts the persisted history at throughSeq with no
+// tool-boundary rebalance (compact.go:148-149) and loadHistory rebuilds the
+// tail from every later row (session.go:180-191), so a history can open with a
+// tool result whose call is gone. Adopting it would answer a fresh call with
+// stale output and nothing would mark it as stale.
+func TestEnsureToolResults_OrphanResultIsNotAdoptedByALaterCall(t *testing.T) {
+	in := []llm.Message{
+		{Role: llm.RoleTool, ToolCallID: "call_0_read_file", Name: "read_file", Content: "STALE ORPHAN FROM AN EARLIER TURN"},
+		{Role: llm.RoleAssistant, ToolCalls: []llm.ToolCall{{ID: "call_0_read_file", Name: "read_file"}}},
+		{Role: llm.RoleTool, ToolCallID: "call_0_read_file", Name: "read_file", Content: "FRESH RESULT FOR THIS CALL"},
+	}
+	got := roleAndContent(ensureToolResults(in))
+	want := []string{"assistant:", "tool:FRESH RESULT FOR THIS CALL"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("stale orphan was adopted:\n got %q\nwant %q", got, want)
 	}
 }
 
@@ -230,8 +287,23 @@ func TestEnsureToolResults_DoesNotMutateItsInput(t *testing.T) {
 		{Role: llm.RoleUser, Content: "nudge"},
 		{Role: llm.RoleTool, ToolCallID: "a", Name: "grep", Content: "ok"},
 	}
-	before := append([]llm.Message(nil), in...)
+	// A shallow copy would share the ToolCalls backing array with in, so a
+	// write through msgs[i].ToolCalls[j] would land in both and go unseen.
+	// A JSON round-trip detaches every field.
+	raw, err := json.Marshal(in)
+	if err != nil {
+		t.Fatalf("snapshot: %v", err)
+	}
+	var before []llm.Message
+	if err := json.Unmarshal(raw, &before); err != nil {
+		t.Fatalf("snapshot: %v", err)
+	}
+	if !reflect.DeepEqual(in, before) {
+		t.Fatalf("the snapshot itself is lossy, so this test cannot detect a write:\n got %+v\nwant %+v", before, in)
+	}
+
 	ensureToolResults(in)
+
 	if !reflect.DeepEqual(in, before) {
 		t.Fatalf("input history was rewritten:\n got %+v\nwant %+v", in, before)
 	}
