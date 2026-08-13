@@ -37,6 +37,11 @@ func anthropicFramingClient(t *testing.T, body string) *anthropicClient {
 	return &anthropicClient{opts: Options{BaseURL: srv.URL, APIKey: "k", HTTPClient: srv.Client()}}
 }
 
+func geminiFramingClient(t *testing.T, body string) *geminiClient {
+	srv := sseFramingServer(t, body)
+	return &geminiClient{opts: Options{BaseURL: srv.URL, APIKey: "k", HTTPClient: srv.Client()}}
+}
+
 func TestStreamFramingOpenAICutStreamsAreRetryableErrors(t *testing.T) {
 	cases := []struct {
 		name, body string
@@ -253,6 +258,96 @@ func TestStreamFramingParameterlessToolCallSurvives(t *testing.T) {
 			t.Fatalf("arguments = %q, want the empty arguments the provider actually sent", got)
 		}
 	})
+}
+
+// Gemini's terminal is the candidate's finishReason. Its parts arrive whole
+// rather than as fragments, so nothing inside a chunk can show that the answer
+// stopped early; only the absence of a finishReason can.
+func TestStreamFramingGeminiCutStreamsAreRetryableErrors(t *testing.T) {
+	cases := []struct {
+		name, body string
+	}{
+		{
+			// The name arrived and the body ended. Substituting {} here is what
+			// turns a cut stream into a dispatchable write_file with no path.
+			"functionCall then nothing",
+			`data: {"candidates":[{"content":{"parts":[{"functionCall":{"name":"write_file"}}]}}]}` + "\n\n",
+		},
+		{
+			// Every part that arrived is well-formed, so the call looks whole.
+			"functionCall with arguments but no finishReason",
+			`data: {"candidates":[{"content":{"parts":[{"functionCall":{"name":"read_file","args":{"path":"a"}}}]}}]}` + "\n\n",
+		},
+		{
+			"prose cut mid-sentence",
+			`data: {"candidates":[{"content":{"parts":[{"text":"I will now "}]}}]}` + "\n\n",
+		},
+		{
+			"empty body",
+			"",
+		},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			client := geminiFramingClient(t, c.body)
+			resp, err := client.Stream(context.Background(), Request{Model: "gemini-3.6-flash"}, func(Event) error { return nil })
+			if err == nil {
+				t.Fatalf("a body that ended without a finishReason was accepted as complete: %+v", resp)
+			}
+			if !Retryable(err) {
+				t.Fatalf("a cut stream must reach the turn-level retry, got %v", err)
+			}
+			assertNoPartialAnswer(t, resp)
+		})
+	}
+}
+
+// The other direction: a finishReason makes the answer whole, and a call that
+// really took no arguments is reported as the empty payload the provider sent
+// rather than as a fabricated {}. Filling that in belongs to the caller, which
+// can only do it safely because reaching it means the stream was complete.
+func TestStreamFramingGeminiCompleteStreamYieldsTheCall(t *testing.T) {
+	cases := []struct {
+		name, parts, wantArgs string
+	}{
+		{"arguments sent", `{"functionCall":{"name":"read_file","args":{"path":"a"}}}`, `{"path":"a"}`},
+		{"parameterless call", `{"functionCall":{"name":"snooze"}}`, ""},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			body := `data: {"candidates":[{"content":{"parts":[` + c.parts + `]}}]}` + "\n\n" +
+				`data: {"candidates":[{"content":{"parts":[]},"finishReason":"STOP"}]}` + "\n\n"
+
+			client := geminiFramingClient(t, body)
+			resp, err := client.Stream(context.Background(), Request{Model: "gemini-3.6-flash"}, func(Event) error { return nil })
+			if err != nil {
+				t.Fatalf("a terminated stream must succeed: %v", err)
+			}
+			if len(resp.ToolCalls) != 1 {
+				t.Fatalf("tool calls = %+v, want the one that was sent", resp.ToolCalls)
+			}
+			if got := resp.ToolCalls[0].Arguments; got != c.wantArgs {
+				t.Fatalf("arguments = %q, want %q", got, c.wantArgs)
+			}
+		})
+	}
+}
+
+// A plain answer with no tool call is held to the same terminal.
+func TestStreamFramingGeminiCompleteTextAnswerSurvives(t *testing.T) {
+	body := `data: {"candidates":[{"content":{"parts":[{"text":"done"}]}}]}` + "\n\n" +
+		`data: {"candidates":[{"content":{"parts":[]},"finishReason":"STOP"}]}` + "\n\n"
+
+	client := geminiFramingClient(t, body)
+	resp, err := client.Stream(context.Background(), Request{Model: "gemini-3.6-flash"}, func(Event) error { return nil })
+	if err != nil {
+		t.Fatalf("a terminated stream must succeed: %v", err)
+	}
+	if resp.Content != "done" || resp.FinishReason != "stop" {
+		t.Fatalf("response = %+v, want the finished answer", resp)
+	}
 }
 
 // Classifying the error as retryable is only worth anything if the retry
