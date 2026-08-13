@@ -634,21 +634,14 @@ func (t *stdioTransport) send(ctx context.Context, req rpcRequest) (*rpcResponse
 	t.sendMu.Lock()
 	defer t.sendMu.Unlock()
 
-	t.mu.Lock()
-	if t.closed {
-		t.mu.Unlock()
-		return nil, fmt.Errorf("mcp connection closed")
-	}
-	err := t.writeFrame(req)
-	t.mu.Unlock()
-	if err != nil {
-		return nil, err
-	}
-
-	// Register a per-call response channel keyed by request ID, then start
-	// (or reuse) the single background reader. On ctx.Done the entry is
-	// removed so any late reply is discarded by ID mismatch — the transport
-	// stays alive for subsequent calls.
+	// Register a per-call response channel keyed by request ID *before* the
+	// frame goes out. From the second call onward the background reader is
+	// already running, so a server that answers while the write is still
+	// returning would have its reply looked up against an ID the map does not
+	// hold yet, and the reader would discard it as stale; the caller then waits
+	// out its whole deadline for an answer that already arrived. A registration
+	// made first is never too late: the reader cannot see a reply to a request
+	// that has not been written.
 	ch := make(chan *rpcResponse, 1)
 	t.pendingMu.Lock()
 	if t.pending == nil {
@@ -656,14 +649,33 @@ func (t *stdioTransport) send(ctx context.Context, req rpcRequest) (*rpcResponse
 	}
 	t.pending[req.ID] = ch
 	t.pendingMu.Unlock()
-	t.startReader()
-
-	// Ensure the entry is cleaned up no matter how we exit.
-	defer func() {
+	unregister := func() {
 		t.pendingMu.Lock()
 		delete(t.pending, req.ID)
 		t.pendingMu.Unlock()
-	}()
+	}
+
+	t.mu.Lock()
+	if t.closed {
+		t.mu.Unlock()
+		unregister()
+		return nil, fmt.Errorf("mcp connection closed")
+	}
+	err := t.writeFrame(req)
+	t.mu.Unlock()
+	if err != nil {
+		// Nothing will ever answer a frame that did not go out.
+		unregister()
+		return nil, err
+	}
+
+	// Start (or reuse) the single background reader. On ctx.Done the entry is
+	// removed so any late reply is discarded by ID mismatch — the transport
+	// stays alive for subsequent calls.
+	t.startReader()
+
+	// Ensure the entry is cleaned up no matter how we exit.
+	defer unregister()
 
 	select {
 	case <-ctx.Done():
