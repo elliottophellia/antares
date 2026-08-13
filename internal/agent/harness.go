@@ -126,6 +126,21 @@ func processObservation(c llm.ToolCall) bool {
 	}
 }
 
+// check records a batch of calls and reports both of the guard's answers: the
+// tool names worth nudging about, and whether one of them has now repeated so
+// far past the limit that nudging has demonstrably failed and the run must stop.
+//
+// Both come from here because they cannot be derived from each other. record
+// reports a key once, on the turn its count reaches the limit, and never again
+// — so a caller that only asked whether to stop when it had a name to nudge
+// could never see that same key go on to reach limit*2. The abort would then
+// need a second, different call to trip first, and a model stuck on one call
+// would run to the turn ceiling with a single nudge and no stop.
+func (r *repeatTracker) check(calls []llm.ToolCall) (stuck []string, stop bool) {
+	stuck = r.record(calls)
+	return stuck, r.exceeded()
+}
+
 // exceeded reports a call repeated far past the limit, where nudging has
 // already failed and the run should stop.
 func (r *repeatTracker) exceeded() bool {
