@@ -1191,58 +1191,54 @@ func firstNonEmpty(vals ...string) string {
 
 // ensureToolResults guarantees the invariant every OpenAI-compatible provider
 // enforces: an assistant message carrying tool_calls must be immediately
-// followed by a tool message for each tool_call_id. A turn interrupted after
-// the assistant's tool_calls were persisted but before (all) their results
-// were — or a history reshaped by compaction — can otherwise leave a dangling
-// tool_call, which the provider rejects with "insufficient tool messages
-// following tool_calls message". For any tool_call with no matching result, a
-// synthetic stub result is spliced in so the request is always well-formed.
-// This is a send-time repair and does not mutate what is persisted.
+// followed by one tool message per tool_call_id, and a tool message must answer
+// a call. A result is correlated with its call by id, never by position,
+// because the two are not always adjacent: the repetition guard appends its
+// nudge to history before the results land, and compaction reshapes the tail.
+// Each assistant turn is therefore re-joined with its results in call order,
+// and whatever was interleaved keeps its relative order but follows them. A
+// call with no result anywhere in the transcript — an interrupted run, or a
+// history reshaped by compaction — gets a synthetic stub, without which the
+// provider rejects the request with "insufficient tool messages following
+// tool_calls message"; a result answering no call is dropped for the same
+// reason. This is a send-time repair and does not mutate what is persisted.
 func ensureToolResults(msgs []llm.Message) []llm.Message {
+	// Results are queued per id in transcript order rather than kept one per
+	// id: an id is only unique within a turn, and Gemini synthesises
+	// "call_<index>_<name>" when it omits one, so the same id recurs across
+	// turns. Each call takes the earliest result of its id left unclaimed.
+	pending := make(map[string][]int)
+	for i, m := range msgs {
+		if m.Role == llm.RoleTool {
+			pending[m.ToolCallID] = append(pending[m.ToolCallID], i)
+		}
+	}
+
 	out := make([]llm.Message, 0, len(msgs))
-	for i := 0; i < len(msgs); i++ {
-		m := msgs[i]
-		// A tool message is only valid immediately after an assistant message
-		// carrying tool_calls; those are consumed in the inner loop below. Any
-		// tool message that reaches here is an orphan — its assistant tool_calls
-		// was dropped (e.g. by compaction), and providers reject a tool message
-		// that does not answer a preceding tool_calls. Drop it.
+	for _, m := range msgs {
+		// Tool messages are emitted below, beside the call they answer. One
+		// reaching here answers no call in this transcript — its assistant
+		// turn was dropped (e.g. by compaction) — so drop it.
 		if m.Role == llm.RoleTool {
 			continue
 		}
 		out = append(out, m)
-		if m.Role != llm.RoleAssistant || len(m.ToolCalls) == 0 {
+		if m.Role != llm.RoleAssistant {
 			continue
 		}
-		ids := make(map[string]bool, len(m.ToolCalls))
 		for _, tc := range m.ToolCalls {
-			ids[tc.ID] = true
-		}
-		// Emit the tool results that follow and match one of this turn's call
-		// ids, recording which ids are covered; unknown or duplicate tool
-		// results are dropped.
-		covered := make(map[string]bool, len(m.ToolCalls))
-		j := i + 1
-		for j < len(msgs) && msgs[j].Role == llm.RoleTool {
-			t := msgs[j]
-			if ids[t.ToolCallID] && !covered[t.ToolCallID] {
-				covered[t.ToolCallID] = true
-				out = append(out, t)
+			if q := pending[tc.ID]; len(q) > 0 {
+				pending[tc.ID] = q[1:]
+				out = append(out, msgs[q[0]])
+				continue
 			}
-			j++
+			out = append(out, llm.Message{
+				Role:       llm.RoleTool,
+				ToolCallID: tc.ID,
+				Name:       tc.Name,
+				Content:    "[no result was recorded for this tool call]",
+			})
 		}
-		// Stub any call that never produced a matching result.
-		for _, tc := range m.ToolCalls {
-			if !covered[tc.ID] {
-				out = append(out, llm.Message{
-					Role:       llm.RoleTool,
-					ToolCallID: tc.ID,
-					Name:       tc.Name,
-					Content:    "[no result recorded — the previous run was interrupted before this tool finished]",
-				})
-			}
-		}
-		i = j - 1 // skip the tool messages we just processed
 	}
 	return out
 }
