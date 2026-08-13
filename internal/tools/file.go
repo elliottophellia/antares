@@ -190,16 +190,8 @@ func (readFileTool) Execute(_ context.Context, in Input) Result {
 		return Errorf("%s appears to be a binary file (%d bytes)", args.Path, fi.Size())
 	}
 
-	normalized := strings.ReplaceAll(string(data), "\r", "\n")
-	if fileEOL(string(data)) != "\r" {
-		// Only a genuinely CR-terminated (classic Mac) file splits on a lone
-		// CR. In an LF or CRLF file a bare CR is data — a control character
-		// inside a string literal, say — and splitting on it would number the
-		// displayed lines differently from the file's real lines, handing the
-		// model an anchor that edit_file then cannot find.
-		normalized = strings.ReplaceAll(string(data), "\r\n", "\n")
-	}
-	lines := strings.Split(normalized, "\n")
+	content := string(data)
+	lines := lineSpans(content)
 	offset := args.Offset
 	if offset <= 0 {
 		offset = 1
@@ -209,7 +201,9 @@ func (readFileTool) Execute(_ context.Context, in Input) Result {
 		limit = 2000
 	}
 	start := offset - 1
-	if start > len(lines) {
+	// An empty file has no line 1 to be past, so offset 1 on it reads as
+	// "nothing here" rather than as a mistake.
+	if start > 0 && start >= len(lines) {
 		return Errorf("offset %d is past end of file (%d lines)", offset, len(lines))
 	}
 	end := start + limit
@@ -219,7 +213,7 @@ func (readFileTool) Execute(_ context.Context, in Input) Result {
 
 	var b strings.Builder
 	for i := start; i < end; i++ {
-		fmt.Fprintf(&b, "%d|%s\n", i+1, lines[i])
+		fmt.Fprintf(&b, "%d|%s\n", i+1, content[lines[i].start:lines[i].end])
 	}
 	if end < len(lines) {
 		fmt.Fprintf(&b, "\n… %d more lines (use offset=%d to continue)\n", len(lines)-end, end+1)
@@ -561,6 +555,12 @@ func resolveEditMatch(content, oldIn, newIn string) (oldString, newString string
 // content, excluding its \n, \r\n, or lone \r terminator.
 type lineSpan struct{ start, end int }
 
+// lineSpans is the one place the file tools decide where a line begins and
+// ends. read_file's numbering and total, grep's match lines and edit_file's
+// occurrence lines all come from it, so a line number one tool reports means
+// the same line in the next. A line the file terminates is complete: the
+// terminator adds no empty line after it, so "a\nb\n" is two lines. Line
+// numbers are the 1-based index into the returned slice.
 func lineSpans(content string) []lineSpan {
 	// A lone CR terminates a line only in a genuinely CR-based file. Anywhere
 	// else it is data, and treating it as a break here would number lines
@@ -877,6 +877,7 @@ func occurrenceLines(content, needle string, max int) []int {
 	if needle == "" || max <= 0 {
 		return nil
 	}
+	spans := lineSpans(content)
 	var lines []int
 	for from := 0; from < len(content) && len(lines) < max; {
 		i := strings.Index(content[from:], needle)
@@ -884,22 +885,37 @@ func occurrenceLines(content, needle string, max int) []int {
 			break
 		}
 		at := from + i
-		lines = append(lines, 1+strings.Count(content[:at], "\n"))
+		lines = append(lines, lineOfOffset(spans, at))
 		from = at + len(needle)
 	}
 	return lines
+}
+
+// lineOfOffset returns the 1-based number of the line containing byte offset
+// at. An offset inside a terminator belongs to the line that terminator ends.
+func lineOfOffset(spans []lineSpan, at int) int {
+	if len(spans) == 0 {
+		return 1
+	}
+	next := sort.Search(len(spans), func(i int) bool { return spans[i].start > at })
+	if next == 0 {
+		return 1
+	}
+	return next
 }
 
 // nearMissHint reports a few real lines sharing a distinctive identifier with
 // old_string. It is intentionally short and bounded: the tool should correct
 // the model's stale context without dumping the file into an error response.
 func nearMissHint(content, oldString string) string {
+	spans := lineSpans(content)
 	for _, token := range identifierTokens(oldString) {
 		if len(token) < 8 || strings.Contains(strings.ToLower(token), "read_file") {
 			continue
 		}
 		var hits []string
-		for i, line := range strings.Split(content, "\n") {
+		for i, sp := range spans {
+			line := content[sp.start:sp.end]
 			if strings.Contains(line, token) {
 				line = strings.TrimRight(line, "\r")
 				if len(line) > 180 {

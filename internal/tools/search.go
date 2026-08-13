@@ -1,9 +1,9 @@
 package tools
 
 import (
-	"bufio"
 	"context"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -157,9 +157,10 @@ func globToRegexp(pattern string) (*regexp.Regexp, error) {
 
 // ---- grep -------------------------------------------------------------------
 
-// maxGrepFileBytes caps the size of a file grep will open, so a single huge log
-// cannot stall a search across a whole tree. A file above the cap is never
-// read, which is why the count of them has to reach the caller.
+// maxGrepFileBytes caps the size of a file grep will read, so a single huge log
+// cannot stall a search across a whole tree or be held in memory whole. A file
+// above the cap is never read, which is why the count of them has to reach the
+// caller.
 const maxGrepFileBytes = 8 * 1024 * 1024
 
 type grepTool struct{}
@@ -240,17 +241,27 @@ func (grepTool) Execute(ctx context.Context, in Input) Result {
 			return nil
 		}
 		defer f.Close()
+		// Line boundaries come from the whole file, because telling a lone CR
+		// terminator from a CR byte inside a line is a property of the file
+		// rather than of any one line. That makes the size gate this function's
+		// business: it is what bounds the read.
+		if info, err := f.Stat(); err == nil && info.Size() > maxGrepFileBytes {
+			skipped++
+			return nil
+		}
+		data, err := io.ReadAll(f)
+		if err != nil {
+			return nil
+		}
+		content := string(data)
 
-		sc := bufio.NewScanner(f)
-		sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 		var window []string
-		lineNo := 0
 		fileMatched := false
 		pending := 0
 
-		for sc.Scan() {
-			lineNo++
-			line := sc.Text()
+		for n, sp := range lineSpans(content) {
+			lineNo := n + 1
+			line := content[sp.start:sp.end]
 			if lineNo == 1 && !utf8.ValidString(line) {
 				return nil // binary
 			}
@@ -285,11 +296,6 @@ func (grepTool) Execute(ctx context.Context, in Input) Result {
 				}
 			}
 		}
-		// A line longer than the scanner buffer aborts the scan; say so instead
-		// of silently reporting the rest of the file as match-free.
-		if err := sc.Err(); err != nil && len(warnings) < 8 {
-			warnings = append(warnings, fmt.Sprintf("%s: search stopped at line %d: %v", display, lineNo+1, err))
-		}
 		return nil
 	}
 
@@ -314,10 +320,6 @@ func (grepTool) Execute(ctx context.Context, in Input) Result {
 			rel, _ := filepath.Rel(root, p)
 			rel = filepath.ToSlash(rel)
 			if includeRe != nil && !includeRe.MatchString(rel) && !includeRe.MatchString(filepath.Base(rel)) {
-				return nil
-			}
-			if info, err := d.Info(); err == nil && info.Size() > maxGrepFileBytes {
-				skipped++
 				return nil
 			}
 			return searchFile(p, rel)

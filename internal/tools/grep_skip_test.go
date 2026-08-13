@@ -29,6 +29,23 @@ func TestGrepReportsSkippedFiles(t *testing.T) {
 		}
 	})
 
+	t.Run("a file named directly is gated by the same size", func(t *testing.T) {
+		workspace := t.TempDir()
+		writeSparseFile(t, filepath.Join(workspace, "huge.log"), "NEEDLE_TOKEN\n", 9*1024*1024)
+
+		args, err := json.Marshal(map[string]any{"pattern": "NEEDLE_TOKEN", "path": "huge.log"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		result := (grepTool{}).Execute(context.Background(), Input{Workspace: workspace, Args: args})
+		if result.IsError {
+			t.Fatalf("grep errored: %s", result.Content)
+		}
+		if !strings.Contains(result.Content, "not searched") {
+			t.Errorf("a directly named file above the cap was silently unsearched: %q", result.Content)
+		}
+	})
+
 	t.Run("a run that skipped nothing says nothing", func(t *testing.T) {
 		workspace := t.TempDir()
 		if err := os.WriteFile(filepath.Join(workspace, "small.log"), []byte("NEEDLE_TOKEN here\n"), 0o644); err != nil {

@@ -43,10 +43,12 @@ func TestGrepAndGlobFollowProjectReadBoundary(t *testing.T) {
 	}
 }
 
-// A line longer than the scanner buffer used to stop the file scan silently:
-// no matches after it, no report. The tool must surface that the file scan
-// stopped early.
-func TestGrepReportsOverlongLineInsteadOfSilentStop(t *testing.T) {
+// A line longer than the scanner buffer used to abort the file scan: no matches
+// after it, and no report that the search had given up. Reporting the early
+// stop was the fix available while lines came through a fixed buffer; lines are
+// now cut from the whole file, so there is no buffer to overrun and the rest of
+// the file is searched and numbered normally.
+func TestGrepSearchesPastAnOverlongLine(t *testing.T) {
 	workspace := t.TempDir()
 	content := strings.Repeat("x", 2*1024*1024) + "\nNEEDLE line\n"
 	if err := os.WriteFile(filepath.Join(workspace, "big.txt"), []byte(content), 0o644); err != nil {
@@ -57,7 +59,10 @@ func TestGrepReportsOverlongLineInsteadOfSilentStop(t *testing.T) {
 	if result.IsError {
 		t.Fatalf("grep errored: %s", result.Content)
 	}
-	if !strings.Contains(result.Content, "big.txt") || !strings.Contains(result.Content, "stopped") {
-		t.Fatalf("overlong line not reported: %q", result.Content)
+	if !strings.Contains(result.Content, "big.txt") || !strings.Contains(result.Content, "2:\tNEEDLE line") {
+		t.Fatalf("the match after an overlong line was not reported at line 2: %q", result.Content)
+	}
+	if strings.Contains(result.Content, "warning") {
+		t.Fatalf("the whole file was searched, so nothing should be warned about: %q", result.Content)
 	}
 }
