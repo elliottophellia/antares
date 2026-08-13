@@ -151,28 +151,12 @@ func normaliseArgs(raw string) string {
 	return string(b)
 }
 
-// repeatKey builds the fingerprint for a tool call. For write_file and
-// edit_file the key uses only the tool name and the target path — not the
-// full arguments — so repeated writes to the same file with different
-// content are recognised as the same stuck call. Other tools use the full
-// normalised arguments as before.
+// repeatKey builds the fingerprint for a tool call. Every tool is fingerprinted
+// the same way, on the full normalised arguments, and no tool gets a coarser
+// key: three different edits to one file are three pieces of work, not one call
+// made three times, and a key that discards the arguments cannot tell the
+// difference.
 func repeatKey(c llm.ToolCall) string {
-	switch c.Name {
-	case "write_file", "edit_file":
-		var args struct {
-			Path string `json:"path"`
-		}
-		if json.Unmarshal([]byte(c.Arguments), &args) == nil && args.Path != "" {
-			return c.Name + "\x00" + args.Path
-		}
-	case "vps_upload":
-		var args struct {
-			RemotePath string `json:"remote_path"`
-		}
-		if json.Unmarshal([]byte(c.Arguments), &args) == nil && args.RemotePath != "" {
-			return c.Name + "\x00" + args.RemotePath
-		}
-	}
 	return c.Name + "\x00" + normaliseArgs(c.Arguments)
 }
 

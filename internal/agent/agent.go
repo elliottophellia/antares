@@ -610,6 +610,12 @@ func (a *Agent) Run(ctx context.Context, req Request, emit Emit) (*Result, error
 			continue
 		}
 
+		// The nudge is held back rather than appended here: a user message
+		// between the assistant's tool_calls and their results is not a valid
+		// transcript, and repairing it later is no substitute for not writing
+		// it. The notice still fires now, so the user sees the repetition the
+		// moment it is detected.
+		var repeatNudge string
 		if stuck := repeats.record(resp.ToolCalls); len(stuck) > 0 {
 			if repeats.exceeded() {
 				_ = emit(Event{Type: EventNotice, Message: "stopped: the same tool call kept repeating"})
@@ -618,12 +624,9 @@ func (a *Agent) Run(ctx context.Context, req Request, emit Emit) (*Result, error
 				break
 			}
 			_ = emit(Event{Type: EventNotice, Message: "repeating " + strings.Join(stuck, ", ")})
-			history = append(history, llm.Message{
-				Role: llm.RoleUser,
-				Content: "You have called " + strings.Join(stuck, " and ") +
-					" with the same arguments several times and it is not getting you anywhere. " +
-					"Do not call it again. Either try a different approach, or say what is blocking you.",
-			})
+			repeatNudge = "You have called " + strings.Join(stuck, " and ") +
+				" with the same arguments several times and it is not getting you anywhere. " +
+				"Do not call it again. Either try a different approach, or say what is blocking you."
 		}
 
 		results := a.executeTools(runCtx, resp.ToolCalls, byName, req, sess, emit)
@@ -643,6 +646,10 @@ func (a *Agent) Run(ctx context.Context, req Request, emit Emit) (*Result, error
 					slog.Warn("persist tool result failed", "error", err)
 				}
 			}
+		}
+
+		if repeatNudge != "" {
+			history = append(history, llm.Message{Role: llm.RoleUser, Content: repeatNudge})
 		}
 
 		// Notes typed while this run was already going land here, which is the
