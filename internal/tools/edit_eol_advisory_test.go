@@ -47,7 +47,10 @@ func TestEditNotesAReplacementThatMixesItsOwnLineEndings(t *testing.T) {
 	if want := "alpha\r\none\r\ntwo\nthree\r\n"; after != want {
 		t.Fatalf("new_string was not written verbatim\nwant %q\ngot  %q", want, after)
 	}
-	for _, want := range []string{"CRLF line endings", "LF line breaks"} {
+	// "new_string used LF" is true of this replacement and describes a
+	// different one: most of its breaks are the file's own, and the note is
+	// about the one that is not.
+	for _, want := range []string{"CRLF line endings", "LF line breaks", "at least one line with a bare LF"} {
 		if !strings.Contains(said, want) {
 			t.Errorf("a bare LF landed in a CRLF file with no mention of %q: %s", want, said)
 		}

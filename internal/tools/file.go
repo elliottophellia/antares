@@ -272,9 +272,12 @@ func (readFileTool) Execute(_ context.Context, in Input) Result {
 		"last_line":  end,
 	}
 	if truncatedBytes {
-		// last_line is the floor the header states; a caller that wants a
-		// count rather than a floor has to be able to tell them apart.
+		// The number the header states after "≥", carried under its own key so
+		// a caller need not parse the header for it. last_line cannot stand in:
+		// the line limit usually stops the read long before the byte cap does,
+		// and on a default read of a 600 KB file the two are 2000 and 10240.
 		meta["truncated"] = true
+		meta["total_lines_at_least"] = len(lines)
 	} else {
 		meta["total_lines"] = len(lines)
 	}
@@ -445,7 +448,7 @@ func (editFileTool) Execute(_ context.Context, in Input) Result {
 	// disk, so the LF-to-CRLF recovery — which already translated it — cannot
 	// trip this.
 	if fileEOL(content) == "\r\n" && hasBareLF(newString) {
-		msg += " Note: the file uses CRLF line endings and new_string used LF, so the replaced region now has LF line breaks. It was written exactly as given; send new_string with \\r\\n breaks if the file must stay consistent."
+		msg += " Note: the file uses CRLF line endings and new_string broke at least one line with a bare LF, so the replaced region now has LF line breaks. It was written exactly as given; send new_string with \\r\\n breaks if the file must stay consistent."
 	}
 	return Result{
 		Content: msg,

@@ -33,19 +33,23 @@ func bigLog(t *testing.T, lines int, needleAt int, needle string) string {
 
 var readHeaderRange = regexp.MustCompile(`^(.*) — lines (\d+)-(\d+) of (≥?)(\d+)\n`)
 
-// headerTotal returns the total read_file's header states and whether it is
-// stated as a lower bound rather than as a count.
-func headerTotal(t *testing.T, out string) (total int, isLowerBound bool) {
+// headerRange returns the three numbers read_file's header states and whether
+// the total is stated as a lower bound rather than as a count.
+func headerRange(t *testing.T, out string) (first, last, total int, isLowerBound bool) {
 	t.Helper()
 	m := readHeaderRange.FindStringSubmatch(out)
 	if m == nil {
 		t.Fatalf("read_file output does not open with a line-range header: %q", firstBytes(out, 120))
 	}
-	n, err := strconv.Atoi(m[5])
-	if err != nil {
-		t.Fatalf("header states a total that will not parse: %q", m[0])
+	var n [3]int
+	for i, field := range []string{m[2], m[3], m[5]} {
+		v, err := strconv.Atoi(field)
+		if err != nil {
+			t.Fatalf("header states a number that will not parse: %q", m[0])
+		}
+		n[i] = v
 	}
-	return n, m[4] == "≥"
+	return n[0], n[1], n[2], m[4] == "≥"
 }
 
 // The cap stops the read after 400 KB, so the lines behind it were never
@@ -70,12 +74,37 @@ func TestReadFileStatesNoTotalItHasNotCounted(t *testing.T) {
 
 	t.Run("the header states no total the read did not count", func(t *testing.T) {
 		res := readFileResult(t, workspace, map[string]any{"path": "big.log", "limit": lines})
-		total, isLowerBound := headerTotal(t, res.Content)
+		_, _, total, isLowerBound := headerRange(t, res.Content)
 		switch {
 		case isLowerBound && total > lines:
 			t.Errorf("header claims at least %d lines, and the file has %d", total, lines)
 		case !isLowerBound && total != lines:
 			t.Errorf("header states %d lines as a fact; the file has %d, and the read stopped at the cap without counting them", total, lines)
+		}
+	})
+
+	// The metadata is offered so a caller does not have to parse the header
+	// (docs/tools.md), so every number the header states has to be in it. The
+	// default limit is where that is easiest to get wrong: it stops the read
+	// long before the byte cap does, so the last line returned and the lines
+	// the cap held are different numbers, and only one of them was in Meta.
+	t.Run("Meta carries every number the default read's header states", func(t *testing.T) {
+		res := readFileResult(t, workspace, map[string]any{"path": "big.log"})
+		first, last, floor, isLowerBound := headerRange(t, res.Content)
+		if !isLowerBound || last >= floor {
+			t.Fatalf("this case needs a read the line limit clips before the byte cap does; the header says lines %d-%d of %d", first, last, floor)
+		}
+		for key, want := range map[string]int{
+			"first_line": first, "last_line": last, "total_lines_at_least": floor,
+		} {
+			got, ok := res.Meta[key]
+			if !ok {
+				t.Errorf("the header states %d and Meta has no %q, so a caller wanting that number has to parse the header after all: %v", want, key, res.Meta)
+				continue
+			}
+			if got != want {
+				t.Errorf("Meta[%q] = %v, and the header says %d", key, got, want)
+			}
 		}
 	})
 
