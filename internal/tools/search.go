@@ -243,14 +243,24 @@ func (grepTool) Execute(ctx context.Context, in Input) Result {
 		defer f.Close()
 		// Line boundaries come from the whole file, because telling a lone CR
 		// terminator from a CR byte inside a line is a property of the file
-		// rather than of any one line. That makes the size gate this function's
-		// business: it is what bounds the read.
+		// rather than of any one line. The read is therefore what the size gate
+		// has to bound, and the LimitReader is what bounds it. A stated size
+		// cannot: a character device, most of /proc, and a file being appended
+		// to during the read all yield more than stat promised, and /dev/zero
+		// reports zero bytes and never ends. Stat is only an early-out, so a
+		// 200 MB file is not read 8 MB deep before being rejected — and taken
+		// on the open descriptor it follows a symlink to its target, which the
+		// directory walk's Lstat did not.
 		if info, err := f.Stat(); err == nil && info.Size() > maxGrepFileBytes {
 			skipped++
 			return nil
 		}
-		data, err := io.ReadAll(f)
+		data, err := io.ReadAll(io.LimitReader(f, maxGrepFileBytes+1))
 		if err != nil {
+			return nil
+		}
+		if len(data) > maxGrepFileBytes {
+			skipped++
 			return nil
 		}
 		content := string(data)

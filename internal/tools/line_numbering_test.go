@@ -189,6 +189,48 @@ func TestGrepNumbersContextLinesFromTheSameSplitter(t *testing.T) {
 	}
 }
 
+// bufio.ScanLines dropped a trailing CR at end of file as well as before an LF,
+// so the last line of "a\nb\r" reached the pattern as "b" — text the file does
+// not contain. In an LF file that CR is data, and read_file shows it, so grep
+// has to match what is really there.
+func TestGrepKeepsATrailingCROnAnUnterminatedLastLine(t *testing.T) {
+	workspace := t.TempDir()
+	if err := os.WriteFile(filepath.Join(workspace, "sample.txt"), []byte("a\nb\r"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	args, _ := json.Marshal(map[string]any{"pattern": "b$", "path": "."})
+	res := (grepTool{}).Execute(context.Background(), Input{Workspace: workspace, Args: args})
+	if res.IsError {
+		t.Fatalf("grep failed: %s", res.Content)
+	}
+	if !strings.Contains(res.Content, "No matches") {
+		t.Errorf("b$ matched a line the file does not contain: %q", res.Content)
+	}
+	// The line is still found, and still numbered 2; only its text changed.
+	if got := grepMatchLines(t, workspace, "b"); len(got) != 1 || got[0] != 2 {
+		t.Errorf("grep reports the last line at %v, want [2]", got)
+	}
+}
+
+// An empty file has no line 1 to be past, so offset 1 on it is not the mistake
+// that an offset past the last line is. Without that half of the guard, the
+// count of 0 lines would make every read of an empty file an error.
+func TestReadFileStillReadsAnEmptyFile(t *testing.T) {
+	workspace := t.TempDir()
+	if err := os.WriteFile(filepath.Join(workspace, "empty.txt"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	args, _ := json.Marshal(map[string]any{"path": "empty.txt"})
+	res := (readFileTool{}).Execute(context.Background(), Input{Workspace: workspace, Args: args})
+	if res.IsError {
+		t.Fatalf("reading an empty file was refused: %s", res.Content)
+	}
+	if got := readFileTotalLines(t, workspace, "empty.txt"); got != 0 {
+		t.Errorf("an empty file reports %d lines, want 0", got)
+	}
+}
+
 // An offset past the last line is a mistake worth naming. Returning nothing at
 // all reads as "the file is empty from here", which is a different fact. Line 3
 // of a two-line file was reachable only because the count included a phantom
