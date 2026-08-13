@@ -177,17 +177,25 @@ func approvalMessage(r *ApprovalRequest) string {
 // otherwise off. Each entry says, in words that finish "…and it", what the
 // command does — the message is only useful if it explains the risk.
 //
-// This table explains a call; it does not decide whether one is gated. No list
-// of patterns can enumerate what a shell can do, so tools.NeedsApproval stays
-// the gate and a command matching nothing here is not thereby safe.
+// A reason from this table does also force a call through approval, but that
+// decides nothing on its own: every tool that reaches a shell already requires
+// approval, so those calls are gated whether or not the table recognises them.
+// What the table decides is what the person is told, which is why an entry that
+// describes a command wrongly is worse than no entry at all. No list of
+// patterns can enumerate what a shell can do, so matching nothing here never
+// amounts to safe.
 var dangerous = []struct {
 	re  *regexp.Regexp
 	why string
 }{
-	// The target may be any path under root or a home directory, not only a
-	// bare one: rm -rf /home/someone empties an account as surely as rm -rf /
-	// empties a machine.
-	{regexp.MustCompile(`\brm\s+(-[a-zA-Z]*[rf][a-zA-Z]*\s+)+(/|~|\$HOME|\*)\S*`), "it deletes a whole tree from your home or root"},
+	// A bare target is the whole of something: / is the machine, ~ and $HOME
+	// the account, * everything in the current directory.
+	{regexp.MustCompile(`\brm\s+(-[a-zA-Z]*[rf][a-zA-Z]*\s+)+(/|~|\$HOME|\*)(\s|$)`), "it deletes everything at that path"},
+	// A recursive delete takes the named directory and everything under it,
+	// wherever it sits: rm -rf /home/someone empties an account. Only -r earns
+	// this reason, because rm -f on a path removes the files named and nothing
+	// more, and describing routine cleanup as a wipe teaches people to skim.
+	{regexp.MustCompile(`\brm\s+(-[a-zA-Z]*[rR][a-zA-Z]*\s+)+(/|~|\$HOME|\*)\S*`), "it deletes a whole directory tree"},
 	{regexp.MustCompile(`\bmkfs(\.\w+)?\b`), "it formats a filesystem"},
 	{regexp.MustCompile(`\bdd\b[^\n]*\bof=/dev/`), "it writes directly to a device"},
 	{regexp.MustCompile(`>\s*/dev/(sd|nvme|hd)`), "it writes directly to a disk"},

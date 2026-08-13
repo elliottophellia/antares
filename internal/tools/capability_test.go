@@ -44,6 +44,29 @@ func TestCommandOfSeparatesNoShellFromUnreadableArguments(t *testing.T) {
 	}
 }
 
+// Whatever inspects a call and whatever runs it are handed the same bytes, so
+// they have to read them the same way. Input.Bind stops at the end of the first
+// JSON value; a stricter read here would let one trailing byte give the two a
+// different view of the same command.
+func TestCommandOfReadsArgumentsTheWayExecuteWill(t *testing.T) {
+	const args = `{"command":"rm -rf /"} x`
+
+	scanned, ok := CommandOf(terminalTool{}, json.RawMessage(args))
+	if !ok {
+		t.Fatal("trailing data made the command unreadable to the scan")
+	}
+	var bound struct {
+		Command string `json:"command"`
+	}
+	in := Input{Args: json.RawMessage(args)}
+	if err := in.Bind(&bound); err != nil {
+		t.Fatalf("Bind rejected what Execute will be given: %v", err)
+	}
+	if scanned != bound.Command {
+		t.Fatalf("the scan reads %q, Execute will run %q", scanned, bound.Command)
+	}
+}
+
 func TestUntrustedOutputIsDeclaredByTheToolsThatFetch(t *testing.T) {
 	for _, tool := range []Tool{webFetchTool{}, webSearchTool{}, browserTool{}, httpRequestTool{}} {
 		if !ReturnsUntrustedOutput(tool) {

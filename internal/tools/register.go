@@ -137,16 +137,17 @@ func ReturnsUntrustedOutput(t Tool) bool {
 }
 
 // commandArgument decodes the "command" argument shared by the tools that run
-// shell commands. Absent arguments read as no command, matching Input.Bind, so
-// only arguments that are present and malformed count as unreadable.
+// shell commands. It reads through Input.Bind rather than alongside it: an
+// inspection that parsed these bytes even slightly more strictly than Execute
+// does would let a call be dismissed as unreadable while the shell went ahead
+// and ran it. Absent arguments read as no command, which is what Bind leaves
+// behind, so only arguments that are present and malformed are unreadable.
 func commandArgument(args json.RawMessage) (string, bool) {
-	if strings.TrimSpace(string(args)) == "" {
-		return "", true
-	}
 	var decoded struct {
 		Command string `json:"command"`
 	}
-	if json.Unmarshal(args, &decoded) != nil {
+	in := Input{Args: args}
+	if in.Bind(&decoded) != nil {
 		return "", false
 	}
 	return decoded.Command, true
