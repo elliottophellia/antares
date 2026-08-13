@@ -447,6 +447,16 @@ func toEOL(s, eol string) string {
 	return strings.ReplaceAll(s, "\n", eol)
 }
 
+// lfToCRLF expands the LF line breaks in s to CRLF and leaves every other byte
+// as it was. toEOL cannot stand in for it on a string bound for the file: toEOL
+// folds a lone CR into a line break before expanding, and a CR the caller did
+// not write as a line break is data. Folding existing CRLF first is what keeps
+// the expansion from writing \r\r\n.
+func lfToCRLF(s string) string {
+	s = strings.ReplaceAll(s, "\r\n", "\n")
+	return strings.ReplaceAll(s, "\n", "\r\n")
+}
+
 // resolveEditMatch locates the bytes old_string names and decides the bytes to
 // write in their place. old_string is matched verbatim; the sole recovery is a
 // line-ending translation. how names that translation for the result message
@@ -462,11 +472,12 @@ func resolveEditMatch(content, oldIn, newIn string) (oldString, newString string
 	// a guess, and translating it is lossless. It is reached only once the
 	// verbatim match has failed, and new_string is translated only because
 	// old_string had to be: a replacement is never rewritten on a path that
-	// matched exactly.
+	// matched exactly. eolOf has already established that old_string holds no
+	// CR at all, so every \n in it is unambiguously a line break.
 	if fileEOL(content) == "\r\n" && eolOf(oldIn) == "\n" {
-		crlf := toEOL(oldIn, "\r\n")
+		crlf := lfToCRLF(oldIn)
 		if c := strings.Count(content, crlf); c > 0 {
-			return crlf, toEOL(newIn, "\r\n"), c,
+			return crlf, lfToCRLF(newIn), c,
 				"translated old_string line endings from LF to CRLF to match the file"
 		}
 	}

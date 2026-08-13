@@ -29,6 +29,43 @@ func TestEditWritesNewStringByteForByteOnTheExactStage(t *testing.T) {
 	}
 }
 
+// The twin of the test above, on the other stage. Translating line endings and
+// reinterpreting a byte as a line ending are different acts, and the recovery
+// stage is authorised only for the first. A CR the caller did not write as a
+// line break is data, and folding it into one splits a value across two lines
+// while the tool reports success — the same harm as stripping a prefix.
+func TestEditWritesNewStringByteForByteOnTheRecoveryStage(t *testing.T) {
+	for _, tc := range []struct{ name, newString, want string }{
+		{
+			"a lone CR stays data",
+			"beta\nnote ends\rand continues",
+			"alpha\r\nbeta\r\nnote ends\rand continues\r\n",
+		},
+		{
+			// Expanding every LF without folding an existing CRLF first would
+			// write \r\r\n here.
+			"a break already written as CRLF is not doubled",
+			"beta\r\ndelta\nepsilon",
+			"alpha\r\nbeta\r\ndelta\r\nepsilon\r\n",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			said, isError, after := editOnDisk(t, "notes.txt", "alpha\r\nbeta\r\ngamma\r\n", map[string]any{
+				"path": "notes.txt",
+				// LF, so only the recovery stage can match it.
+				"old_string": "beta\ngamma",
+				"new_string": tc.newString,
+			})
+			if isError {
+				t.Fatalf("an LF anchor was refused against a CRLF file: %s", said)
+			}
+			if after != tc.want {
+				t.Errorf("new_string was altered beyond its line endings\nwant %q\ngot  %q", tc.want, after)
+			}
+		})
+	}
+}
+
 // A model writes \n for a line break whatever the file it read used, so an
 // all-LF anchor against a CRLF file is a well-defined ambiguity rather than a
 // guess — the one translation the tool is allowed to make. What it must not do
