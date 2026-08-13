@@ -104,12 +104,12 @@ func TestReadFileHeaderAndMetaDescribeTheRange(t *testing.T) {
 	}
 	res := readFileResult(t, workspace, map[string]any{"path": "notes.txt", "offset": 2, "limit": 2})
 
-	want := "notes.txt — lines 2-3 of 5\n\ntwo\nthree\n"
-	if !strings.HasPrefix(res.Content, want) {
-		t.Fatalf("read_file output = %q, want it to begin %q", res.Content, want)
-	}
-	if !strings.Contains(res.Content, "… 2 more lines (use offset=4 to continue)") {
-		t.Errorf("clipped read does not say how to continue: %q", res.Content)
+	// Compared whole rather than by prefix. The continuation note opens with a
+	// newline, so a prefix check accepts a body that lost its last line's
+	// terminator — a byte per seam once the model pages through a file.
+	want := "notes.txt — lines 2-3 of 5\n\ntwo\nthree\n\n… 2 more lines (use offset=4 to continue)\n"
+	if res.Content != want {
+		t.Fatalf("read_file output = %q,\nwant                %q", res.Content, want)
 	}
 	for key, want := range map[string]any{
 		"path": "notes.txt", "first_line": 2, "last_line": 3, "total_lines": 5,
@@ -120,6 +120,38 @@ func TestReadFileHeaderAndMetaDescribeTheRange(t *testing.T) {
 	}
 	if _, ok := res.Meta["lines"]; ok {
 		t.Errorf("Meta still carries the ambiguous \"lines\" key: %v", res.Meta)
+	}
+}
+
+// Returning bytes that are not text spends the context on mojibake and hands
+// the model an anchor it cannot reproduce, so a binary file is refused. The
+// guard tests validity, not byte range: text that merely happens to be
+// multibyte still reads, and reads verbatim.
+func TestReadFileRefusesInvalidUTF8ButNotMultibyteText(t *testing.T) {
+	workspace := t.TempDir()
+	elf := []byte{0x7f, 'E', 'L', 'F', 0x02, 0x01, 0x01, 0x00, 0xff, 0xfe, 0x80, 0x00}
+	if err := os.WriteFile(filepath.Join(workspace, "app.bin"), elf, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := json.Marshal(map[string]any{"path": "app.bin"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	res := (readFileTool{}).Execute(context.Background(), Input{Workspace: workspace, Args: raw})
+	if !res.IsError {
+		t.Fatalf("bytes that are not valid UTF-8 were returned as text: %q", res.Content)
+	}
+	if !strings.Contains(res.Content, "binary file") {
+		t.Errorf("refusal does not say what was wrong with the file: %s", res.Content)
+	}
+
+	original := "héllo — 日本語 ✓\nmultibyte, and perfectly readable\n"
+	if err := os.WriteFile(filepath.Join(workspace, "utf8.txt"), []byte(original), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got := readFileResult(t, workspace, map[string]any{"path": "utf8.txt"})
+	if body := readFileBody(t, got.Content); body != original {
+		t.Fatalf("multibyte text = %q, want %q", body, original)
 	}
 }
 
