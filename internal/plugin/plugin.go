@@ -232,6 +232,10 @@ func (m *Manager) SetEnabled(name string, enabled bool) bool {
 // Plugins run in order, each seeing the previous one's changes. A deny from
 // any of them ends it: a refusal is not something a later plugin should be
 // able to quietly undo.
+//
+// A plugin that fails is still heard out — whatever it managed to print stands
+// on its own. When it left nothing readable behind, PreToolCall refuses the
+// call and every other event carries on without it.
 func (m *Manager) Dispatch(ctx context.Context, p Payload) Reply {
 	m.mu.RLock()
 	plugins := make([]Manifest, len(m.plugins))
@@ -243,11 +247,23 @@ func (m *Manager) Dispatch(ctx context.Context, p Payload) Reply {
 		if man.Error != "" || !man.Enabled || !wants(man, p.Event) {
 			continue
 		}
-		reply, err := call(ctx, man, p)
+		reply, replied, err := call(ctx, man, p)
 		if err != nil {
-			// A broken plugin must not break the agent. Log it and carry on.
 			slog.Warn("plugin failed", "plugin", man.Name, "event", p.Event, "error", err)
-			continue
+			if !replied {
+				if p.Event == PreToolCall {
+					// The gate is the one event whose answer is a decision,
+					// and none of this is an answer. A guard that could not
+					// be asked has not agreed to anything.
+					return Reply{
+						Deny:   true,
+						Reason: fmt.Sprintf("%s could not answer: %v", man.Name, err),
+					}
+				}
+				// Every other event is watching something already decided,
+				// so a broken plugin must not break the agent.
+				continue
+			}
 		}
 		if reply.Deny {
 			reply.Reason = strings.TrimSpace(reply.Reason)
@@ -283,10 +299,12 @@ func wants(man Manifest, e Event) bool {
 	return false
 }
 
-// call runs one plugin once.
-func call(ctx context.Context, man Manifest, p Payload) (Reply, error) {
-	var reply Reply
-
+// call runs one plugin once. It reports what the plugin said, whether it said
+// anything readable at all, and how it failed if it did — three separate
+// facts, because a plugin can print a verdict and still exit badly, and a
+// caller that has to decide something needs to tell that apart from a plugin
+// that never got a word out.
+func call(ctx context.Context, man Manifest, p Payload) (reply Reply, replied bool, err error) {
 	timeout := time.Duration(man.TimeoutMS) * time.Millisecond
 	if timeout <= 0 {
 		timeout = 5 * time.Second
@@ -303,7 +321,7 @@ func call(ctx context.Context, man Manifest, p Payload) (Reply, error) {
 
 	payload, err := json.Marshal(p)
 	if err != nil {
-		return reply, err
+		return Reply{}, false, err
 	}
 
 	cmd := exec.CommandContext(runCtx, command, man.Args...)
@@ -318,26 +336,49 @@ func call(ctx context.Context, man Manifest, p Payload) (Reply, error) {
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 
-	if err := cmd.Run(); err != nil {
-		if runCtx.Err() != nil {
-			return reply, fmt.Errorf("timed out after %s", timeout)
-		}
-		msg := strings.TrimSpace(stderr.String())
-		if msg == "" {
-			msg = err.Error()
-		}
-		return reply, errors.New(msg)
-	}
+	runErr := cmd.Run()
 
-	out := bytes.TrimSpace(stdout.Bytes())
+	// Read the plugin out before judging how it exited. Printing an answer and
+	// then exiting non-zero is an ordinary shell accident, and the answer is
+	// no less considered for it.
+	reply, replied, parseErr := readReply(stdout.Bytes())
+	if runErr != nil {
+		return reply, replied, runFailure(runCtx, runErr, stderr.String(), timeout)
+	}
+	return reply, replied, parseErr
+}
+
+// failureChars bounds an excerpt of what a plugin printed when quoting it back.
+const failureChars = 200
+
+// readReply decodes what a plugin printed. Silence is not a failure: it is how
+// a plugin says it has no opinion.
+func readReply(stdout []byte) (reply Reply, replied bool, err error) {
+	out := bytes.TrimSpace(stdout)
 	if len(out) == 0 {
-		// Silence is a valid answer: the plugin observed and had no opinion.
-		return reply, nil
+		return Reply{}, false, nil
 	}
 	if err := json.Unmarshal(out, &reply); err != nil {
-		return reply, fmt.Errorf("returned something that is not JSON: %s", truncate(string(out), 200))
+		return Reply{}, false, fmt.Errorf("returned something that is not JSON: %s",
+			truncate(string(out), failureChars))
 	}
-	return reply, nil
+	return reply, true, nil
+}
+
+// runFailure says why a run failed, preferring the plugin's own words on
+// stderr. The text reaches an operator's log and, for a refused tool call, the
+// model, so it is kept to a length both can carry.
+func runFailure(runCtx context.Context, runErr error, stderr string, timeout time.Duration) error {
+	switch {
+	case errors.Is(runCtx.Err(), context.DeadlineExceeded):
+		return fmt.Errorf("timed out after %s", timeout)
+	case runCtx.Err() != nil:
+		return fmt.Errorf("was stopped: %w", runCtx.Err())
+	}
+	if msg := strings.TrimSpace(stderr); msg != "" {
+		return errors.New(truncate(msg, failureChars))
+	}
+	return runErr
 }
 
 func truncate(s string, max int) string {
