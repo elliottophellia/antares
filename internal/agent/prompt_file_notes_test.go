@@ -2,8 +2,10 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -33,23 +35,122 @@ func filePrompt(t *testing.T) string {
 
 // The prompt is the only description of the tools the model ever sees, so an
 // instruction that no longer matches them is not stale documentation — it is a
-// standing order to corrupt data. read_file adds no prefix to a line, and
-// new_string is authored rather than copied, so telling the model to keep only
-// what follows a "|" deletes real content from files whose lines start with one.
-func TestPromptFileNotesDoNotDescribeALineNumberPrefix(t *testing.T) {
-	prompt := filePrompt(t)
-	for _, gone := range []string{
-		"NUMBER|",
-		"NUMBER|CONTENT",
-		"metadata only",
-		"content after `|`",
-		"never the line number",
-		"Line endings are matched automatically",
-	} {
-		if strings.Contains(prompt, gone) {
-			t.Errorf("prompt still describes the removed line-prefix format: %q", gone)
-		}
+// standing order to corrupt data. The instruction that was there told the model
+// to keep only what follows a "|", and a list of the phrases it used cannot
+// guard against it: the same order rewritten around a colon reads as new advice
+// and passes every one of them. grep prints "%6d:\t" from the package next
+// door, so a line of spaces, digits and a colon genuinely is a line number
+// somewhere in this repository — just not in read_file's output.
+//
+// What does not depend on the wording is the tool. This drives it on content
+// shaped like the numbering such an instruction would describe, and checks the
+// two things the bullet tells the model to do with what comes back: copy a
+// region straight into old_string, which has to work, and strip nothing from
+// it, because stripping is what breaks the file.
+func TestPromptClaimThatACopiedRegionIsAnAnchorHoldsAgainstTheRealTools(t *testing.T) {
+	// Line 1 is grep's own output shape, line 2 the pipe-separated row the
+	// removed format collided with, and line 4 is tab-indented.
+	const original = "   288:\tfmt.Fprintf(&b, \"%6d:\\t%s\\n\", lineNo, line)\n" +
+		"12|alice|admin\n" +
+		"| Date | Event |\n" +
+		"\tif enabled:\n"
+	// One row promoted, and nothing else in the file touched.
+	const intended = "   288:\tfmt.Fprintf(&b, \"%6d:\\t%s\\n\", lineNo, line)\n" +
+		"12|alice|owner\n" +
+		"| Date | Event |\n" +
+		"\tif enabled:\n"
+
+	read, ok := tools.Default().Get("read_file")
+	if !ok {
+		t.Fatal("read_file is not registered")
 	}
+	edit, ok := tools.Default().Get("edit_file")
+	if !ok {
+		t.Fatal("edit_file is not registered")
+	}
+	// A workspace holding the file, and the region the model would copy: cut
+	// out of what read_file returned rather than written out again, so it is
+	// the tool's output that is under test and not the fixture.
+	setUp := func(t *testing.T) (workspace, copied string) {
+		t.Helper()
+		workspace = t.TempDir()
+		if err := os.WriteFile(filepath.Join(workspace, "rows.txt"), []byte(original), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		res := read.Execute(context.Background(), tools.Input{
+			Workspace: workspace,
+			Args:      []byte(`{"path":"rows.txt"}`),
+		})
+		if res.IsError {
+			t.Fatalf("read_file: %s", res.Content)
+		}
+		_, body, ok := strings.Cut(res.Content, "\n\n")
+		if !ok {
+			t.Fatalf("read_file output has no header line followed by a blank line: %q", res.Content)
+		}
+		if body != original {
+			t.Fatalf("prompt promises the file's exact bytes, read_file returned %q", body)
+		}
+		lines := strings.Split(body, "\n")
+		if len(lines) < 2 {
+			t.Fatalf("read_file returned no second line to copy: %q", body)
+		}
+		return workspace, lines[1]
+	}
+
+	editRow := func(t *testing.T, workspace, oldString, newString string) (said string, after string) {
+		t.Helper()
+		args, err := json.Marshal(map[string]any{
+			"path": "rows.txt", "old_string": oldString, "new_string": newString,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		res := edit.Execute(context.Background(), tools.Input{Workspace: workspace, Args: args})
+		written, err := os.ReadFile(filepath.Join(workspace, "rows.txt"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return res.Content, string(written)
+	}
+
+	t.Run("a region copied straight out of the read is an anchor", func(t *testing.T) {
+		workspace, copied := setUp(t)
+		if copied != "12|alice|admin" {
+			t.Fatalf("the second line came back as %q; the fixture's own bytes are \"12|alice|admin\"", copied)
+		}
+		said, after := editRow(t, workspace, copied, "12|alice|owner")
+		if after != intended {
+			t.Errorf("copying a region into old_string did not produce what was asked for\nsaid: %s\nwant %q\ngot  %q", said, intended, after)
+		}
+	})
+
+	// The same intent, through the instruction the bullet must never carry
+	// again: the leading digits and separator are read as the tool's numbering
+	// and dropped. Nothing refuses it — the remainder of a row is really in the
+	// file — so the row is rewritten around a prefix that was content, and the
+	// tool reports success.
+	t.Run("dropping a leading number and separator writes something else", func(t *testing.T) {
+		workspace, copied := setUp(t)
+		stripped := regexp.MustCompile(`^\s*\d+[:|]\s?`).ReplaceAllString(copied, "")
+		if stripped == copied {
+			t.Fatalf("the copied line %q has no leading number to strip; this case no longer tests anything", copied)
+		}
+		said, after := editRow(t, workspace, stripped, "12|alice|owner")
+		switch {
+		case after == intended:
+			t.Fatalf("stripping the line's leading characters produced the file the caller wanted, so an instruction to do it would be sound: %s", said)
+		case after == original:
+			// Refused, which is a safe way for the instruction to be wrong.
+		default:
+			// Accepted: the remainder of a row is really in the file, so what
+			// was dropped as numbering is still there and the row now carries
+			// it twice.
+			if !strings.Contains(after, "12|12|alice|owner") {
+				t.Errorf("the stripped anchor wrote something other than a row rebuilt around the prefix it dropped: %q (%s)", after, said)
+			}
+		}
+	})
 }
 
 // Dropping the wrong advice is only half the job. These four are what keeps the
