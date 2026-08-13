@@ -58,7 +58,10 @@ func TestLineNumbersAgreeAcrossTools(t *testing.T) {
 
 // readFileTotalLines returns the total read_file reports for a whole-file read.
 // The total comes from Meta so this stays a test about counting rather than
-// about how the content happens to be rendered.
+// about how the content happens to be rendered. It reads one key and no
+// other: accepting the removed "lines" key as a fallback let the key this
+// branch replaced come back without the test that looks like it owns the
+// question noticing.
 func readFileTotalLines(t *testing.T, workspace, name string) int {
 	t.Helper()
 	args, err := json.Marshal(map[string]any{"path": name})
@@ -69,18 +72,17 @@ func readFileTotalLines(t *testing.T, workspace, name string) int {
 	if res.IsError {
 		t.Fatalf("read_file failed: %s", res.Content)
 	}
-	for _, key := range []string{"total_lines", "lines"} {
-		if v, ok := res.Meta[key]; ok {
-			switch n := v.(type) {
-			case int:
-				return n
-			case float64:
-				return int(n)
-			}
-			t.Fatalf("read_file Meta[%q] = %v (%T), want a number", key, v, v)
-		}
+	v, ok := res.Meta["total_lines"]
+	if !ok {
+		t.Fatalf("read_file reported no total_lines in Meta: %v", res.Meta)
 	}
-	t.Fatalf("read_file reported no line total in Meta: %v", res.Meta)
+	switch n := v.(type) {
+	case int:
+		return n
+	case float64:
+		return int(n)
+	}
+	t.Fatalf("read_file Meta[\"total_lines\"] = %v (%T), want a number", v, v)
 	return 0
 }
 

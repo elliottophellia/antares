@@ -140,8 +140,13 @@ func TestPromptExemptsTheToolsOwnTrailingNotesFromTheContentClaim(t *testing.T) 
 		t.Fatal("read_file is not registered")
 	}
 
-	blankLineAlways := true
-	for _, tc := range []struct{ name, file, content, args, inTheFile, wantTail string }{
+	// blankLineAlways is the verdict, and it starts as the answer that lets the
+	// prompt promise most. A case that does not reach the end contributes no
+	// evidence to it, so the count of cases that did is checked before the
+	// verdict is used: otherwise a read whose shape changed takes the claim
+	// check down with it and the prompt goes unexamined.
+	blankLineAlways, judged := true, 0
+	cases := []struct{ name, file, content, args, inTheFile, wantTail string }{
 		{
 			"clipped by line range",
 			"notes.txt", "one\ntwo\nthree\nfour\nfive\n",
@@ -159,7 +164,8 @@ func TestPromptExemptsTheToolsOwnTrailingNotesFromTheContentClaim(t *testing.T) 
 			oversized[:byteCap],
 			"x\n… file truncated at 400 KB\n",
 		},
-	} {
+	}
+	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			workspace := t.TempDir()
 			if err := os.WriteFile(filepath.Join(workspace, tc.file), []byte(tc.content), 0o644); err != nil {
@@ -204,7 +210,11 @@ func TestPromptExemptsTheToolsOwnTrailingNotesFromTheContentClaim(t *testing.T) 
 				}
 				break
 			}
+			judged++
 		})
+	}
+	if judged != len(cases) {
+		t.Fatalf("%d of %d reads did not get as far as the note they append, so what read_file puts in front of one is unknown and the prompt's promise about it cannot be judged", len(cases)-judged, len(cases))
 	}
 
 	claim := claimAround(t, filePrompt(t), "that blank line")

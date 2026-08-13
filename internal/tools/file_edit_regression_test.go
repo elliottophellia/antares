@@ -87,25 +87,39 @@ func TestEditFileMatchesCRLFWhenCopiedFromRead(t *testing.T) {
 }
 
 // When the match still fails, the error must say what went wrong in a way the
-// model can act on (tabs vs spaces is the common indentation trap).
+// model can act on (tabs vs spaces is the common indentation trap). The anchor
+// here is the file detabbed at eight, which is a width the diagnostic reaches
+// only after trying two and four, and it spans three lines: the message has to
+// come from the tab branch rather than from the generic advice, which also
+// contains the word "tab".
 func TestEditFileDiagnosesTabVsSpaceMismatch(t *testing.T) {
 	workspace := t.TempDir()
 	path := filepath.Join(workspace, "tabs.c")
-	original := "\t\tif (x) {\n\t\t\tdo_work();\n\t\t}\n"
+	original := "\tif (x) {\n\t\tdo_work();\n\t}\n"
 	if err := os.WriteFile(path, []byte(original), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	editArgs, _ := json.Marshal(map[string]any{
 		"path":       "tabs.c",
-		"old_string": "  if (x) {\n    do_work();\n  }",
-		"new_string": "  if (x) {\n    do_work2();\n  }",
+		"old_string": "        if (x) {\n                do_work();\n        }",
+		"new_string": "        if (x) {\n                do_work2();\n        }",
 	})
 	edited := (editFileTool{}).Execute(context.Background(), Input{Args: editArgs, Workspace: workspace})
 	if !edited.IsError {
 		t.Fatal("expected failure for tab/space mismatch")
 	}
-	if !strings.Contains(edited.Content, "tab") {
+	if !strings.Contains(edited.Content, "indents with TAB characters") {
 		t.Fatalf("error should diagnose tabs vs spaces, got: %s", edited.Content)
+	}
+	if !strings.Contains(edited.Content, "tab width ~8") {
+		t.Errorf("error does not name the width the anchor was indented at, got: %s", edited.Content)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != original {
+		t.Fatalf("file changed although the edit failed: %q", got)
 	}
 }
 
