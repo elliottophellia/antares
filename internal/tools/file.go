@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -171,7 +172,17 @@ func (readFileTool) Execute(_ context.Context, in Input) Result {
 		return Errorf("%s is a directory; use list_files instead", args.Path)
 	}
 
-	data, err := os.ReadFile(path)
+	f, err := os.Open(path)
+	if err != nil {
+		return Errorf("cannot read %s: %v", args.Path, err)
+	}
+	defer f.Close()
+	// The cap has to bound the read, not trim what has already been read. The
+	// size stat reports cannot bound it either: a character device, most of
+	// /proc, and a file being appended to during the read all yield more than
+	// stat promised, and /dev/zero reports zero bytes and never ends. Reading
+	// one byte past the cap is what tells a file at the cap from one over it.
+	data, err := io.ReadAll(io.LimitReader(f, maxReadBytes+1))
 	if err != nil {
 		return Errorf("cannot read %s: %v", args.Path, err)
 	}
