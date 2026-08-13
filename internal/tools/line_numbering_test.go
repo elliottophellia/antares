@@ -157,6 +157,7 @@ func TestLineSpansCountsTerminatedAndUnterminatedFilesAlike(t *testing.T) {
 		{"lf unterminated", "a\nb", 2},
 		{"crlf terminated", "a\r\nb\r\n", 2},
 		{"cr terminated", "a\rb\r", 2},
+		{"cr unterminated", "alpha\rbeta\rgamma", 3},
 		{"blank line before the end", "a\n\n", 2},
 		{"lone cr is data in an lf file", "a\rb\nc\n", 2},
 	} {

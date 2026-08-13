@@ -86,36 +86,6 @@ func TestEditFileMatchesCRLFWhenCopiedFromRead(t *testing.T) {
 	}
 }
 
-// Models sometimes paste the whole NUMBER| line from read_file into old_string.
-// edit_file should strip a consistent line-number prefix block and still match.
-func TestEditFileStripsReadFileLineNumberPrefixes(t *testing.T) {
-	workspace := t.TempDir()
-	path := filepath.Join(workspace, "a.go")
-	original := "package main\n\nfunc main() {\n\treturn\n}\n"
-	if err := os.WriteFile(path, []byte(original), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	// Accidental paste of the read_file display format.
-	oldWithPrefix := "3|func main() {\n4|\treturn\n5|}"
-	newWithPrefix := "3|func main() {\n4|\treturn nil\n5|}"
-	editArgs, _ := json.Marshal(map[string]any{
-		"path": "a.go", "old_string": oldWithPrefix, "new_string": newWithPrefix,
-	})
-	edited := (editFileTool{}).Execute(context.Background(), Input{Args: editArgs, Workspace: workspace})
-	if edited.IsError {
-		t.Fatalf("edit_file should strip NUMBER| prefixes: %s", edited.Content)
-	}
-	got, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	want := "package main\n\nfunc main() {\n\treturn nil\n}\n"
-	if string(got) != want {
-		t.Fatalf("edited = %q, want %q", got, want)
-	}
-}
-
 // When the match still fails, the error must say what went wrong in a way the
 // model can act on (tabs vs spaces is the common indentation trap).
 func TestEditFileDiagnosesTabVsSpaceMismatch(t *testing.T) {
@@ -166,7 +136,13 @@ func TestEditFileNotFoundShowsNearMiss(t *testing.T) {
 	}
 }
 
-func TestEditFileRecoversUniqueNearInsertionWithoutChangingExistingLine(t *testing.T) {
+// The row in the file says "85 (early stop @55)" and the anchor abbreviates it
+// to "85 (ES@55)", so the anchor is not in the file. This is the case the
+// adjacent-insertion recovery was built for, and the case that shows why it
+// cannot exist: the same shape is indistinguishable from an anchor whose row
+// was deleted, where the insertion lands against a sibling row instead. A
+// stale anchor is a stale read, and the answer is to read again.
+func TestEditFileRefusesAnAbbreviatedTableRowAnchor(t *testing.T) {
 	workspace := t.TempDir()
 	path := filepath.Join(workspace, "README.md")
 	actual := "| **pool39v2** | 14 hand + 25 vision-audited | 33 train / 6 val | T4 | 85 (early stop @55) | **0.009** | `artifacts/pool39v2/` |\n"
@@ -177,52 +153,48 @@ func TestEditFileRecoversUniqueNearInsertionWithoutChangingExistingLine(t *testi
 	newString := old + "\n| **pool39v2_sc** | single-class icon | 33 train / 6 val | T4 | 70 | **0.519** | `artifacts/pool39v2_sc/` |"
 	args, _ := json.Marshal(map[string]any{"path": "README.md", "old_string": old, "new_string": newString})
 	result := (editFileTool{}).Execute(context.Background(), Input{Workspace: workspace, Args: args})
-	if result.IsError {
-		t.Fatalf("unique adjacent insertion should recover: %s", result.Content)
+	if !result.IsError || !strings.Contains(result.Content, "old_string not found") {
+		t.Fatalf("an anchor that is not in the file was accepted: %+v", result)
 	}
 	got, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := actual + "| **pool39v2_sc** | single-class icon | 33 train / 6 val | T4 | 70 | **0.519** | `artifacts/pool39v2_sc/` |\n"
-	if string(got) != want {
-		t.Fatalf("recovery changed the existing line:\n%s\nwant:\n%s", got, want)
+	if string(got) != actual {
+		t.Fatalf("file changed although the anchor is absent:\n%s", got)
 	}
 }
 
-// The similarity search picks a unique best line, so the insertion must land
-// at that line — not at an earlier occurrence of the same text inside a longer
-// line, which strings.Replace-based recovery corrupted mid-line.
-func TestEditFileAdjacentInsertionSplicesAtMatchedLine(t *testing.T) {
+// One space apart from a line that is really there is still not that line. The
+// margin between "close" and "correct" is where silent corruption lives, and
+// nothing in the tool is allowed to cross it.
+func TestEditFileRefusesAnAnchorOneSpaceOffARealLine(t *testing.T) {
 	workspace := t.TempDir()
 	path := filepath.Join(workspace, "f.txt")
 	content := "start\nreturn nil // TODO cleanup\nmiddle\nreturn nil\nend\n"
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	// Stale old_string (double space) matches nothing exactly; similarity must
-	// pick line 4 ("return nil", score 1.0) over line 2 (score 0.5).
-	old := "return  nil"
+	old := "return  nil" // double space; the file has one
 	args, _ := json.Marshal(map[string]any{
 		"path": "f.txt", "old_string": old, "new_string": old + "\nINSERTED",
 	})
 	result := (editFileTool{}).Execute(context.Background(), Input{Workspace: workspace, Args: args})
-	if result.IsError {
-		t.Fatalf("unique near-line insertion should recover: %s", result.Content)
+	if !result.IsError {
+		t.Fatalf("a near-miss anchor was accepted: %s", result.Content)
 	}
 	got, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := "start\nreturn nil // TODO cleanup\nmiddle\nreturn nil\nINSERTED\nend\n"
-	if string(got) != want {
-		t.Fatalf("insertion landed at the wrong place:\n%s\nwant:\n%s", got, want)
+	if string(got) != content {
+		t.Fatalf("file changed although the anchor is absent:\n%s", got)
 	}
 }
 
-// replace_all promises "replace every exact occurrence"; a similarity-based
-// recovery must never piggyback on it and multiply insertions.
-func TestEditFileAdjacentInsertionIgnoredWithReplaceAll(t *testing.T) {
+// replace_all promises "replace every exact occurrence", so an anchor that
+// occurs zero times must change nothing at all.
+func TestEditFileReplaceAllRefusesAnAbsentAnchor(t *testing.T) {
 	workspace := t.TempDir()
 	path := filepath.Join(workspace, "ra.txt")
 	content := "return nil // TODO cleanup\nmiddle\nreturn nil\nend\n"
@@ -235,14 +207,14 @@ func TestEditFileAdjacentInsertionIgnoredWithReplaceAll(t *testing.T) {
 	})
 	result := (editFileTool{}).Execute(context.Background(), Input{Workspace: workspace, Args: args})
 	if !result.IsError {
-		t.Fatalf("replace_all must not trigger similarity recovery: %s", result.Content)
+		t.Fatalf("replace_all accepted an anchor that occurs zero times: %s", result.Content)
 	}
 	got, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if string(got) != content {
-		t.Fatalf("file modified by rejected recovery:\n%s", got)
+		t.Fatalf("file changed although the anchor is absent:\n%s", got)
 	}
 }
 
@@ -299,21 +271,6 @@ func TestEditFileExactMatchDespiteStrayCR(t *testing.T) {
 	}
 }
 
-// read_file line numbers are always consecutive, so a multi-line block whose
-// numeric prefixes are not sequential is real pipe-delimited data, not a paste.
-func TestStripReadFileLinePrefixesRequiresSequentialNumbers(t *testing.T) {
-	if _, ok := stripReadFileLinePrefixes("3|a\n7|b"); ok {
-		t.Fatal("non-sequential numeric prefixes must not strip")
-	}
-	if _, ok := stripReadFileLinePrefixes("5|x\n5|y"); ok {
-		t.Fatal("repeated numeric prefixes must not strip")
-	}
-	got, ok := stripReadFileLinePrefixes("9|a\n10|b\n11|c")
-	if !ok || got != "a\nb\nc" {
-		t.Fatalf("sequential prefixes should strip, got %q ok=%v", got, ok)
-	}
-}
-
 // Truncating at the byte cap must not cut a multi-byte rune in half and then
 // misreport the whole file as binary.
 func TestReadFileTruncationDoesNotSplitRune(t *testing.T) {
@@ -357,7 +314,11 @@ func TestReadFileCountsLoneCRLinesWithoutRewritingThem(t *testing.T) {
 	}
 }
 
-func TestEditFileDoesNotRecoverAmbiguousNearInsertion(t *testing.T) {
+// A markdown table row is the shape that made "close enough" look reasonable,
+// and two sibling rows are the shape that made it dangerous: the anchor is
+// equally near to both, and either choice writes into a row the caller did not
+// name.
+func TestEditFileRefusesAnAnchorNearTwoSiblingRows(t *testing.T) {
 	workspace := t.TempDir()
 	path := filepath.Join(workspace, "README.md")
 	content := "| **pool39v2** | 85 (early stop @55) | artifacts/a |\n| **pool39v2** | 85 (early stop @55) | artifacts/b |\n"
@@ -370,47 +331,13 @@ func TestEditFileDoesNotRecoverAmbiguousNearInsertion(t *testing.T) {
 	})
 	result := (editFileTool{}).Execute(context.Background(), Input{Workspace: workspace, Args: args})
 	if !result.IsError || !strings.Contains(result.Content, "old_string not found") {
-		t.Fatalf("ambiguous near insertion must remain exact-only: %+v", result)
+		t.Fatalf("an anchor that is not in the file was accepted: %+v", result)
 	}
 	got, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if string(got) != content {
-		t.Fatalf("ambiguous recovery modified file: %q", got)
-	}
-}
-
-func TestStripReadFileLinePrefixes(t *testing.T) {
-	in := "10|\tfoo()\n11|\tbar()\n12|}"
-	got, ok := stripReadFileLinePrefixes(in)
-	if !ok {
-		t.Fatal("expected strip success")
-	}
-	if got != "\tfoo()\n\tbar()\n}" {
-		t.Fatalf("got %q", got)
-	}
-	// Not every line prefixed → leave alone (could be real pipe content).
-	if _, ok := stripReadFileLinePrefixes("a|b\nc"); ok {
-		t.Fatal("partial prefix block must not strip")
-	}
-	// Single line of real data that happens to contain a pipe stays intact.
-	if s, ok := stripReadFileLinePrefixes("nope"); ok || s != "nope" {
-		t.Fatalf("non-prefixed = %q ok=%v", s, ok)
-	}
-}
-
-func TestEditFileDiagnosesMixedReadPrefixes(t *testing.T) {
-	workspace := t.TempDir()
-	path := filepath.Join(workspace, "mixed.go")
-	if err := os.WriteFile(path, []byte("func run() {\n\treturn\n}\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	args, _ := json.Marshal(map[string]any{
-		"path": "mixed.go", "old_string": "1|func run() {\n\treturn\n}", "new_string": "1|func run() {\n\treturn nil\n}",
-	})
-	result := (editFileTool{}).Execute(context.Background(), Input{Workspace: workspace, Args: args})
-	if !result.IsError || !strings.Contains(result.Content, "Some old_string lines still include") {
-		t.Fatalf("mixed-prefix diagnostic missing: %+v", result)
+		t.Fatalf("file changed although the anchor is absent: %q", got)
 	}
 }
