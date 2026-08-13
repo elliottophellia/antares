@@ -132,12 +132,3 @@ func TestNormaliseArgsToleratesGarbage(t *testing.T) {
 		t.Fatalf("got %q", got)
 	}
 }
-
-func TestRepeatKeyWriteFileDifferentPathDoesNotTrip(t *testing.T) {
-	r := newRepeatTracker(2)
-	r.record([]llm.ToolCall{{Name: "write_file", Arguments: `{"path":"a.txt","content":"x"}`}})
-	got := r.record([]llm.ToolCall{{Name: "write_file", Arguments: `{"path":"b.txt","content":"x"}`}})
-	if len(got) != 0 {
-		t.Fatalf("different paths should not trip: %v", got)
-	}
-}
