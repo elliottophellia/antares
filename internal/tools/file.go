@@ -387,6 +387,14 @@ func (editFileTool) Execute(_ context.Context, in Input) Result {
 	if err := in.Bind(&args); err != nil {
 		return Errorf("%v", err)
 	}
+	// An empty string is "in" every file, between every pair of characters, so
+	// this is the one anchor an exact match cannot refuse on its own: with
+	// replace_all it interleaves new_string with the file a character at a
+	// time, and without it the file is reported as matching as many times as
+	// it has characters.
+	if args.OldString == "" {
+		return Errorf("old_string is empty, and an empty anchor matches between every pair of characters. Name the text to replace: to insert a line, anchor on a line beside where it goes and repeat that line in new_string; to create or replace a whole file, use write_file.")
+	}
 	if args.OldString == args.NewString {
 		return Errorf("old_string and new_string are identical")
 	}

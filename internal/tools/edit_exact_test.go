@@ -111,6 +111,42 @@ func TestEditReportsNoRecoveryWhenTheAnchorMatchedExactly(t *testing.T) {
 	}
 }
 
+// strings.Count(content, "") is the rune count plus one, so the empty anchor
+// is "found" between every pair of runes in the file. It is the one remaining
+// input for which "write only where old_string is in the file exactly" does
+// not hold, and replace_all then interleaves new_string with the file a rune at
+// a time. A model reaching for it is usually trying to append a line to a
+// config, which is an anchor it has not chosen yet rather than an anchor that
+// is empty.
+func TestEditRefusesAnEmptyOldString(t *testing.T) {
+	const original = "# Config\nkey = 1\n"
+	for _, replaceAll := range []bool{true, false} {
+		name := "one replacement"
+		if replaceAll {
+			name = "replace_all"
+		}
+		t.Run(name, func(t *testing.T) {
+			said, isError, after := editOnDisk(t, "app.conf", original, map[string]any{
+				"path":        "app.conf",
+				"old_string":  "",
+				"new_string":  "key2 = 2\n",
+				"replace_all": replaceAll,
+			})
+			if after != original {
+				t.Errorf("an empty anchor rewrote the file\nsaid: %s\ngot:  %q", said, after)
+			}
+			if !isError {
+				t.Fatalf("an empty anchor was accepted: %s", said)
+			}
+			// Counting the places an empty string "matches" describes nothing
+			// the caller can fix, and the count is of the file's runes.
+			if !strings.Contains(said, "old_string is empty") {
+				t.Errorf("refusal does not name the empty anchor as the problem: %s", said)
+			}
+		})
+	}
+}
+
 // A space-indented anchor against a tab-indented file is the commonest way an
 // edit misses, and the tool already knows how to say so. The message was
 // unreachable: the adjacent-insertion splice claimed the edit first and wrote
