@@ -103,11 +103,13 @@ help them now — do not block them.
 		b.WriteString("\n## Tool notes\n\n")
 		b.WriteString("- Paths given to file tools are relative to the workspace; you cannot read outside it.\n")
 		if hasTool(active, "read_file") || hasTool(active, "edit_file") {
-			// Harness guidance for the read → edit loop. Without this, models
-			// paste line numbers into old_string or expand tabs to spaces and
-			// the exact match fails repeatedly.
-			b.WriteString("- read_file returns lines as `NUMBER|CONTENT`. The `|` is metadata only. When calling edit_file, copy **only** the content after `|` into old_string/new_string — never the line number. Preserve tabs and spaces exactly (do not expand tabs to spaces). Line endings are matched automatically.\n")
-			b.WriteString("- Before every edit_file call, re-read the region you are editing (read_file with offset/limit on large files). edit_file requires an exact, unique old_string from that fresh read. After any successful edit or write, re-read before making another edit; do not reuse an older block or invent identifiers. If it reports multiple occurrences, include unique neighbouring lines or use replace_all only when every occurrence should change.\n")
+			// Harness guidance for the read → edit loop. edit_file matches
+			// old_string byte for byte, so anything the model does to what it
+			// read — expanding tabs, trimming, reformatting — is what makes the
+			// match fail. The read is verbatim precisely so there is nothing to
+			// undo before using it.
+			b.WriteString("- read_file returns a header line `<path> — lines <first>-<last> of <total>` and a blank line, then the file's exact bytes. Everything below that blank line is file content: no line numbers, no prefixes, nothing to strip. Copy a region of it straight into edit_file's old_string. Preserve tabs and spaces exactly (do not expand tabs to spaces). new_string is written byte for byte as you send it; only an all-LF old_string is translated to CRLF when the file uses CRLF.\n")
+			b.WriteString("- Before every edit_file call, re-read the region you are editing (read_file with offset/limit on large files). edit_file requires an exact, unique old_string from that fresh read. After any successful edit or write, re-read before making another edit; do not reuse an older block or invent identifiers. If old_string is not found, the anchor itself is wrong — stale, misremembered, or reformatted — so re-read and copy it again instead of retrying with more context around it. If it reports multiple occurrences, include unique neighbouring lines or use replace_all only when every occurrence should change.\n")
 		}
 		if hasTool(active, "write_file") {
 			b.WriteString("- File creation is complete only after write_file returns a successful result. A filename in the request, planned arguments, a diff preview, or the user's statement that a file was created is not evidence that it exists. Never turn any of those into your own confirmation. If asked whether a file exists, where it was written, or what it contains without a successful write_file result in this run, check it with read_file first and report the real result. Do not retry the same failed write; explain its actionable error or use a genuinely different valid path/content.\n")

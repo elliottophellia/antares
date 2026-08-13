@@ -397,6 +397,16 @@ func (editFileTool) Execute(_ context.Context, in Input) Result {
 	if how != "" {
 		msg += " [" + how + "]"
 	}
+	// A verbatim match authorises no rewriting of the replacement, so LF breaks
+	// in new_string stay LF inside a CRLF file. Every byte asked for is on disk
+	// and that is the trade we want, but the mixed endings are invisible until
+	// something else surfaces them, so the caller is told. This changes nothing
+	// about what was written. newString is the string that actually reached
+	// disk, so the LF-to-CRLF recovery — which already translated it — cannot
+	// trip this.
+	if fileEOL(content) == "\r\n" && strings.Contains(newString, "\n") && !strings.Contains(newString, "\r\n") {
+		msg += " Note: the file uses CRLF line endings and new_string used LF, so the replaced region now has LF line breaks. It was written exactly as given; send new_string with \\r\\n breaks if the file must stay consistent."
+	}
 	return Result{
 		Content: msg,
 		Meta:    map[string]any{"path": rel, "replacements": replaced},

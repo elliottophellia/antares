@@ -9,7 +9,7 @@ whatever MCP servers add.
 
 | Tool | What it does |
 |---|---|
-| `read_file` | Read a text file as `NUMBER|CONTENT` lines, with offset and limit for large ones |
+| `read_file` | Read a text file's bytes verbatim under a line-range header, with offset and limit for large ones |
 | `write_file` | Create or overwrite, making parent directories |
 | `edit_file` | Replace an exact string, which must appear exactly once unless told otherwise |
 | `list_files` | Directory entries, optionally recursive |
@@ -21,11 +21,26 @@ Paths are relative to the workspace and cannot escape it.
 `edit_file` requiring a unique match is deliberate: an edit that silently hits
 the wrong occurrence is worse than one that fails.
 
-`read_file` prints each line as `NUMBER|CONTENT`. The number and `|` are
-metadata for the model — they are not part of the file. `edit_file` matches
-line endings to the file automatically (so a paste from `read_file` works on
-CRLF files) and will strip a whole-block paste of `NUMBER|` prefixes if the
-model includes them by mistake. Tabs and spaces must still match exactly.
+`read_file` returns one header line, `<path> — lines <first>-<last> of
+<total>`, a blank line, then the file's bytes unaltered — tabs, CRLF, and lone
+CR included. Nothing is stamped onto a line, so there is nothing for the model
+to strip before using a region as an `edit_file` anchor. The same numbers are
+in the result's metadata (`path`, `first_line`, `last_line`, `total_lines`) for
+callers that would otherwise parse the header.
+
+`edit_file` matches `old_string` byte for byte and writes `new_string` byte for
+byte. One recovery exists: if the file uses CRLF and an anchor whose every break
+is LF did not match, it is retried with those breaks expanded to CRLF, since a
+model emits `\n` whatever it read. That runs only after the exact match has
+failed, translates `new_string` only because `old_string` had to be, and says so
+in its result. So when the anchor matched exactly, a `new_string` written with
+LF lands in a CRLF file as LF; the result notes that rather than rewriting bytes
+the caller asked for.
+
+An anchor that is not found is an anchor that is wrong — stale, misremembered,
+or reformatted. The fix is another `read_file`, not more surrounding context.
+Extra context is the answer to the other error, where the anchor matches more
+than once.
 
 ### Terminal
 
