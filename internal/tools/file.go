@@ -674,7 +674,7 @@ func lineOfOffset(spans []lineSpan, at int) int {
 func nearMissHint(content, oldString string) string {
 	spans := lineSpans(content)
 	for _, token := range identifierTokens(oldString) {
-		if len(token) < 8 || strings.Contains(strings.ToLower(token), "read_file") {
+		if len(token) < 8 {
 			continue
 		}
 		var hits []string

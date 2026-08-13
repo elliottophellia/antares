@@ -136,6 +136,36 @@ func TestEditFileNotFoundShowsNearMiss(t *testing.T) {
 	}
 }
 
+// The hint used to skip any token containing "read_file", from the era when a
+// stale anchor could be a line of read_file's own NUMBER| output and the token
+// meant "this came from the tool, not the file". There is no such output any
+// more, so the exclusion only fires on what it was never about: source that
+// has a read_file identifier in it, which here is most of the file tools' own
+// code and their callers.
+func TestEditFileNearMissHintDoesNotSkipReadFileIdentifiers(t *testing.T) {
+	workspace := t.TempDir()
+	path := filepath.Join(workspace, "dispatch.go")
+	content := "func dispatch(name string) {\n    if name == \"read_file\" && verbose {\n        log(name)\n    }\n}\n"
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	args, _ := json.Marshal(map[string]any{
+		"path":       "dispatch.go",
+		"old_string": "    if name == \"read_file\" && verbos {",
+		"new_string": "    if name == \"read_file\" {",
+	})
+	result := (editFileTool{}).Execute(context.Background(), Input{Workspace: workspace, Args: args})
+	if !result.IsError {
+		t.Fatalf("an anchor that is not in the file was accepted: %s", result.Content)
+	}
+	if !strings.Contains(result.Content, "Near-miss") {
+		t.Errorf("no near-miss hint for an anchor whose only long token is read_file: %s", result.Content)
+	}
+	if !strings.Contains(result.Content, "line 2:") {
+		t.Errorf("hint does not name the line that shares the token: %s", result.Content)
+	}
+}
+
 // The row in the file says "85 (early stop @55)" and the anchor abbreviates it
 // to "85 (ES@55)", so the anchor is not in the file. This is the case the
 // adjacent-insertion recovery was built for, and the case that shows why it
