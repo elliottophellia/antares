@@ -149,6 +149,11 @@ func Retryable(err error) bool {
 	if IsRateLimit(err) || IsUnreachable(err) {
 		return true
 	}
+	// A body that stopped before the provider's terminal marker produced no
+	// usable answer, so asking again is safe and usually works.
+	if errors.Is(err, ErrStreamTruncated) {
+		return true
+	}
 	var ae *apiError
 	if errors.As(err, &ae) {
 		if ae.Status >= 500 && ae.Status <= 599 {
