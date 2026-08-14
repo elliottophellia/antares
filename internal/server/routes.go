@@ -55,6 +55,7 @@ func (s *Server) routes() {
 	m.HandleFunc("DELETE /api/sessions/{id}", s.handleDeleteSession)
 	m.HandleFunc("POST /api/sessions/{id}/title", s.handleRenameSession)
 	m.HandleFunc("GET /api/sessions/{id}/bg-activity", s.handleBackgroundActivity)
+	m.HandleFunc("POST /api/sessions/{id}/compact", s.handleCompact)
 	m.HandleFunc("GET /api/sessions/{id}/edit-preview", s.handleEditPreview)
 	m.HandleFunc("POST /api/sessions/{id}/edit", s.handleEditMessage)
 
@@ -91,7 +92,6 @@ func (s *Server) routes() {
 	m.HandleFunc("GET /api/model/list-all", s.handleModelListAll)
 	m.HandleFunc("POST /api/model/set", s.handleModelSet)
 	m.HandleFunc("POST /api/providers/{id}/key", s.handleSetProviderKey)
-	m.HandleFunc("GET /api/providers/{id}/models", s.handleProviderModels)
 	m.HandleFunc("GET /api/providers/{id}/model-info", s.handleProviderModelInfo)
 	m.HandleFunc("POST /api/providers/{id}/model", s.handleAddProviderModel)
 	m.HandleFunc("DELETE /api/providers/{id}/model/{model}", s.handleDeleteProviderModel)

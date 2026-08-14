@@ -222,6 +222,68 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	_ = lr.follow(ctx, 0, func(e agent.Event, _ int) error { return sse.send(e) })
 }
 
+// handleCompact summarises a session's older turns on demand and streams the
+// progress as it happens, finishing with a usage event that carries the freed
+// context so the composer's fill gauge drops at once. Like a chat turn it runs
+// on a background context and through a liveRun, so navigating away neither
+// aborts the summary nor loses the stream — a returning client reattaches
+// through the same hub. The /compact command triggers this.
+func (s *Server) handleCompact(w http.ResponseWriter, r *http.Request) {
+	sessionID := strings.TrimSpace(r.PathValue("id"))
+	if sessionID == "" {
+		writeError(w, http.StatusBadRequest, errors.New("a session id is required"))
+		return
+	}
+
+	sse, err := newSSE(w)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+
+	ctx := r.Context()
+	stopPing := make(chan struct{})
+	defer close(stopPing)
+	go func() {
+		t := time.NewTicker(20 * time.Second)
+		defer t.Stop()
+		for {
+			select {
+			case <-stopPing:
+				return
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				sse.comment("keepalive")
+			}
+		}
+	}()
+
+	lr := newLiveRun()
+	s.hub.put(sessionID, lr)
+	go func() {
+		defer func() {
+			if rec := recover(); rec != nil {
+				slog.Error("compact panicked", "session", sessionID, "panic", rec,
+					"stack", string(debug.Stack()))
+				lr.publish(agent.Event{Type: agent.EventError, Err: fmt.Sprintf("internal error: %v", rec)})
+			}
+			lr.publish(agent.Event{Type: agent.EventDone})
+			lr.finish()
+			s.hub.remove(sessionID, lr)
+		}()
+		if err := s.agent.CompactNow(context.Background(), sessionID, func(e agent.Event) error {
+			lr.publish(e)
+			return nil
+		}); err != nil {
+			slog.Debug("compact failed", "session", sessionID, "error", err)
+			lr.publish(agent.Event{Type: agent.EventError, Err: err.Error()})
+		}
+	}()
+
+	_ = lr.follow(ctx, 0, func(e agent.Event, _ int) error { return sse.send(e) })
+}
+
 // handleChatAttach reconnects a client to a turn already in flight for a session
 // (e.g. after navigating away and back), replaying from the given cursor. If no
 // run is live, it reports done at once so the client falls back to the persisted

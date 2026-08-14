@@ -286,6 +286,7 @@ func normalize(c *Config) {
 	if c.Tools.Platform == nil {
 		c.Tools.Platform = map[string]string{}
 	}
+	dropRetiredCursorProvider(c)
 	c.Agent.Workspace = Expand(c.Agent.Workspace)
 	c.Terminal.CWD = Expand(c.Terminal.CWD)
 	c.Logging.File = Expand(c.Logging.File)
@@ -305,6 +306,24 @@ func normalize(c *Config) {
 	if c.Display.MaxLiveReasoningChars < 0 {
 		c.Display.MaxLiveReasoningChars = 48_000
 	}
+}
+
+// dropRetiredCursorProvider removes the withdrawn Cursor Cloud Agents entry
+// from configs written before it was retired. Left in place it would fall
+// through to the OpenAI-compatible adapter, which cannot speak to
+// api.cursor.com and would fail with an opaque error on the first turn.
+func dropRetiredCursorProvider(c *Config) {
+	for name, p := range c.Providers {
+		if !strings.EqualFold(strings.TrimSpace(p.Kind), "cursor-agent") {
+			continue
+		}
+		delete(c.Providers, name)
+		if c.Model.Provider == name {
+			c.Model.Provider = ""
+		}
+	}
+	delete(c.Tools.Timeouts, "cursor_agent")
+	delete(c.Tools.Timeouts, "cursor_agent_status")
 }
 
 // ResolveProvider returns the provider entry used for a model call, falling back

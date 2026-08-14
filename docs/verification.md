@@ -37,19 +37,6 @@ OPENAI_API_KEY=sk-… go test ./internal/llm -run TestLiveCodex -v
 OPENAI_API_KEY=sk-… go test ./internal/llm -run TestLiveSpeakRoundTrip -v
 ```
 
-## Cursor Cloud Agents
-
-This metadata-only smoke test calls Cursor's `/v1/me` and `/v1/models`
-endpoints. It does not create an agent or run. Enter the key interactively so
-it is not stored in shell history:
-
-```bash
-read -rsp 'Cursor API key: ' CURSOR_API_KEY
-export CURSOR_API_KEY
-go test ./internal/cursor -run TestLiveCursorMetadata -count=1 -v
-unset CURSOR_API_KEY
-```
-
 ## Chat gateways
 
 Gateways need a running bot and, for the webhook ones, a reachable URL. Verify
