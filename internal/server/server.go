@@ -32,18 +32,19 @@ import (
 
 // Server wires the API handlers to the agent and store.
 type Server struct {
-	cfg     *config.Config
-	agent   *agent.Agent
-	db      store.Store
-	skills  *skills.Manager
-	cron    *cron.Runner
-	gateway *gateway.Manager
-	mcp     *mcp.Manager
-	social  *socialbrowser.Manager
-	mux     *http.ServeMux
-	hub     *liveHub
-	wake    *wakeQueue
-	started time.Time
+	cfg        *config.Config
+	agent      *agent.Agent
+	db         store.Store
+	skills     *skills.Manager
+	cron       *cron.Runner
+	gateway    *gateway.Manager
+	mcp        *mcp.Manager
+	mcpRefresh mcpRefresher
+	social     *socialbrowser.Manager
+	mux        *http.ServeMux
+	hub        *liveHub
+	wake       *wakeQueue
+	started    time.Time
 
 	// distFS holds the embedded dashboard build, when present.
 	distFS fs.FS

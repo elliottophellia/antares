@@ -1,7 +1,6 @@
 package server
 
 import (
-	"context"
 	"errors"
 	"net/http"
 	"strings"
@@ -89,11 +88,7 @@ func (s *Server) handleAddMCPServer(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
-	if s.mcp != nil {
-		// Connecting can take seconds while npx downloads a package; do it off
-		// the request so the form returns promptly.
-		go s.mcp.Connect(context.Background(), s.config())
-	}
+	s.refreshMCPConnections(r.Context())
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "name": name})
 }
 
@@ -121,9 +116,7 @@ func (s *Server) handleDeleteMCPServer(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
-	if s.mcp != nil {
-		go s.mcp.Connect(context.Background(), s.config())
-	}
+	s.refreshMCPConnections(r.Context())
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
