@@ -42,8 +42,12 @@ func (c *codexClient) buildBody(req Request, stream bool) map[string]any {
 	if req.Temperature > 0 {
 		body["temperature"] = req.Temperature
 	}
-	if e := strings.ToLower(req.ReasoningEffort); e != "" && e != "none" {
-		body["reasoning"] = map[string]any{"effort": e}
+	if enc := OfficialReasoning("openai", c.opts.BaseURL, req.Model).Encode(req.ReasoningEffort); !enc.Omit {
+		if e, ok := enc.Body["reasoning_effort"]; ok {
+			body["reasoning"] = map[string]any{"effort": e}
+		} else {
+			mergeEncoded(body, enc)
+		}
 	}
 	if len(req.Tools) > 0 {
 		tools := make([]map[string]any, 0, len(req.Tools))

@@ -90,6 +90,7 @@ func (s *Server) routes() {
 	m.HandleFunc("GET /api/context-window", s.handleContextWindow)
 	m.HandleFunc("GET /api/model/list", s.handleModelList)
 	m.HandleFunc("GET /api/model/list-all", s.handleModelListAll)
+	m.HandleFunc("GET /api/model/reasoning-capability", s.handleOfficialReasoningCapability)
 	m.HandleFunc("POST /api/model/set", s.handleModelSet)
 	m.HandleFunc("POST /api/providers/{id}/key", s.handleSetProviderKey)
 	m.HandleFunc("GET /api/providers/{id}/model-info", s.handleProviderModelInfo)

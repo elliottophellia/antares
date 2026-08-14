@@ -299,7 +299,9 @@ func (s *Server) handleModelListAll(w http.ResponseWriter, r *http.Request) {
 				errs = append(errs, provErr{Provider: t.id, Label: t.label, Error: err.Error()})
 				return
 			}
+			p := cfg.Providers[t.id]
 			for _, m := range list {
+				m = withOfficialReasoning(p.Kind, p.BaseURL, m)
 				models = append(models, row{ModelInfo: m, Provider: t.id, ProviderLabel: t.label})
 			}
 		}(t)
@@ -318,6 +320,43 @@ func (s *Server) handleModelListAll(w http.ResponseWriter, r *http.Request) {
 		"active": map[string]string{"model": cfg.Model.Default, "provider": cfg.Model.Provider},
 		"models": models,
 		"errors": errs,
+	})
+}
+
+func withOfficialReasoning(kind, baseURL string, m llm.ModelInfo) llm.ModelInfo {
+	cap := llm.OfficialReasoning(kind, baseURL, m.ID)
+	if len(cap.Values) == 0 {
+		return m
+	}
+	m.Reasoning = true
+	m.ReasoningCap = &cap
+	return m
+}
+
+// handleOfficialReasoningCapability returns the native reasoning ladder for
+// one official provider+model. Custom endpoints return an empty values list.
+func (s *Server) handleOfficialReasoningCapability(w http.ResponseWriter, r *http.Request) {
+	if s.requireDashboardPassword(w, r) {
+		return
+	}
+	cfg := s.config()
+	provider := r.URL.Query().Get("provider")
+	model := r.URL.Query().Get("model")
+	if provider == "" && strings.Contains(model, "/") {
+		provider, model, _ = strings.Cut(model, "/")
+	}
+	if provider == "" {
+		provider = cfg.Model.Provider
+	}
+	if model == "" {
+		model = cfg.Model.Default
+	}
+	p := cfg.Providers[provider]
+	cap := llm.OfficialReasoning(p.Kind, p.BaseURL, model)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"provider":             provider,
+		"model":                model,
+		"reasoning_capability": cap,
 	})
 }
 

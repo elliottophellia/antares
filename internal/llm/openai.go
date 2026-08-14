@@ -189,14 +189,7 @@ func (c *openAIClient) buildBody(req Request, stream bool) map[string]any {
 			body["parallel_tool_calls"] = false
 		}
 	}
-	if e := strings.ToLower(req.ReasoningEffort); e != "" && e != "none" {
-		// OpenAI uses reasoning_effort; OpenRouter accepts a reasoning object.
-		body["reasoning_effort"] = e
-		if strings.Contains(c.opts.BaseURL, "openrouter.ai") {
-			delete(body, "reasoning_effort")
-			body["reasoning"] = map[string]any{"effort": e}
-		}
-	}
+	mergeEncoded(body, OfficialReasoning(c.opts.Kind, c.opts.BaseURL, req.Model).Encode(req.ReasoningEffort))
 	for k, v := range req.Extra {
 		body[k] = v
 	}
