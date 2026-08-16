@@ -271,7 +271,11 @@ export default function SetupPage() {
             </div>
           ) : null}
 
-          <StepNav onNext={goNext} nextLabel={t('setup.next')} />
+          <StepNav
+            onNext={goNext}
+            nextLabel={t('setup.next')}
+            disabled={providerId === 'custom' && !baseURL.trim()}
+          />
         </section>
       ) : null}
 

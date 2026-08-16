@@ -293,6 +293,7 @@ function AddProviderDialog({
               placeholder="https://api.example.com/v1"
               className="font-mono text-xs"
               autoComplete="off"
+              onKeyDown={(e) => e.key === 'Enter' && create()}
             />
           </div>
           <div className="space-y-1.5">
