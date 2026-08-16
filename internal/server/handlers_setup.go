@@ -158,6 +158,18 @@ func setupProviderCatalogue(cfg *config.Config) []setupProvider {
 	return out
 }
 
+// lookupSetupProvider finds a catalogue entry by id, or nil for ids that are
+// not built-ins (user-defined providers, typos).
+func lookupSetupProvider(cfg *config.Config, id string) *setupProvider {
+	catalogue := setupProviderCatalogue(cfg)
+	for i := range catalogue {
+		if catalogue[i].ID == id {
+			return &catalogue[i]
+		}
+	}
+	return nil
+}
+
 // NeedsSetup reports whether Antares can answer at all yet.
 func NeedsSetup(cfg *config.Config) bool {
 	if strings.TrimSpace(cfg.Model.Default) == "" {
@@ -213,14 +225,14 @@ func (s *Server) handleSetupTest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	baseURL := firstNonEmpty(body.BaseURL, chosen.BaseURL)
+	if chosen.Custom && baseURL == "" {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"ok": false, "error": "A base URL is required for a custom provider.",
+		})
+		return
+	}
 	if baseURL != "" {
-		var err error
-		if chosen.Custom {
-			err = s.validateCustomProviderBaseURL(r.Context(), baseURL)
-		} else {
-			err = s.validateProviderBaseURL(r.Context(), baseURL, chosen.Local)
-		}
-		if err != nil {
+		if err := s.validateChosenBaseURL(r.Context(), baseURL, chosen.Custom, chosen.Local); err != nil {
 			writeError(w, http.StatusBadRequest, err)
 			return
 		}
@@ -232,7 +244,9 @@ func (s *Server) handleSetupTest(w http.ResponseWriter, r *http.Request) {
 			apiKey = p.APIKey
 		}
 	}
-	if apiKey == "" && !isLocalEndpoint(baseURL) {
+	// A keyless custom service on a LAN is legitimate; everything else needs
+	// a credential unless the endpoint is local.
+	if apiKey == "" && !chosen.Custom && !isLocalEndpoint(baseURL) {
 		writeJSON(w, http.StatusOK, map[string]any{
 			"ok": false, "error": "An API key is required for this provider.",
 		})
@@ -331,14 +345,7 @@ func (s *Server) handleSetupComplete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	catalogue := setupProviderCatalogue(cfg)
-	var chosen *setupProvider
-	for i := range catalogue {
-		if catalogue[i].ID == body.Provider {
-			chosen = &catalogue[i]
-			break
-		}
-	}
+	chosen := lookupSetupProvider(cfg, body.Provider)
 	if chosen == nil {
 		writeError(w, http.StatusBadRequest, errors.New("unknown provider"))
 		return
@@ -348,17 +355,15 @@ func (s *Server) handleSetupComplete(w http.ResponseWriter, r *http.Request) {
 	// with the catalogue label — a visible, manageable provider either way.
 	providerID := body.Provider
 	if chosen.Custom {
-		providerID = customProviderID(cfg, body.Name)
+		providerID = CustomProviderID(cfg, body.Name)
 	}
 	baseURL := firstNonEmpty(body.BaseURL, chosen.BaseURL)
+	if chosen.Custom && baseURL == "" {
+		writeError(w, http.StatusBadRequest, errors.New("a base URL is required for a custom provider"))
+		return
+	}
 	if baseURL != "" {
-		var err error
-		if chosen.Custom {
-			err = s.validateCustomProviderBaseURL(r.Context(), baseURL)
-		} else {
-			err = s.validateProviderBaseURL(r.Context(), baseURL, chosen.Local)
-		}
-		if err != nil {
+		if err := s.validateChosenBaseURL(r.Context(), baseURL, chosen.Custom, chosen.Local); err != nil {
 			writeError(w, http.StatusBadRequest, err)
 			return
 		}
@@ -498,14 +503,7 @@ func (s *Server) handleSetProviderKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var chosen *setupProvider
-	for _, p := range setupProviderCatalogue(cfg) {
-		if p.ID == id {
-			cp := p
-			chosen = &cp
-			break
-		}
-	}
+	chosen := lookupSetupProvider(cfg, id)
 	entry, exists := cfg.Providers[id]
 	if chosen == nil {
 		// Not in the catalogue: still manageable when it is a user-defined
@@ -516,6 +514,11 @@ func (s *Server) handleSetProviderKey(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	custom := chosen == nil || chosen.Custom
+	local := chosen != nil && chosen.Local
+	var catalogueBaseURL string
+	if chosen != nil {
+		catalogueBaseURL = chosen.BaseURL
+	}
 	if entry.Kind == "" {
 		if chosen != nil {
 			entry.Kind = chosen.Kind
@@ -523,19 +526,9 @@ func (s *Server) handleSetProviderKey(w http.ResponseWriter, r *http.Request) {
 			entry.Kind = "openai-compatible"
 		}
 	}
-	var catalogueBaseURL string
-	if chosen != nil {
-		catalogueBaseURL = chosen.BaseURL
-	}
 	baseURL := firstNonEmpty(body.BaseURL, entry.BaseURL, catalogueBaseURL)
 	if baseURL != "" {
-		var err error
-		if custom {
-			err = s.validateCustomProviderBaseURL(r.Context(), baseURL)
-		} else {
-			err = s.validateProviderBaseURL(r.Context(), baseURL, chosen.Local)
-		}
-		if err != nil {
+		if err := s.validateChosenBaseURL(r.Context(), baseURL, custom, local); err != nil {
 			writeError(w, http.StatusBadRequest, err)
 			return
 		}
@@ -629,19 +622,16 @@ func slugifyProviderName(name string) string {
 
 // isCatalogueProviderID reports whether id names a built-in provider.
 func isCatalogueProviderID(id string) bool {
-	for _, p := range setupProviderCatalogue(&config.Config{}) {
-		if p.ID == id {
-			return true
-		}
-	}
-	return false
+	return lookupSetupProvider(&config.Config{}, id) != nil
 }
 
-// customProviderID mints a unique config id for a user-named provider. A
-// name that slugs to nothing (or to "custom" itself) becomes "custom-provider"
+// CustomProviderID mints a unique config id for a user-named provider. A name
+// that slugs to nothing (or to "custom" itself) becomes "custom-provider"
 // — never the legacy "custom" slot, which no longer renders on the providers
 // page, so a nameless setup still lands on a visible, manageable provider.
-func customProviderID(cfg *config.Config, name string) string {
+// The id avoids every built-in catalogue id and any provider already in the
+// config; it is the single minter shared by the web API and both wizards.
+func CustomProviderID(cfg *config.Config, name string) string {
 	slug := slugifyProviderName(name)
 	if slug == "" || slug == "custom" {
 		slug = "custom-provider"

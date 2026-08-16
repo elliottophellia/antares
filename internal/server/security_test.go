@@ -447,22 +447,22 @@ func TestValidateCustomProviderBaseURL(t *testing.T) {
 
 func TestCustomProviderID(t *testing.T) {
 	cfg := &config.Config{Providers: map[string]config.Provider{}}
-	if got := customProviderID(cfg, "My LM server"); got != "my-lm-server" {
+	if got := CustomProviderID(cfg, "My LM server"); got != "my-lm-server" {
 		t.Errorf("customProviderID slugged to %q, want my-lm-server", got)
 	}
 	// A missing or literally-"Custom" name must not land on the legacy
 	// "custom" slot — the providers page never renders that id, so the
 	// provider would look unsaved. Both default to a visible id.
 	for _, name := range []string{"", "Custom"} {
-		if got := customProviderID(cfg, name); got != "custom-provider" {
-			t.Errorf("customProviderID(%q) = %q, want custom-provider", name, got)
+		if got := CustomProviderID(cfg, name); got != "custom-provider" {
+			t.Errorf("CustomProviderID(%q) = %q, want custom-provider", name, got)
 		}
 	}
 	cfg.Providers["my-lm-server"] = config.Provider{}
-	if got := customProviderID(cfg, "My LM server"); got != "my-lm-server-2" {
+	if got := CustomProviderID(cfg, "My LM server"); got != "my-lm-server-2" {
 		t.Errorf("duplicate name became %q, want my-lm-server-2", got)
 	}
-	if got := customProviderID(cfg, "OpenAI"); got != "openai-2" {
+	if got := CustomProviderID(cfg, "OpenAI"); got != "openai-2" {
 		t.Errorf("catalogue clash became %q, want openai-2", got)
 	}
 }

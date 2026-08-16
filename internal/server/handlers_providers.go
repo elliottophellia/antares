@@ -190,25 +190,13 @@ func (s *Server) handleProviderSettings(w http.ResponseWriter, r *http.Request) 
 	p := cfg.Providers[id]
 	// Custom providers (user-named entries, plus the legacy "custom" slot) may
 	// point at loopback or LAN addresses; built-ins keep their catalogue rule.
-	custom := true
-	allowLocal := false
-	for _, provider := range setupProviderCatalogue(cfg) {
-		if provider.ID == id {
-			custom = provider.Custom
-			allowLocal = provider.Local
-			break
-		}
-	}
+	sp := lookupSetupProvider(cfg, id)
+	custom := sp == nil || sp.Custom
+	local := sp != nil && sp.Local
 	if body.BaseURL != nil {
 		baseURL := strings.TrimSpace(*body.BaseURL)
 		if baseURL != "" {
-			var err error
-			if custom {
-				err = s.validateCustomProviderBaseURL(r.Context(), baseURL)
-			} else {
-				err = s.validateProviderBaseURL(r.Context(), baseURL, allowLocal)
-			}
-			if err != nil {
+			if err := s.validateChosenBaseURL(r.Context(), baseURL, custom, local); err != nil {
 				writeError(w, http.StatusBadRequest, err)
 				return
 			}
@@ -276,7 +264,7 @@ func (s *Server) handleCreateProvider(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
-	id := customProviderID(cfg, name)
+	id := CustomProviderID(cfg, name)
 
 	// Verify the pair now so a bad endpoint or key surfaces at creation time
 	// rather than on the first turn. A keyless service is allowed.

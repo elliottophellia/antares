@@ -181,6 +181,16 @@ func (s *Server) validateCustomProviderBaseURL(ctx context.Context, raw string) 
 	return validateProviderBaseURLWithOptions(ctx, raw, true, true, resolver)
 }
 
+// validateChosenBaseURL picks the URL rule for a provider being connected:
+// user-defined endpoints may live on loopback/LAN, built-ins use their
+// catalogue's local flag. Callers pass local=false alongside custom=true.
+func (s *Server) validateChosenBaseURL(ctx context.Context, raw string, custom, local bool) error {
+	if custom {
+		return s.validateCustomProviderBaseURL(ctx, raw)
+	}
+	return s.validateProviderBaseURL(ctx, raw, local)
+}
+
 func validateProviderBaseURLWithOptions(
 	ctx context.Context, raw string, allowLocal, allowPrivate bool, resolver providerIPResolver,
 ) error {

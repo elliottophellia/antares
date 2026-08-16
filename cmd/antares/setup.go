@@ -293,7 +293,7 @@ func runTerminalSetup(ctx context.Context, rt *runtimeServices) error {
 		if name == "" {
 			name = "Custom provider"
 		}
-		id := uniqueCustomProviderID(cfg, name)
+		id := server.CustomProviderID(cfg, name)
 		cfg.Model.Provider = id
 		entry = cfg.Providers[id]
 		if entry.Kind == "" {
@@ -441,43 +441,6 @@ func runTerminalSetup(ctx context.Context, rt *runtimeServices) error {
 	fmt.Printf("    antares serve    dashboard on http://localhost:%d\n", cfg.Server.Port)
 	fmt.Println()
 	return nil
-}
-
-// uniqueCustomProviderID mints a config id from a display name, avoiding the
-// built-in provider ids and ids already in use. The legacy "custom" slot is
-// reused when the name gives nothing better.
-func uniqueCustomProviderID(cfg *config.Config, name string) string {
-	var b strings.Builder
-	prevDash := true
-	for _, r := range strings.ToLower(name) {
-		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
-			b.WriteRune(r)
-			prevDash = false
-			continue
-		}
-		if !prevDash {
-			b.WriteByte('-')
-			prevDash = true
-		}
-	}
-	slug := strings.Trim(b.String(), "-")
-	// Never the legacy "custom" slot: the providers page does not render it,
-	// so a nameless (or literally-"Custom") provider must land somewhere
-	// visible instead.
-	if slug == "" || slug == "custom" {
-		slug = "custom-provider"
-	}
-	builtin := map[string]bool{}
-	for _, p := range providerChoices {
-		builtin[p.id] = true
-	}
-	base := slug
-	for i := 2; ; i++ {
-		if _, taken := cfg.Providers[slug]; !taken && !builtin[slug] {
-			return slug
-		}
-		slug = fmt.Sprintf("%s-%d", base, i)
-	}
 }
 
 // pickModel offers the provider's catalogue when it can be listed, and falls
