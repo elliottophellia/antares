@@ -250,8 +250,8 @@ var providerChoices = []providerChoice{
 		hint: "runs on this machine, no key needed",
 	},
 	{
-		id: "custom", label: "Something else",
-		hint: "any OpenAI-compatible endpoint",
+		id: "custom", label: "Custom provider",
+		hint: "any OpenAI-compatible endpoint, named by you",
 	},
 }
 
@@ -284,6 +284,20 @@ func runTerminalSetup(ctx context.Context, rt *runtimeServices) error {
 	// 2. Endpoint for custom / local providers
 	switch chosen.id {
 	case "custom":
+		// A custom provider is named by the user and stored under an id minted
+		// from that name, so several can coexist. No name keeps the legacy
+		// "custom" slot.
+		name := promptLine("\n  Provider name (shown in the UI): ", "")
+		if name != "" {
+			id := uniqueCustomProviderID(cfg, name)
+			cfg.Model.Provider = id
+			entry = cfg.Providers[id]
+			if entry.Kind == "" {
+				entry.Kind = "openai-compatible"
+			}
+			entry.Enabled = true
+			entry.Label = name
+		}
 		entry.BaseURL = promptLine("\n  Base URL (e.g. https://api.example.com/v1): ", entry.BaseURL)
 		if entry.BaseURL == "" {
 			return errors.New("a base URL is required for a custom provider")
@@ -426,13 +440,47 @@ func runTerminalSetup(ctx context.Context, rt *runtimeServices) error {
 	return nil
 }
 
+// uniqueCustomProviderID mints a config id from a display name, avoiding the
+// built-in provider ids and ids already in use. The legacy "custom" slot is
+// reused when the name gives nothing better.
+func uniqueCustomProviderID(cfg *config.Config, name string) string {
+	var b strings.Builder
+	prevDash := true
+	for _, r := range strings.ToLower(name) {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+			b.WriteRune(r)
+			prevDash = false
+			continue
+		}
+		if !prevDash {
+			b.WriteByte('-')
+			prevDash = true
+		}
+	}
+	slug := strings.Trim(b.String(), "-")
+	if slug == "" || slug == "custom" {
+		return "custom"
+	}
+	builtin := map[string]bool{}
+	for _, p := range providerChoices {
+		builtin[p.id] = true
+	}
+	base := slug
+	for i := 2; ; i++ {
+		if _, taken := cfg.Providers[slug]; !taken && !builtin[slug] {
+			return slug
+		}
+		slug = fmt.Sprintf("%s-%d", base, i)
+	}
+}
+
 // pickModel offers the provider's catalogue when it can be listed, and falls
 // back to the curated suggestions when it cannot.
 func pickModel(ctx context.Context, cfg *config.Config, chosen providerChoice) string {
 	listCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
 
-	id, p := cfg.ResolveProvider(chosen.id)
+	id, p := cfg.ResolveProvider(cfg.Model.Provider)
 	var live []llm.ModelInfo
 	if client, err := llm.New(llm.Options{
 		Kind: p.Kind, BaseURL: p.BaseURL, APIKey: p.APIKey,
