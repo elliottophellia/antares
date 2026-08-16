@@ -41,9 +41,9 @@ func Default() *Config {
 				Kind: "openai-compatible", Label: "LM Studio", Enabled: false,
 				BaseURL: "http://127.0.0.1:1234/v1", TimeoutSecs: 600,
 			},
-			"custom": {
-				Kind: "custom", Label: "Custom endpoint", Enabled: false, TimeoutSecs: 300,
-			},
+			// No default "custom" entry: user-defined providers are created on
+			// demand via POST /api/providers, named and deletable like any
+			// other. The legacy single "custom" slot is not seeded anymore.
 		},
 		Database: Database{
 			Driver: "sqlite", DSN: filepath.Join(Home(), "antares.db"),

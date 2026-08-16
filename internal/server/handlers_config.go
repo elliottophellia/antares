@@ -173,15 +173,17 @@ func (s *Server) handleModelOptions(w http.ResponseWriter, r *http.Request) {
 
 	// Every provider from the catalogue (configured or not), so the new kinds
 	// can be set up from here — then any custom providers only in the config.
-	// The "custom" slot is shown only when it actually holds something; an
-	// unused one is replaced by the empty add-provider card in the UI.
+	// The catalogue's "custom" entry belongs to the first-run wizard only: it
+	// never renders here, so the providers page shows solely built-ins and
+	// providers the user created (named, manageable, deletable).
 	seen := map[string]bool{}
 	providerList := make([]providerInfo, 0)
 	for _, sp := range setupProviderCatalogue(cfg) {
-		p := cfg.Providers[sp.ID]
-		if sp.Custom && !providerEntryInUse(p) {
+		if sp.Custom {
+			seen[sp.ID] = true
 			continue
 		}
+		p := cfg.Providers[sp.ID]
 		providerList = append(providerList, providerInfo{
 			ID: sp.ID, Label: sp.Label, Kind: sp.Kind,
 			Enabled: p.Enabled, HasKey: p.APIKey != "", Local: sp.Local,
@@ -213,13 +215,6 @@ func (s *Server) handleModelOptions(w http.ResponseWriter, r *http.Request) {
 		"active":    map[string]string{"model": cfg.Model.Default, "provider": cfg.Model.Provider},
 		"providers": providerList,
 	})
-}
-
-// providerEntryInUse reports whether a config entry holds something worth
-// showing: a credential or an endpoint. A custom slot with neither is a
-// leftover from an abandoned pick, not a provider.
-func providerEntryInUse(p config.Provider) bool {
-	return p.APIKey != "" || strings.TrimSpace(p.BaseURL) != ""
 }
 
 func (s *Server) handleModelList(w http.ResponseWriter, r *http.Request) {
