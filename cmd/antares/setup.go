@@ -285,19 +285,22 @@ func runTerminalSetup(ctx context.Context, rt *runtimeServices) error {
 	switch chosen.id {
 	case "custom":
 		// A custom provider is named by the user and stored under an id minted
-		// from that name, so several can coexist. No name keeps the legacy
-		// "custom" slot.
+		// from that name, so several can coexist. A skipped name defaults to
+		// "Custom provider" rather than the legacy "custom" slot, which the
+		// providers page no longer shows.
 		name := promptLine("\n  Provider name (shown in the UI): ", "")
-		if name != "" {
-			id := uniqueCustomProviderID(cfg, name)
-			cfg.Model.Provider = id
-			entry = cfg.Providers[id]
-			if entry.Kind == "" {
-				entry.Kind = "openai-compatible"
-			}
-			entry.Enabled = true
-			entry.Label = name
+		name = strings.TrimSpace(name)
+		if name == "" {
+			name = "Custom provider"
 		}
+		id := uniqueCustomProviderID(cfg, name)
+		cfg.Model.Provider = id
+		entry = cfg.Providers[id]
+		if entry.Kind == "" {
+			entry.Kind = "openai-compatible"
+		}
+		entry.Enabled = true
+		entry.Label = name
 		entry.BaseURL = promptLine("\n  Base URL (e.g. https://api.example.com/v1): ", entry.BaseURL)
 		if entry.BaseURL == "" {
 			return errors.New("a base URL is required for a custom provider")
@@ -458,8 +461,11 @@ func uniqueCustomProviderID(cfg *config.Config, name string) string {
 		}
 	}
 	slug := strings.Trim(b.String(), "-")
+	// Never the legacy "custom" slot: the providers page does not render it,
+	// so a nameless (or literally-"Custom") provider must land somewhere
+	// visible instead.
 	if slug == "" || slug == "custom" {
-		return "custom"
+		slug = "custom-provider"
 	}
 	builtin := map[string]bool{}
 	for _, p := range providerChoices {

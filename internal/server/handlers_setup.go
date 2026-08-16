@@ -344,7 +344,8 @@ func (s *Server) handleSetupComplete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// A custom provider is stored under an id minted from the user's name, so
-	// more than one can exist. An unnamed one keeps the legacy "custom" slot.
+	// more than one can exist. An unnamed one defaults to "custom-provider"
+	// with the catalogue label — a visible, manageable provider either way.
 	providerID := body.Provider
 	if chosen.Custom {
 		providerID = customProviderID(cfg, body.Name)
@@ -636,17 +637,14 @@ func isCatalogueProviderID(id string) bool {
 	return false
 }
 
-// customProviderID mints a unique config id for a user-named provider. A name
-// that slugs to nothing (or to the legacy slot itself) keeps "custom", so
-// configs written before named custom providers existed stay valid.
+// customProviderID mints a unique config id for a user-named provider. A
+// name that slugs to nothing (or to "custom" itself) becomes "custom-provider"
+// — never the legacy "custom" slot, which no longer renders on the providers
+// page, so a nameless setup still lands on a visible, manageable provider.
 func customProviderID(cfg *config.Config, name string) string {
 	slug := slugifyProviderName(name)
-	if slug == "" {
-		slug = "custom"
-	}
-	if slug == "custom" {
-		// The legacy single slot: reuse it rather than minting custom-2.
-		return "custom"
+	if slug == "" || slug == "custom" {
+		slug = "custom-provider"
 	}
 	base := slug
 	for i := 2; ; i++ {

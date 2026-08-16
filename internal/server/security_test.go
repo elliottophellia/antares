@@ -450,8 +450,13 @@ func TestCustomProviderID(t *testing.T) {
 	if got := customProviderID(cfg, "My LM server"); got != "my-lm-server" {
 		t.Errorf("customProviderID slugged to %q, want my-lm-server", got)
 	}
-	if got := customProviderID(cfg, ""); got != "custom" {
-		t.Errorf("unnamed custom provider became %q, want the legacy custom slot", got)
+	// A missing or literally-"Custom" name must not land on the legacy
+	// "custom" slot — the providers page never renders that id, so the
+	// provider would look unsaved. Both default to a visible id.
+	for _, name := range []string{"", "Custom"} {
+		if got := customProviderID(cfg, name); got != "custom-provider" {
+			t.Errorf("customProviderID(%q) = %q, want custom-provider", name, got)
+		}
 	}
 	cfg.Providers["my-lm-server"] = config.Provider{}
 	if got := customProviderID(cfg, "My LM server"); got != "my-lm-server-2" {
