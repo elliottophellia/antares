@@ -153,6 +153,37 @@ func dns64AddressMatches(ip net.IP, prefixes []nat64Prefix, publicV4 map[string]
 func validateProviderBaseURLWithResolver(
 	ctx context.Context, raw string, allowLocal bool, resolver providerIPResolver,
 ) error {
+	return validateProviderBaseURLWithOptions(ctx, raw, allowLocal, false, resolver)
+}
+
+// providerIPPermitted reports whether an otherwise-blocked address may be used.
+// allowLocal (built-in local catalogue entries) admits loopback only. A custom
+// user-defined endpoint (allowPrivate) is the user pointing Antares at their
+// own service, so private/LAN ranges are accepted there as well. Link-local
+// stays blocked for both — it carries the cloud metadata endpoints.
+func providerIPPermitted(ip net.IP, allowLocal, allowPrivate bool) bool {
+	if allowLocal && ip.IsLoopback() {
+		return true
+	}
+	if allowPrivate && (ip.IsLoopback() || ip.IsPrivate()) {
+		return true
+	}
+	return false
+}
+
+// validateCustomProviderBaseURL validates a user-defined provider endpoint:
+// the user names the service, so loopback and LAN addresses are allowed.
+func (s *Server) validateCustomProviderBaseURL(ctx context.Context, raw string) error {
+	resolver := s.providerResolver
+	if resolver == nil {
+		resolver = net.DefaultResolver
+	}
+	return validateProviderBaseURLWithOptions(ctx, raw, true, true, resolver)
+}
+
+func validateProviderBaseURLWithOptions(
+	ctx context.Context, raw string, allowLocal, allowPrivate bool, resolver providerIPResolver,
+) error {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
 		return errors.New("provider base_url is required")
@@ -170,7 +201,7 @@ func validateProviderBaseURLWithResolver(
 
 	host := strings.TrimSuffix(strings.ToLower(u.Hostname()), ".")
 	if ip := net.ParseIP(host); ip != nil {
-		if providerIPBlocked(ip) && !(allowLocal && ip.IsLoopback()) {
+		if providerIPBlocked(ip) && !providerIPPermitted(ip, allowLocal, allowPrivate) {
 			return providerIPError(ip)
 		}
 		return nil
@@ -189,7 +220,7 @@ func validateProviderBaseURLWithResolver(
 	publicV4 := map[string]struct{}{}
 	var blockedV6 []net.IP
 	for _, ip := range ips {
-		blocked := providerIPBlocked(ip) && !(allowLocal && ip.IsLoopback())
+		blocked := providerIPBlocked(ip) && !providerIPPermitted(ip, allowLocal, allowPrivate)
 		if !blocked {
 			if v4 := ip.To4(); v4 != nil && !providerIPBlocked(v4) {
 				publicV4[v4.String()] = struct{}{}
