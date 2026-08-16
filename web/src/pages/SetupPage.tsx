@@ -73,6 +73,7 @@ export default function SetupPage() {
   const [step, setStep] = useState<StepId>('provider')
 
   const [providerId, setProviderId] = useState('openrouter')
+  const [providerName, setProviderName] = useState('')
   const [baseURL, setBaseURL] = useState('')
   const [apiKey, setApiKey] = useState('')
   const [revealKey, setRevealKey] = useState(false)
@@ -156,6 +157,7 @@ export default function SetupPage() {
     try {
       await post('/setup/complete', {
         provider: providerId,
+        name: providerName,
         base_url: baseURL || provider?.base_url || '',
         api_key: apiKey,
         model,
@@ -242,6 +244,20 @@ export default function SetupPage() {
               </button>
             ))}
           </div>
+
+          {providerId === 'custom' ? (
+            <div className="space-y-1.5">
+              <Label htmlFor="provider-name">{t('setup.providerName')}</Label>
+              <Input
+                id="provider-name"
+                value={providerName}
+                onChange={(e) => setProviderName(e.target.value)}
+                placeholder={t('providers.namePlaceholder')}
+                autoComplete="off"
+              />
+              <p className="text-[11px] text-muted-foreground">{t('setup.providerNameHint')}</p>
+            </div>
+          ) : null}
 
           {providerId === 'custom' || provider?.local ? (
             <div className="space-y-1.5">

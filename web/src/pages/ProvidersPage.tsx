@@ -8,6 +8,7 @@ import {
   EyeSlash,
   Key,
   Plugs,
+  Plus,
   ShieldCheck,
   Trash,
 } from '@phosphor-icons/react'
@@ -49,6 +50,7 @@ interface ProviderInfo {
   needs_api_version?: boolean
   needs_base_url?: boolean
   timeout_seconds?: number
+  custom?: boolean
 }
 
 interface OptionsResponse {
@@ -72,8 +74,11 @@ type Group = 'oauth' | 'apikey' | 'local'
 // How a provider authenticates decides its group. Only Copilot uses a device
 // (OAuth) flow today; local endpoints need no credential; everything else is an
 // API key (or cloud env credentials, which still live under "API key" here).
+// A custom provider is always "API key" — even a localhost endpoint is a
+// service the user configured, not a built-in local runtime.
 function groupOf(p: ProviderInfo): Group {
   if (p.kind === 'copilot') return 'oauth'
+  if (p.custom) return 'apikey'
   if (p.local) return 'local'
   return 'apikey'
 }
@@ -114,6 +119,7 @@ function ProvidersTab({ onOpenModels }: { onOpenModels: () => void }) {
   const { t } = useI18n()
   const { data, loading, reload } = useApi<OptionsResponse>('/model/options')
   const [target, setTarget] = useState<ProviderInfo | null>(null)
+  const [creating, setCreating] = useState(false)
 
   const grouped = useMemo(() => {
     const g: Record<Group, ProviderInfo[]> = { oauth: [], apikey: [], local: [] }
@@ -183,6 +189,15 @@ function ProvidersTab({ onOpenModels }: { onOpenModels: () => void }) {
                       </div>
                     </Card>
                   ))}
+                  {g === 'apikey' ? (
+                    <button
+                      onClick={() => setCreating(true)}
+                      className="flex min-h-24 flex-col items-center justify-center gap-1.5 rounded-[var(--radius-lg)] border border-dashed border-border p-3.5 text-muted-foreground transition-colors hover:border-primary/40 hover:text-foreground"
+                    >
+                      <Plus className="size-5" />
+                      <span className="text-xs">{t('providers.addCustom')}</span>
+                    </button>
+                  ) : null}
                 </div>
               </section>
             ),
@@ -197,7 +212,116 @@ function ProvidersTab({ onOpenModels }: { onOpenModels: () => void }) {
           onChanged={reload}
         />
       ) : null}
+
+      {creating ? (
+        <AddProviderDialog
+          onClose={() => setCreating(false)}
+          onChanged={reload}
+        />
+      ) : null}
     </PageLayout>
+  )
+}
+
+/**
+ * Create a custom provider: a name, an OpenAI-compatible base URL, and an
+ * optional key. Local endpoints are accepted; the backend verifies the pair
+ * before saving.
+ */
+function AddProviderDialog({
+  onClose,
+  onChanged,
+}: {
+  onClose: () => void
+  onChanged: () => void
+}) {
+  const { t } = useI18n()
+  const [name, setName] = useState('')
+  const [baseURL, setBaseURL] = useState('')
+  const [key, setKey] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string>()
+
+  const create = async () => {
+    if (!name.trim() || !baseURL.trim()) return
+    setBusy(true)
+    setError(undefined)
+    try {
+      const r = await post<{ ok: boolean; error?: string }>('/providers', {
+        name: name.trim(),
+        base_url: baseURL.trim(),
+        api_key: key.trim(),
+      })
+      if (!r.ok) {
+        setError(r.error ?? t('models.connectFailed'))
+        return
+      }
+      onChanged()
+      onClose()
+    } catch (e) {
+      setError((e as Error).message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <Dialog open onOpenChange={(o) => (!o ? onClose() : null)}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>{t('providers.newTitle')}</DialogTitle>
+          <DialogDescription>{t('providers.newDesc')}</DialogDescription>
+        </DialogHeader>
+        <DialogBody className="space-y-4">
+          <div className="space-y-1.5">
+            <Label htmlFor="np-name">{t('providers.name')}</Label>
+            <Input
+              id="np-name"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder={t('providers.namePlaceholder')}
+              autoFocus
+              autoComplete="off"
+            />
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="np-url">{t('setup.baseUrl')}</Label>
+            <Input
+              id="np-url"
+              value={baseURL}
+              onChange={(e) => setBaseURL(e.target.value)}
+              placeholder="https://api.example.com/v1"
+              className="font-mono text-xs"
+              autoComplete="off"
+            />
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="np-key">{t('setup.apiKey')}</Label>
+            <Input
+              id="np-key"
+              type="password"
+              value={key}
+              onChange={(e) => setKey(e.target.value)}
+              placeholder="sk-…"
+              autoComplete="off"
+              onKeyDown={(e) => e.key === 'Enter' && create()}
+            />
+            <p className="text-[11px] text-muted-foreground">{t('providers.keyOptional')}</p>
+          </div>
+          {error ? (
+            <p className="rounded-[var(--radius-sm)] border border-destructive/40 bg-destructive/10 p-2.5 text-xs text-destructive">{error}</p>
+          ) : null}
+        </DialogBody>
+        <DialogFooter>
+          <DialogClose asChild>
+            <Button variant="outline" size="sm">{t('update.cancel')}</Button>
+          </DialogClose>
+          <Button size="sm" onClick={create} loading={busy} disabled={!name.trim() || !baseURL.trim()}>
+            {t('providers.add')}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   )
 }
 
@@ -281,9 +405,12 @@ function ProviderModal({
   const [modelBusy, setModelBusy] = useState(false)
 
   // Advanced
+  const [label, setLabel] = useState(p.label)
   const [timeout, setTimeoutSecs] = useState(String(p.timeout_seconds ?? ''))
 
-  const keyRequired = p.kind !== 'bedrock' && !p.local
+  // A custom provider may be a keyless service, so the key is not forced here;
+  // the backend verifies the pair either way.
+  const keyRequired = p.kind !== 'bedrock' && !p.local && !p.custom
   const canConnect =
     (!keyRequired || key.trim() !== '') &&
     (!p.needs_base_url || baseURL.trim() !== '') &&
@@ -362,8 +489,22 @@ function ProviderModal({
       await post(`/providers/${encodeURIComponent(p.id)}/settings`, {
         base_url: baseURL.trim(),
         timeout_seconds: timeout ? Number(timeout) : 0,
+        ...(p.custom ? { label: label.trim() } : {}),
       })
       onChanged()
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const removeProvider = async () => {
+    setBusy(true)
+    try {
+      await del(`/providers/${encodeURIComponent(p.id)}`)
+      onChanged()
+      onClose()
+    } catch (e) {
+      setError((e as Error).message)
     } finally {
       setBusy(false)
     }
@@ -512,6 +653,12 @@ function ProviderModal({
 
           {section === 'advanced' ? (
             <>
+              {p.custom ? (
+                <div className="space-y-1.5">
+                  <Label htmlFor="m-name">{t('providers.name')}</Label>
+                  <Input id="m-name" value={label} onChange={(e) => setLabel(e.target.value)} autoComplete="off" />
+                </div>
+              ) : null}
               <div className="space-y-1.5">
                 <Label htmlFor="m-baseurl2">{t('models.baseUrl')}</Label>
                 <Input id="m-baseurl2" value={baseURL} onChange={(e) => setBaseURL(e.target.value)} placeholder={p.kind} autoComplete="off" />
@@ -526,6 +673,18 @@ function ProviderModal({
         </DialogBody>
 
         <DialogFooter>
+          {p.custom ? (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={removeProvider}
+              loading={busy}
+              className="mr-auto gap-1.5 text-muted-foreground hover:text-destructive"
+            >
+              <Trash className="size-3.5" />
+              {t('providers.deleteProvider')}
+            </Button>
+          ) : null}
           <DialogClose asChild>
             <Button variant="outline" size="sm">{t('common.close')}</Button>
           </DialogClose>
