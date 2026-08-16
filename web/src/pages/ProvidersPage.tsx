@@ -565,7 +565,9 @@ function ProviderModal({
                       {reveal ? <EyeSlash className="size-4" /> : <Eye className="size-4" />}
                     </Button>
                   </div>
-                  {p.custom ? (
+                  {p.has_key && !key ? (
+                    <p className="text-[11px] text-muted-foreground">{t('setup.keyKept')}</p>
+                  ) : p.custom ? (
                     <p className="text-[11px] text-muted-foreground">{t('providers.keyOptional')}</p>
                   ) : null}
                 </div>

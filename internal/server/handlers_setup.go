@@ -541,7 +541,13 @@ func (s *Server) handleSetProviderKey(w http.ResponseWriter, r *http.Request) {
 	}
 	region := firstNonEmpty(body.Region, entry.Region)
 	apiVersion := firstNonEmpty(body.APIVersion, entry.APIVersion)
+	// A blank or redacted key means "keep what is stored" (same convention as
+	// the setup wizard): reconnecting to update the endpoint must not silently
+	// wipe the saved credential. The connection test runs with the kept key.
 	key := strings.TrimSpace(body.APIKey)
+	if key == "" || strings.Contains(key, "••••") {
+		key = strings.TrimSpace(entry.APIKey)
+	}
 	// Bedrock takes its credentials from the AWS environment, so no key here.
 	// Custom providers may be keyless services on a LAN, so no key is forced.
 	if key == "" && !custom && entry.Kind != "bedrock" && !isLocalEndpoint(baseURL) {
