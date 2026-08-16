@@ -408,9 +408,11 @@ function ProviderModal({
   const [label, setLabel] = useState(p.label)
   const [timeout, setTimeoutSecs] = useState(String(p.timeout_seconds ?? ''))
 
-  // A custom provider may be a keyless service, so the key is not forced here;
-  // the backend verifies the pair either way.
+  // A local runtime needs no key; bedrock takes AWS env credentials. A custom
+  // provider usually wants one but a keyless service is fine, so the field is
+  // shown yet optional there.
   const keyRequired = p.kind !== 'bedrock' && !p.local && !p.custom
+  const showKey = p.kind !== 'bedrock' && !p.local
   const canConnect =
     (!keyRequired || key.trim() !== '') &&
     (!p.needs_base_url || baseURL.trim() !== '') &&
@@ -545,7 +547,7 @@ function ProviderModal({
                   <Input id="m-baseurl" value={baseURL} onChange={(e) => setBaseURL(e.target.value)} autoComplete="off" />
                 </div>
               ) : null}
-              {keyRequired ? (
+              {showKey ? (
                 <div className="space-y-1.5">
                   <Label htmlFor="m-key">{p.key_label ?? t('setup.apiKey')}</Label>
                   <div className="flex gap-2">
@@ -563,6 +565,9 @@ function ProviderModal({
                       {reveal ? <EyeSlash className="size-4" /> : <Eye className="size-4" />}
                     </Button>
                   </div>
+                  {p.custom ? (
+                    <p className="text-[11px] text-muted-foreground">{t('providers.keyOptional')}</p>
+                  ) : null}
                 </div>
               ) : null}
               {p.needs_region ? (

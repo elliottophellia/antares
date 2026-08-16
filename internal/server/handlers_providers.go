@@ -328,7 +328,9 @@ func (s *Server) handleDeleteProvider(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := r.PathValue("id")
-	if isCatalogueProviderID(id) {
+	// The legacy "custom" slot behaves like any user-defined provider: it can
+	// be deleted. Other built-ins cannot.
+	if isCatalogueProviderID(id) && id != "custom" {
 		writeError(w, http.StatusBadRequest, errors.New("built-in providers cannot be deleted"))
 		return
 	}
@@ -342,7 +344,7 @@ func (s *Server) handleDeleteProvider(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if cfg.Model.Provider == id {
-		writeError(w, http.StatusBadRequest, errors.New("cannot delete the active provider"))
+		writeError(w, http.StatusBadRequest, errors.New("this provider is active — pick another model before deleting it"))
 		return
 	}
 	delete(cfg.Providers, id)
