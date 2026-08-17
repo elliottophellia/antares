@@ -250,8 +250,8 @@ var providerChoices = []providerChoice{
 		hint: "runs on this machine, no key needed",
 	},
 	{
-		id: "custom", label: "Something else",
-		hint: "any OpenAI-compatible endpoint",
+		id: "custom", label: "Custom provider",
+		hint: "any OpenAI-compatible endpoint, named by you",
 	},
 }
 
@@ -284,6 +284,23 @@ func runTerminalSetup(ctx context.Context, rt *runtimeServices) error {
 	// 2. Endpoint for custom / local providers
 	switch chosen.id {
 	case "custom":
+		// A custom provider is named by the user and stored under an id minted
+		// from that name, so several can coexist. A skipped name defaults to
+		// "Custom provider" rather than the legacy "custom" slot, which the
+		// providers page no longer shows.
+		name := promptLine("\n  Provider name (shown in the UI): ", "")
+		name = strings.TrimSpace(name)
+		if name == "" {
+			name = "Custom provider"
+		}
+		id := server.CustomProviderID(cfg, name)
+		cfg.Model.Provider = id
+		entry = cfg.Providers[id]
+		if entry.Kind == "" {
+			entry.Kind = "openai-compatible"
+		}
+		entry.Enabled = true
+		entry.Label = name
 		entry.BaseURL = promptLine("\n  Base URL (e.g. https://api.example.com/v1): ", entry.BaseURL)
 		if entry.BaseURL == "" {
 			return errors.New("a base URL is required for a custom provider")
@@ -432,7 +449,7 @@ func pickModel(ctx context.Context, cfg *config.Config, chosen providerChoice) s
 	listCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
 
-	id, p := cfg.ResolveProvider(chosen.id)
+	id, p := cfg.ResolveProvider(cfg.Model.Provider)
 	var live []llm.ModelInfo
 	if client, err := llm.New(llm.Options{
 		Kind: p.Kind, BaseURL: p.BaseURL, APIKey: p.APIKey,

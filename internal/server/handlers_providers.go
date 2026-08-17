@@ -1,11 +1,14 @@
 package server
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/enowdev/antares/internal/config"
+	"github.com/enowdev/antares/internal/llm"
 	"github.com/enowdev/antares/internal/providers"
 )
 
@@ -171,6 +174,7 @@ func (s *Server) handleProviderSettings(w http.ResponseWriter, r *http.Request) 
 	id := r.PathValue("id")
 	var body struct {
 		BaseURL     *string           `json:"base_url"`
+		Label       *string           `json:"label"`
 		TimeoutSecs *int              `json:"timeout_seconds"`
 		Headers     map[string]string `json:"headers"`
 	}
@@ -184,22 +188,25 @@ func (s *Server) handleProviderSettings(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	p := cfg.Providers[id]
+	// Custom providers (user-named entries, plus the legacy "custom" slot) may
+	// point at loopback or LAN addresses; built-ins keep their catalogue rule.
+	sp := lookupSetupProvider(cfg, id)
+	custom := sp == nil || sp.Custom
+	local := sp != nil && sp.Local
 	if body.BaseURL != nil {
 		baseURL := strings.TrimSpace(*body.BaseURL)
-		allowLocal := false
-		for _, provider := range setupProviderCatalogue(cfg) {
-			if provider.ID == id {
-				allowLocal = provider.Local
-				break
-			}
-		}
 		if baseURL != "" {
-			if err := s.validateProviderBaseURL(r.Context(), baseURL, allowLocal); err != nil {
+			if err := s.validateChosenBaseURL(r.Context(), baseURL, custom, local); err != nil {
 				writeError(w, http.StatusBadRequest, err)
 				return
 			}
 		}
 		p.BaseURL = baseURL
+	}
+	if body.Label != nil {
+		if label := strings.TrimSpace(*body.Label); label != "" {
+			p.Label = label
+		}
 	}
 	if body.TimeoutSecs != nil {
 		p.TimeoutSecs = *body.TimeoutSecs
@@ -209,6 +216,126 @@ func (s *Server) handleProviderSettings(w http.ResponseWriter, r *http.Request) 
 	}
 	cfg.Providers[id] = p
 
+	if err := config.Save(cfg); err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	if err := s.applyReload(); err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+// handleCreateProvider adds a user-defined provider: a name, an
+// OpenAI-compatible base URL, and an optional key. Any number may exist, and
+// loopback/LAN endpoints are accepted — the user is pointing Antares at their
+// own service.
+func (s *Server) handleCreateProvider(w http.ResponseWriter, r *http.Request) {
+	if s.requireDashboardPassword(w, r) {
+		return
+	}
+	var body struct {
+		Name    string `json:"name"`
+		BaseURL string `json:"base_url"`
+		APIKey  string `json:"api_key"`
+	}
+	if err := decodeBody(r, &body); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	name := strings.TrimSpace(body.Name)
+	if name == "" {
+		writeError(w, http.StatusBadRequest, errors.New("a name is required"))
+		return
+	}
+	baseURL := strings.TrimSpace(body.BaseURL)
+	if baseURL == "" {
+		writeError(w, http.StatusBadRequest, errors.New("a base URL is required"))
+		return
+	}
+	if err := s.validateCustomProviderBaseURL(r.Context(), baseURL); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+
+	cfg, err := config.Reload()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	id := CustomProviderID(cfg, name)
+
+	// Verify the pair now so a bad endpoint or key surfaces at creation time
+	// rather than on the first turn. A keyless service is allowed.
+	key := strings.TrimSpace(body.APIKey)
+	if key != "" {
+		client, err := llm.New(llm.Options{
+			Kind: "openai-compatible", BaseURL: baseURL, APIKey: key,
+			ProviderID: id, Timeout: 30 * time.Second,
+		})
+		if err != nil {
+			writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": err.Error()})
+			return
+		}
+		ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+		defer cancel()
+		if _, err := client.Models(ctx); err != nil {
+			if llm.IsAuthError(err) {
+				writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": err.Error()})
+				return
+			}
+			if !llm.IsUnsupported(err) {
+				writeJSON(w, http.StatusBadGateway, map[string]any{
+					"ok": false, "error": "The provider could not be reached or returned an invalid response: " + err.Error(),
+				})
+				return
+			}
+		}
+	}
+
+	cfg.Providers[id] = config.Provider{
+		Kind: "openai-compatible", BaseURL: baseURL, APIKey: key,
+		Enabled: true, Label: name,
+	}
+	if err := config.Save(cfg); err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	if err := s.applyReload(); err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "id": id})
+}
+
+// handleDeleteProvider removes a user-defined provider. Built-in catalogue
+// entries and the active provider are refused.
+func (s *Server) handleDeleteProvider(w http.ResponseWriter, r *http.Request) {
+	if s.requireDashboardPassword(w, r) {
+		return
+	}
+	id := r.PathValue("id")
+	// The legacy "custom" slot behaves like any user-defined provider: it can
+	// be deleted. Other built-ins cannot.
+	if isCatalogueProviderID(id) && id != "custom" {
+		writeError(w, http.StatusBadRequest, errors.New("built-in providers cannot be deleted"))
+		return
+	}
+	cfg, err := config.Reload()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	if _, ok := cfg.Providers[id]; !ok {
+		writeError(w, http.StatusNotFound, errors.New("unknown provider"))
+		return
+	}
+	if cfg.Model.Provider == id {
+		writeError(w, http.StatusBadRequest, errors.New("this provider is active — pick another model before deleting it"))
+		return
+	}
+	delete(cfg.Providers, id)
 	if err := config.Save(cfg); err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return

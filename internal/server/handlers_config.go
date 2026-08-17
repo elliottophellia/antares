@@ -165,13 +165,24 @@ func (s *Server) handleModelOptions(w http.ResponseWriter, r *http.Request) {
 		NeedsAPIVersion bool   `json:"needs_api_version,omitempty"`
 		NeedsBaseURL    bool   `json:"needs_base_url,omitempty"`
 		TimeoutSecs     int    `json:"timeout_seconds,omitempty"`
+		// Custom marks a user-defined provider. Customs always group under
+		// "API key" — even a localhost endpoint is a configured service, not
+		// one of the built-in local runtimes.
+		Custom bool `json:"custom,omitempty"`
 	}
 
 	// Every provider from the catalogue (configured or not), so the new kinds
 	// can be set up from here — then any custom providers only in the config.
+	// The catalogue's "custom" entry belongs to the first-run wizard only: it
+	// never renders here, so the providers page shows solely built-ins and
+	// providers the user created (named, manageable, deletable).
 	seen := map[string]bool{}
 	providerList := make([]providerInfo, 0)
 	for _, sp := range setupProviderCatalogue(cfg) {
+		if sp.Custom {
+			seen[sp.ID] = true
+			continue
+		}
 		p := cfg.Providers[sp.ID]
 		providerList = append(providerList, providerInfo{
 			ID: sp.ID, Label: sp.Label, Kind: sp.Kind,
@@ -179,7 +190,7 @@ func (s *Server) handleModelOptions(w http.ResponseWriter, r *http.Request) {
 			BaseURL: firstNonEmpty(p.BaseURL, sp.BaseURL), Active: sp.ID == cfg.Model.Provider,
 			Hint: sp.Hint, KeyHint: sp.KeyHint, KeyURL: sp.KeyURL, KeyLabel: sp.KeyLabel,
 			Note: sp.Note, NeedsRegion: sp.NeedsRegion, NeedsAPIVersion: sp.NeedsAPIVersion,
-			NeedsBaseURL: sp.NeedsBaseURL, TimeoutSecs: p.TimeoutSecs,
+			NeedsBaseURL: sp.NeedsBaseURL, TimeoutSecs: p.TimeoutSecs, Custom: sp.Custom,
 		})
 		seen[sp.ID] = true
 	}
@@ -194,8 +205,9 @@ func (s *Server) handleModelOptions(w http.ResponseWriter, r *http.Request) {
 		p := cfg.Providers[name]
 		providerList = append(providerList, providerInfo{
 			ID: name, Label: firstNonEmpty(p.Label, name), Kind: p.Kind, Enabled: p.Enabled,
-			HasKey: p.APIKey != "", Local: isLocalEndpoint(p.BaseURL), BaseURL: p.BaseURL,
+			HasKey: p.APIKey != "", BaseURL: p.BaseURL,
 			Active: name == cfg.Model.Provider, TimeoutSecs: p.TimeoutSecs,
+			Custom: true, NeedsBaseURL: true,
 		})
 	}
 

@@ -416,3 +416,53 @@ func TestDashboardGateAcceptsAllowlistedQueryCapability(t *testing.T) {
 		t.Fatalf("ordinary query token bypassed dashboard gate: code=%d body=%s", rr.Code, rr.Body.String())
 	}
 }
+
+func TestValidateCustomProviderBaseURL(t *testing.T) {
+	var s Server
+	ctx := context.Background()
+	// The endpoints a user points Antares at: loopback, LAN, and public.
+	for _, raw := range []string{
+		"http://localhost:20128/v1",
+		"http://127.0.0.1:20128/v1",
+		"http://192.168.1.10:8080/v1",
+		"http://10.0.0.8/v1",
+		"https://openrouter.ai/api/v1",
+	} {
+		if err := s.validateCustomProviderBaseURL(ctx, raw); err != nil {
+			t.Errorf("validateCustomProviderBaseURL(%q): %v", raw, err)
+		}
+	}
+	// Cloud metadata and other link-local targets stay blocked even for custom
+	// providers, and so do non-HTTP schemes.
+	for _, raw := range []string{
+		"http://169.254.169.254/latest/meta-data",
+		"http://[fe80::1]/v1",
+		"ftp://192.168.1.10/v1",
+	} {
+		if err := s.validateCustomProviderBaseURL(ctx, raw); err == nil {
+			t.Errorf("validateCustomProviderBaseURL(%q) accepted a blocked destination", raw)
+		}
+	}
+}
+
+func TestCustomProviderID(t *testing.T) {
+	cfg := &config.Config{Providers: map[string]config.Provider{}}
+	if got := CustomProviderID(cfg, "My LM server"); got != "my-lm-server" {
+		t.Errorf("customProviderID slugged to %q, want my-lm-server", got)
+	}
+	// A missing or literally-"Custom" name must not land on the legacy
+	// "custom" slot — the providers page never renders that id, so the
+	// provider would look unsaved. Both default to a visible id.
+	for _, name := range []string{"", "Custom"} {
+		if got := CustomProviderID(cfg, name); got != "custom-provider" {
+			t.Errorf("CustomProviderID(%q) = %q, want custom-provider", name, got)
+		}
+	}
+	cfg.Providers["my-lm-server"] = config.Provider{}
+	if got := CustomProviderID(cfg, "My LM server"); got != "my-lm-server-2" {
+		t.Errorf("duplicate name became %q, want my-lm-server-2", got)
+	}
+	if got := CustomProviderID(cfg, "OpenAI"); got != "openai-2" {
+		t.Errorf("catalogue clash became %q, want openai-2", got)
+	}
+}
