@@ -1,0 +1,170 @@
+package tools
+
+import (
+	"strings"
+	"testing"
+)
+
+// The acceptance tests next door pin that edit_file refuses an anchor the file
+// does not contain. These pin the other half of the contract: what reaches disk
+// when it does write, and what the tool says it did. Both drive the real tool
+// against a real file, through editOnDisk.
+
+// On the stage where old_string matched the file's own bytes there is nothing
+// to reconcile, so anything done to new_string on the way to disk is damage.
+// A CR inside a value is data, not a line break; rewriting it hands the file a
+// line the caller never wrote.
+func TestEditWritesNewStringByteForByteOnTheExactStage(t *testing.T) {
+	original := "id\tvalue\nMARKER\ntail\n"
+	said, isError, after := editOnDisk(t, "rows.tsv", original, map[string]any{
+		"path":       "rows.tsv",
+		"old_string": "MARKER",
+		"new_string": "note ends\rand continues",
+	})
+	if isError {
+		t.Fatalf("an anchor present in the file was refused: %s", said)
+	}
+	if want := "id\tvalue\nnote ends\rand continues\ntail\n"; after != want {
+		t.Errorf("new_string was rewritten on the way to disk\nwant %q\ngot  %q", want, after)
+	}
+}
+
+// The twin of the test above, on the other stage. Translating line endings and
+// reinterpreting a byte as a line ending are different acts, and the recovery
+// stage is authorised only for the first. A CR the caller did not write as a
+// line break is data, and folding it into one splits a value across two lines
+// while the tool reports success — the same harm as stripping a prefix.
+func TestEditWritesNewStringByteForByteOnTheRecoveryStage(t *testing.T) {
+	for _, tc := range []struct{ name, newString, want string }{
+		{
+			"a lone CR stays data",
+			"beta\nnote ends\rand continues",
+			"alpha\r\nbeta\r\nnote ends\rand continues\r\n",
+		},
+		{
+			// Expanding every LF without folding an existing CRLF first would
+			// write \r\r\n here.
+			"a break already written as CRLF is not doubled",
+			"beta\r\ndelta\nepsilon",
+			"alpha\r\nbeta\r\ndelta\r\nepsilon\r\n",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			said, isError, after := editOnDisk(t, "notes.txt", "alpha\r\nbeta\r\ngamma\r\n", map[string]any{
+				"path": "notes.txt",
+				// LF, so only the recovery stage can match it.
+				"old_string": "beta\ngamma",
+				"new_string": tc.newString,
+			})
+			if isError {
+				t.Fatalf("an LF anchor was refused against a CRLF file: %s", said)
+			}
+			if after != tc.want {
+				t.Errorf("new_string was altered beyond its line endings\nwant %q\ngot  %q", tc.want, after)
+			}
+		})
+	}
+}
+
+// A model writes \n for a line break whatever the file it read used, so an
+// all-LF anchor against a CRLF file is a well-defined ambiguity rather than a
+// guess — the one translation the tool is allowed to make. What it must not do
+// is make it silently: the caller asked for particular bytes and is entitled to
+// know that different ones were matched and written.
+func TestEditTranslatesAnLFAnchorForACRLFFileAndSaysSo(t *testing.T) {
+	original := "package main\r\n\r\nfunc main() {\r\n\tfmt.Println(\"hi\")\r\n}\r\n"
+	said, isError, after := editOnDisk(t, "win.go", original, map[string]any{
+		"path":       "win.go",
+		"old_string": "func main() {\n\tfmt.Println(\"hi\")\n}",
+		"new_string": "func main() {\n\tfmt.Println(\"bye\")\n}",
+	})
+	if isError {
+		t.Fatalf("an LF anchor was refused against a CRLF file: %s", said)
+	}
+	want := "package main\r\n\r\nfunc main() {\r\n\tfmt.Println(\"bye\")\r\n}\r\n"
+	if after != want {
+		t.Errorf("new_string did not land in the file's own line endings\nwant %q\ngot  %q", want, after)
+	}
+	if !strings.Contains(said, "LF to CRLF") {
+		t.Errorf("success message does not disclose the translation it performed: %s", said)
+	}
+}
+
+// "Matched exactly" and "matched after a translation" are different facts, and
+// a caller deciding whether to re-read acts on them differently. The exact path
+// has nothing to disclose, so it must not decorate its result.
+func TestEditReportsNoRecoveryWhenTheAnchorMatchedExactly(t *testing.T) {
+	original := "alpha\r\nbeta\r\ngamma\r\n"
+	said, isError, after := editOnDisk(t, "crlf.txt", original, map[string]any{
+		"path":       "crlf.txt",
+		"old_string": "beta\r\ngamma",
+		"new_string": "beta\r\nGAMMA",
+	})
+	if isError {
+		t.Fatalf("a byte-exact anchor was refused: %s", said)
+	}
+	if want := "alpha\r\nbeta\r\nGAMMA\r\n"; after != want {
+		t.Errorf("edited bytes = %q, want %q", after, want)
+	}
+	if strings.Contains(said, "[") {
+		t.Errorf("an exact match reported a recovery: %s", said)
+	}
+}
+
+// strings.Count(content, "") is the rune count plus one, so the empty anchor
+// is "found" between every pair of runes in the file. It is the one remaining
+// input for which "write only where old_string is in the file exactly" does
+// not hold, and replace_all then interleaves new_string with the file a rune at
+// a time. A model reaching for it is usually trying to append a line to a
+// config, which is an anchor it has not chosen yet rather than an anchor that
+// is empty.
+func TestEditRefusesAnEmptyOldString(t *testing.T) {
+	const original = "# Config\nkey = 1\n"
+	for _, replaceAll := range []bool{true, false} {
+		name := "one replacement"
+		if replaceAll {
+			name = "replace_all"
+		}
+		t.Run(name, func(t *testing.T) {
+			said, isError, after := editOnDisk(t, "app.conf", original, map[string]any{
+				"path":        "app.conf",
+				"old_string":  "",
+				"new_string":  "key2 = 2\n",
+				"replace_all": replaceAll,
+			})
+			if after != original {
+				t.Errorf("an empty anchor rewrote the file\nsaid: %s\ngot:  %q", said, after)
+			}
+			if !isError {
+				t.Fatalf("an empty anchor was accepted: %s", said)
+			}
+			// Counting the places an empty string "matches" describes nothing
+			// the caller can fix, and the count is of the file's runes.
+			if !strings.Contains(said, "old_string is empty") {
+				t.Errorf("refusal does not name the empty anchor as the problem: %s", said)
+			}
+		})
+	}
+}
+
+// A space-indented anchor against a tab-indented file is the commonest way an
+// edit misses, and the tool already knows how to say so. The message was
+// unreachable: the adjacent-insertion splice claimed the edit first and wrote
+// the spaces into the file.
+func TestEditTabVersusSpaceAnchorGetsTheTabDiagnostic(t *testing.T) {
+	original := "def main():\n\tif enabled:\n\t\trun()\n"
+	said, isError, after := editOnDisk(t, "app.py", original, map[string]any{
+		"path":       "app.py",
+		"old_string": "    if enabled:",
+		"new_string": "    if enabled:\n        setup()",
+	})
+	if !isError {
+		t.Fatalf("an anchor that is not in the file was accepted: %s", said)
+	}
+	if after != original {
+		t.Errorf("file changed although the edit failed: %q", after)
+	}
+	if !strings.Contains(said, "indents with TAB characters") {
+		t.Errorf("error does not name the tab-versus-space mismatch: %s", said)
+	}
+}

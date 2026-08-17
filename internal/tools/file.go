@@ -6,10 +6,10 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
-	"strconv"
 	"strings"
 	"unicode/utf8"
 )
@@ -141,7 +141,7 @@ type readFileTool struct{}
 
 func (readFileTool) Name() string { return "read_file" }
 func (readFileTool) Description() string {
-	return "Read a text file from the workspace. Returns NUMBER|CONTENT lines; only text after | belongs in edit_file.old_string. Use offset/limit for large files."
+	return "Read a text file from the workspace. Returns a header line naming the path and line range, a blank line, then the file's exact bytes — copy any region of it straight into edit_file.old_string. Use offset/limit for large files."
 }
 func (readFileTool) Schema() map[string]any {
 	return schema(map[string]any{
@@ -172,7 +172,17 @@ func (readFileTool) Execute(_ context.Context, in Input) Result {
 		return Errorf("%s is a directory; use list_files instead", args.Path)
 	}
 
-	data, err := os.ReadFile(path)
+	f, err := os.Open(path)
+	if err != nil {
+		return Errorf("cannot read %s: %v", args.Path, err)
+	}
+	defer f.Close()
+	// The cap has to bound the read, not trim what has already been read. The
+	// size stat reports cannot bound it either: a character device, most of
+	// /proc, and a file being appended to during the read all yield more than
+	// stat promised, and /dev/zero reports zero bytes and never ends. Reading
+	// one byte past the cap is what tells a file at the cap from one over it.
+	data, err := io.ReadAll(io.LimitReader(f, maxReadBytes+1))
 	if err != nil {
 		return Errorf("cannot read %s: %v", args.Path, err)
 	}
@@ -190,16 +200,8 @@ func (readFileTool) Execute(_ context.Context, in Input) Result {
 		return Errorf("%s appears to be a binary file (%d bytes)", args.Path, fi.Size())
 	}
 
-	normalized := strings.ReplaceAll(string(data), "\r", "\n")
-	if fileEOL(string(data)) != "\r" {
-		// Only a genuinely CR-terminated (classic Mac) file splits on a lone
-		// CR. In an LF or CRLF file a bare CR is data — a control character
-		// inside a string literal, say — and splitting on it would number the
-		// displayed lines differently from the file's real lines, handing the
-		// model an anchor that edit_file then cannot find.
-		normalized = strings.ReplaceAll(string(data), "\r\n", "\n")
-	}
-	lines := strings.Split(normalized, "\n")
+	content := string(data)
+	lines := lineSpans(content)
 	offset := args.Offset
 	if offset <= 0 {
 		offset = 1
@@ -209,7 +211,15 @@ func (readFileTool) Execute(_ context.Context, in Input) Result {
 		limit = 2000
 	}
 	start := offset - 1
-	if start > len(lines) {
+	// An empty file has no line 1 to be past, so offset 1 on it reads as
+	// "nothing here" rather than as a mistake.
+	if start > 0 && start >= len(lines) {
+		if truncatedBytes {
+			// The line may well exist; this read simply never reached it. Told
+			// it is past the end, a caller following a line number grep just
+			// gave it concludes the file changed under it and reads again.
+			return Errorf("offset %d is past line %d, where the 400 KB cap stopped this read; the file continues beyond it, so search the rest with grep rather than paging to it", offset, len(lines))
+		}
 		return Errorf("offset %d is past end of file (%d lines)", offset, len(lines))
 	}
 	end := start + limit
@@ -217,17 +227,61 @@ func (readFileTool) Execute(_ context.Context, in Input) Result {
 		end = len(lines)
 	}
 
-	var b strings.Builder
-	for i := start; i < end; i++ {
-		fmt.Fprintf(&b, "%d|%s\n", i+1, lines[i])
+	// The selected lines' own bytes, terminators included, so what the model is
+	// shown is what edit_file can find. Slicing to the start of the line after
+	// the range keeps the last terminator; nothing here rewrites tabs, CRLF or
+	// a lone CR.
+	body := ""
+	if start < end {
+		to := len(content)
+		if end < len(lines) {
+			to = lines[end].start
+		}
+		body = content[lines[start].start:to]
 	}
+	// An empty file has no line 1, so the header names no line rather than
+	// inventing one.
+	first := start + 1
+	if start == end {
+		first = 0
+	}
+
+	// A read stopped by the byte cap counted the lines it read and no others,
+	// so every number it can offer about the whole file is a floor rather than
+	// a count. grep counts the file whole, and a total that disagrees with it
+	// sends a caller holding one of grep's line numbers back to a file it was
+	// just told is shorter than that. Learning the real total means reading
+	// past the cap, which is what the cap is for.
+	floor, atLeast := "", ""
+	if truncatedBytes {
+		floor, atLeast = "≥", "at least "
+	}
+	rel := relTo(in.Workspace, path)
+	var b strings.Builder
+	fmt.Fprintf(&b, "%s — lines %d-%d of %s%d\n\n", rel, first, end, floor, len(lines))
+	b.WriteString(body)
 	if end < len(lines) {
-		fmt.Fprintf(&b, "\n… %d more lines (use offset=%d to continue)\n", len(lines)-end, end+1)
+		fmt.Fprintf(&b, "\n… %s%d more lines (use offset=%d to continue)\n", atLeast, len(lines)-end, end+1)
 	}
 	if truncatedBytes {
 		b.WriteString("\n… file truncated at 400 KB\n")
 	}
-	return Result{Content: b.String(), Meta: map[string]any{"path": relTo(in.Workspace, path), "lines": len(lines)}}
+	meta := map[string]any{
+		"path":       rel,
+		"first_line": first,
+		"last_line":  end,
+	}
+	if truncatedBytes {
+		// The number the header states after "≥", carried under its own key so
+		// a caller need not parse the header for it. last_line cannot stand in:
+		// the line limit usually stops the read long before the byte cap does,
+		// and on a default read of a 600 KB file the two are 2000 and 10240.
+		meta["truncated"] = true
+		meta["total_lines_at_least"] = len(lines)
+	} else {
+		meta["total_lines"] = len(lines)
+	}
+	return Result{Content: b.String(), Meta: meta}
 }
 
 // ---- write_file -------------------------------------------------------------
@@ -298,12 +352,10 @@ func (writeFileTool) Execute(_ context.Context, in Input) Result {
 		verb = "Appended to"
 	}
 	rel := relTo(in.Workspace, path)
-	lines := 0
-	if content != "" {
-		lines = strings.Count(content, "\n") + 1
-	}
+	// The same splitter the other three tools count with, so what the write
+	// says it put in the file is what a read of it comes back with.
 	return Result{
-		Content: fmt.Sprintf("%s %s (%d bytes, %d lines)", verb, rel, len(content), lines),
+		Content: fmt.Sprintf("%s %s (%d bytes, %d lines)", verb, rel, len(content), len(lineSpans(content))),
 		Meta:    map[string]any{"path": rel, "bytes": len(content)},
 	}
 }
@@ -314,13 +366,13 @@ type editFileTool struct{}
 
 func (editFileTool) Name() string { return "edit_file" }
 func (editFileTool) Description() string {
-	return "Replace an exact string in a file. The old_string must appear exactly once unless replace_all is set. Copy old_string from read_file output using only the content after the NUMBER| separator (never the line number). Preserve tabs/spaces exactly; line endings are matched automatically."
+	return "Replace an exact string in a file. The old_string must appear in the file exactly, and exactly once unless replace_all is set. Copy it straight out of read_file output, preserving tabs and spaces; only LF-for-CRLF line endings are reconciled for you."
 }
 func (editFileTool) RequiresApproval() bool { return true }
 func (editFileTool) Schema() map[string]any {
 	return schema(map[string]any{
 		"path":        prop("string", "File to edit."),
-		"old_string":  prop("string", "Exact text to find, including indentation (tabs/spaces). Do not include read_file line numbers."),
+		"old_string":  prop("string", "Exact text to find, including indentation (tabs/spaces)."),
 		"new_string":  prop("string", "Replacement text."),
 		"replace_all": propDefault("boolean", "Replace every occurrence.", false),
 	}, "path", "old_string", "new_string")
@@ -335,6 +387,14 @@ func (editFileTool) Execute(_ context.Context, in Input) Result {
 	}
 	if err := in.Bind(&args); err != nil {
 		return Errorf("%v", err)
+	}
+	// An empty string is "in" every file, between every pair of characters, so
+	// this is the one anchor an exact match cannot refuse on its own: with
+	// replace_all it interleaves new_string with the file a character at a
+	// time, and without it the file is reported as matching as many times as
+	// it has characters.
+	if args.OldString == "" {
+		return Errorf("old_string is empty, and an empty anchor matches between every pair of characters. Name the text to replace: to insert a line, anchor on a line beside where it goes and repeat that line in new_string; to create or replace a whole file, use write_file.")
 	}
 	if args.OldString == args.NewString {
 		return Errorf("old_string and new_string are identical")
@@ -351,25 +411,15 @@ func (editFileTool) Execute(_ context.Context, in Input) Result {
 	oldString, newString, count, how := resolveEditMatch(content, args.OldString, args.NewString)
 	switch {
 	case count == 0:
-		// Last-resort recovery for one narrow shape: a stale single-line anchor
-		// whose new_string only inserts adjacent text. Spliced by line index so
-		// it can never touch any other occurrence; never combined with
-		// replace_all, whose contract is "every exact occurrence".
-		if !args.ReplaceAll {
-			if updated, ok := spliceAdjacentInsertion(content, args.OldString, args.NewString); ok {
-				if err := writeWithCheckpoint(in, path, []byte(updated), "edit_file"); err != nil {
-					return Errorf("cannot write %s: %v", args.Path, err)
-				}
-				rel := relTo(in.Workspace, path)
-				return Result{
-					Content: fmt.Sprintf("Edited %s (1 replacement(s)) [matched unique near line for adjacent insertion]", rel),
-					Meta:    map[string]any{"path": rel, "replacements": 1},
-				}
-			}
-		}
 		return Errorf("%s", editNotFoundMessage(args.Path, content, args.OldString))
 	case count > 1 && !args.ReplaceAll:
-		return Errorf("%s", editAmbiguousMessage(args.Path, content, oldString, count))
+		msg := editAmbiguousMessage(args.Path, content, oldString, count)
+		if how != "" {
+			// The count and the line numbers describe the translated anchor, so
+			// the caller has to be told which string they belong to.
+			msg += " [" + how + "]"
+		}
+		return Errorf("%s", msg)
 	}
 
 	var updated string
@@ -389,6 +439,16 @@ func (editFileTool) Execute(_ context.Context, in Input) Result {
 	msg := fmt.Sprintf("Edited %s (%d replacement(s))", rel, replaced)
 	if how != "" {
 		msg += " [" + how + "]"
+	}
+	// A verbatim match authorises no rewriting of the replacement, so LF breaks
+	// in new_string stay LF inside a CRLF file. Every byte asked for is on disk
+	// and that is the trade we want, but the mixed endings are invisible until
+	// something else surfaces them, so the caller is told. This changes nothing
+	// about what was written. newString is the string that actually reached
+	// disk, so the LF-to-CRLF recovery — which already translated it — cannot
+	// trip this.
+	if fileEOL(content) == "\r\n" && hasBareLF(newString) {
+		msg += " Note: the file uses CRLF line endings and new_string broke at least one line with a bare LF, so the replaced region now has LF line breaks. It was written exactly as given; send new_string with \\r\\n breaks if the file must stay consistent."
 	}
 	return Result{
 		Content: msg,
@@ -411,6 +471,14 @@ func fileEOL(s string) string {
 		return "\r"
 	}
 	return "\n"
+}
+
+// hasBareLF reports whether s breaks a line with an LF that is not half of a
+// CRLF pair. Asking instead whether s contains a CRLF anywhere answers a
+// different question: a replacement that mixes the two leaves the file just as
+// inconsistent as an all-LF one, and its single bare LF is the harder to see.
+func hasBareLF(s string) bool {
+	return strings.Count(s, "\n") > strings.Count(s, "\r\n")
 }
 
 // eolOf reports the single newline flavor used in s, or "" when s has no
@@ -440,117 +508,38 @@ func toEOL(s, eol string) string {
 	return strings.ReplaceAll(s, "\n", eol)
 }
 
-// stripReadFileLinePrefixes removes a NUMBER| prefix from every line when the
-// whole block looks like a paste of read_file output. Returns ok=false when the
-// string should be left alone (mixed or missing prefixes).
-func stripReadFileLinePrefixes(s string) (string, bool) {
-	if s == "" {
-		return s, false
-	}
-	// Work on LF so CR in a pasted block does not hide the prefix.
-	normalized := strings.ReplaceAll(s, "\r\n", "\n")
-	normalized = strings.ReplaceAll(normalized, "\r", "\n")
-	// Preserve whether the input ended with a newline so join stays faithful.
-	trimTrailing := strings.HasSuffix(normalized, "\n")
-	body := normalized
-	if trimTrailing {
-		body = strings.TrimSuffix(body, "\n")
-	}
-	if body == "" {
-		return s, false
-	}
-	lines := strings.Split(body, "\n")
-	out := make([]string, 0, len(lines))
-	nums := make([]int, 0, len(lines))
-	for _, line := range lines {
-		i := strings.IndexByte(line, '|')
-		if i <= 0 {
-			return s, false
-		}
-		for _, c := range line[:i] {
-			if c < '0' || c > '9' {
-				return s, false
-			}
-		}
-		n, err := strconv.Atoi(line[:i])
-		if err != nil {
-			return s, false
-		}
-		nums = append(nums, n)
-		out = append(out, line[i+1:])
-	}
-	// read_file prefixes are always consecutive. A multi-line block whose
-	// numbers are not is real pipe-delimited data — stripping it could make a
-	// stale old_string match somewhere else entirely.
-	for k := 1; k < len(nums); k++ {
-		if nums[k] != nums[k-1]+1 {
-			return s, false
-		}
-	}
-	joined := strings.Join(out, "\n")
-	if trimTrailing {
-		joined += "\n"
-	}
-	return joined, true
+// lfToCRLF expands the LF line breaks in s to CRLF and leaves every other byte
+// as it was. toEOL cannot stand in for it on a string bound for the file: toEOL
+// folds a lone CR into a line break before expanding, and a CR the caller did
+// not write as a line break is data. Folding existing CRLF first is what keeps
+// the expansion from writing \r\r\n.
+func lfToCRLF(s string) string {
+	s = strings.ReplaceAll(s, "\r\n", "\n")
+	return strings.ReplaceAll(s, "\n", "\r\n")
 }
 
-// resolveEditMatch finds old/new strings that match content, recovering from
-// the two failure modes that read_file → edit_file commonly hits:
-//  1. LF vs CRLF (read_file always displays LF)
-//  2. pasted NUMBER| line prefixes from read_file output
-//
-// The verbatim input is always tried first: when old_string already matches
-// the file bytes exactly, no newline heuristic may reject or rewrite it.
-// how is a short note for the success message when recovery was used; empty on
-// a plain exact match.
+// resolveEditMatch locates the bytes old_string names and decides the bytes to
+// write in their place. old_string is matched verbatim; the sole recovery is a
+// line-ending translation. how names that translation for the result message
+// and is empty on a verbatim match, so a caller is never told "exact" when it
+// was not.
 func resolveEditMatch(content, oldIn, newIn string) (oldString, newString string, count int, how string) {
-	// 0. Verbatim bytes. Mixed-EOL files and stray CR bytes made the old
-	// normalize-first order fail edits whose old_string was byte-perfect.
 	if c := strings.Count(content, oldIn); c > 0 {
-		flav := eolOf(oldIn)
-		if flav == "" {
-			flav = fileEOL(content)
-		}
-		return oldIn, toEOL(newIn, flav), c, ""
+		return oldIn, newIn, c, ""
 	}
 
-	// Candidate flavors for normalized matching: the file's dominant flavor
-	// first, then the alternatives a mixed-EOL file may need.
-	flavors := []string{fileEOL(content), "\n", "\r\n"}
-
-	try := func(oldCand, newCand, label string) bool {
-		tried := map[string]bool{oldIn: true} // verbatim already attempted
-		for _, flav := range flavors {
-			o := toEOL(oldCand, flav)
-			if o == "" || tried[o] {
-				continue
-			}
-			tried[o] = true
-			c := strings.Count(content, o)
-			if c == 0 {
-				continue
-			}
-			oldString, newString, count, how = o, toEOL(newCand, flav), c, label
-			return true
-		}
-		return false
-	}
-
-	// 1. EOL-normalized (covers LF paste against a CRLF file and vice versa).
-	if try(oldIn, newIn, "normalized line endings to match file") {
-		return
-	}
-
-	// 2. Strip NUMBER| prefixes from a full paste of read_file output.
-	oldStripped, oldOK := stripReadFileLinePrefixes(oldIn)
-	newStripped, newOK := stripReadFileLinePrefixes(newIn)
-	if oldOK {
-		newCand := newIn
-		if newOK {
-			newCand = newStripped
-		}
-		if try(oldStripped, newCand, "stripped read_file NUMBER| prefixes") {
-			return
+	// A model emits \n for a line break whatever the file it read used, so an
+	// all-LF anchor against a CRLF file is a well-defined ambiguity rather than
+	// a guess, and translating it is lossless. It is reached only once the
+	// verbatim match has failed, and new_string is translated only because
+	// old_string had to be: a replacement is never rewritten on a path that
+	// matched exactly. eolOf has already established that old_string holds no
+	// CR at all, so every \n in it is unambiguously a line break.
+	if fileEOL(content) == "\r\n" && eolOf(oldIn) == "\n" {
+		crlf := lfToCRLF(oldIn)
+		if c := strings.Count(content, crlf); c > 0 {
+			return crlf, lfToCRLF(newIn), c,
+				"translated old_string line endings from LF to CRLF to match the file"
 		}
 	}
 
@@ -561,6 +550,12 @@ func resolveEditMatch(content, oldIn, newIn string) (oldString, newString string
 // content, excluding its \n, \r\n, or lone \r terminator.
 type lineSpan struct{ start, end int }
 
+// lineSpans is the one place the file tools decide where a line begins and
+// ends. read_file's numbering and total, grep's match lines and edit_file's
+// occurrence lines all come from it, so a line number one tool reports means
+// the same line in the next. A line the file terminates is complete: the
+// terminator adds no empty line after it, so "a\nb\n" is two lines. Line
+// numbers are the 1-based index into the returned slice.
 func lineSpans(content string) []lineSpan {
 	// A lone CR terminates a line only in a genuinely CR-based file. Anywhere
 	// else it is data, and treating it as a break here would number lines
@@ -599,209 +594,12 @@ func lineSpans(content string) []lineSpan {
 	return spans
 }
 
-// spliceAdjacentInsertion recovers one narrow failure shape: a common
-// README/table operation copies a line from an earlier read, abbreviates one
-// phrase, and adds a new row immediately before or after it. old_string is a
-// single stale line, new_string only wraps it with inserted text, and exactly
-// one file line is a clear similarity match. The inserted text is spliced at
-// that line's byte range: the anchor line is kept byte-for-byte, and no other
-// occurrence of similar text can be touched. Ordinary replacements remain
-// exact-only.
-func spliceAdjacentInsertion(content, oldIn, newIn string) (string, bool) {
-	oldNorm := toEOL(oldIn, "\n")
-	newNorm := toEOL(newIn, "\n")
-	if oldNorm == "" || strings.Contains(oldNorm, "\n") {
-		return "", false
-	}
-	// A NUMBER| line-prefix paste must never reach the fuzzy path. The anchor
-	// carries the prefix, so its token set still scores high against the real
-	// line, and the inserted text would be written to the file WITH its "13|"
-	// prefix while the tool reported success. Exact matching handles prefixed
-	// pastes properly via stripReadFileLinePrefixes; guessing must not.
-	if prefixed, total := readFileLinePrefixCounts(oldIn); prefixed > 0 && total > 0 {
-		return "", false
-	}
-	if prefixed, total := readFileLinePrefixCounts(newIn); prefixed > 0 && total > 0 {
-		return "", false
-	}
-
-	insertAfter := false
-	insert := ""
-	switch {
-	case strings.HasPrefix(newNorm, oldNorm+"\n"):
-		insertAfter = true
-		insert = strings.TrimPrefix(newNorm, oldNorm)
-	case strings.HasSuffix(newNorm, "\n"+oldNorm):
-		insert = strings.TrimSuffix(newNorm, oldNorm)
-	default:
-		return "", false
-	}
-
-	spans := lineSpans(content)
-	best, second := -1.0, -1.0
-	bestIdx := -1
-	for i, sp := range spans {
-		score := editLineSimilarity(oldNorm, content[sp.start:sp.end])
-		if score > best {
-			second, best = best, score
-			bestIdx = i
-		} else if score > second {
-			second = score
-		}
-	}
-	if bestIdx < 0 || best < 0.78 || (second >= 0 && best-second < 0.12) {
-		return "", false
-	}
-	// Token overlap alone is not enough to claim "this is the same line,
-	// lightly reworded". Sibling rows of one table share almost every token by
-	// construction, so a deleted anchor row scores 0.8+ against a surviving row
-	// while the runner-up (a heading, a paragraph) sits far below and clears
-	// the margin gate too.
-	//
-	// Edit distance does not separate those cases either: "2026-02-01" vs
-	// "2026-03-01" is a one-character difference, exactly like a typo. What
-	// actually distinguishes them is WHICH characters differ. Digits are a
-	// line's identifying detail — dates, ids, versions, counts — and a
-	// rewording never changes them, while a different row almost always does.
-	// Requiring identical digits admits the abbreviations this recovery exists
-	// for and rejects the sibling-row confusion that silently corrupts files.
-	anchor := content[spans[bestIdx].start:spans[bestIdx].end]
-	if digitsOfLine(oldNorm) != digitsOfLine(anchor) {
-		return "", false
-	}
-	// Belt and braces: even with matching digits, the line must still be a
-	// light edit rather than a wholesale rewrite.
-	if !nearEditDistance(oldNorm, anchor, 0.34) {
-		return "", false
-	}
-
-	insert = toEOL(insert, fileEOL(content))
-	sp := spans[bestIdx]
-	if insertAfter {
-		return content[:sp.end] + insert + content[sp.end:], true
-	}
-	return content[:sp.start] + insert + content[sp.start:], true
-}
-
-// digitsOfLine returns just the digits of s, in order. Two renderings of the
-// same line keep the same digits; two different rows of one table almost never
-// do.
-func digitsOfLine(s string) string {
-	out := make([]byte, 0, 16)
-	for i := 0; i < len(s); i++ {
-		if s[i] >= '0' && s[i] <= '9' {
-			out = append(out, s[i])
-		}
-	}
-	return string(out)
-}
-
-// nearEditDistance reports whether b is within maxRatio of a's length in
-// Levenshtein distance — i.e. b looks like a lightly edited a rather than a
-// different line that merely reuses the same vocabulary. Long lines are capped
-// so the O(n*m) table stays small on an error-recovery path.
-func nearEditDistance(a, b string, maxRatio float64) bool {
-	const cap = 512
-	if len(a) > cap {
-		a = a[:cap]
-	}
-	if len(b) > cap {
-		b = b[:cap]
-	}
-	if a == b {
-		return true
-	}
-	longest := len(a)
-	if len(b) > longest {
-		longest = len(b)
-	}
-	if longest == 0 {
-		return false
-	}
-	budget := int(float64(longest) * maxRatio)
-	// A length gap alone can already exceed the budget; skip the table then.
-	if diff := len(a) - len(b); diff > budget || -diff > budget {
-		return false
-	}
-
-	prev := make([]int, len(b)+1)
-	cur := make([]int, len(b)+1)
-	for j := range prev {
-		prev[j] = j
-	}
-	for i := 1; i <= len(a); i++ {
-		cur[0] = i
-		for j := 1; j <= len(b); j++ {
-			cost := 1
-			if a[i-1] == b[j-1] {
-				cost = 0
-			}
-			del, ins, sub := prev[j]+1, cur[j-1]+1, prev[j-1]+cost
-			best := del
-			if ins < best {
-				best = ins
-			}
-			if sub < best {
-				best = sub
-			}
-			cur[j] = best
-		}
-		prev, cur = cur, prev
-	}
-	return prev[len(b)] <= budget
-}
-
-func editLineSimilarity(a, b string) float64 {
-	aSet := editTokenSet(a)
-	bSet := editTokenSet(b)
-	if len(aSet) == 0 || len(bSet) == 0 {
-		return 0
-	}
-	common := 0
-	for token := range aSet {
-		if _, ok := bSet[token]; ok {
-			common++
-		}
-	}
-	return float64(common) / float64(len(aSet)+len(bSet)-common)
-}
-
-func editTokenSet(s string) map[string]struct{} {
-	set := make(map[string]struct{})
-	start := -1
-	flush := func(end int) {
-		if start >= 0 && end-start >= 2 {
-			set[strings.ToLower(s[start:end])] = struct{}{}
-		}
-		start = -1
-	}
-	for i := 0; i < len(s); i++ {
-		c := s[i]
-		isToken := (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_'
-		if isToken {
-			if start < 0 {
-				start = i
-			}
-		} else {
-			flush(i)
-		}
-	}
-	flush(len(s))
-	return set
-}
-
-// editNotFoundMessage explains why an edit missed, with actionable recovery
-// hints for the model (line prefixes, tabs vs spaces, re-read).
+// editNotFoundMessage explains why an edit missed, and names a next step that
+// can actually succeed. Whitespace is the usual culprit and the hardest thing
+// to see in a diff of two quoted strings, so it is diagnosed first.
 func editNotFoundMessage(path, content, oldString string) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "old_string not found in %s.", path)
-
-	if stripped, ok := stripReadFileLinePrefixes(oldString); ok {
-		if strings.Count(content, toEOL(stripped, fileEOL(content))) > 0 {
-			b.WriteString(" Your old_string still includes read_file line numbers (NUMBER|). Call edit_file again with only the content after each |.")
-			return b.String()
-		}
-	}
 
 	if strings.Contains(content, "\t") && strings.Contains(oldString, " ") && !strings.Contains(oldString, "\t") {
 		// Spaces in old_string might still be inter-word; only flag when a
@@ -809,51 +607,20 @@ func editNotFoundMessage(path, content, oldString string) string {
 		for _, width := range []int{2, 4, 8} {
 			detabbed := expandTabs(content, width)
 			if strings.Contains(detabbed, toEOL(oldString, "\n")) || strings.Contains(detabbed, oldString) {
-				fmt.Fprintf(&b, " The file indents with TAB characters, but old_string uses spaces (tab width ~%d). Re-read the file and copy the content after NUMBER| without expanding tabs.", width)
+				fmt.Fprintf(&b, " The file indents with TAB characters, but old_string uses spaces (tab width ~%d). Re-read the file and copy the indentation exactly as it comes back, without expanding tabs.", width)
 				return b.String()
 			}
 		}
 	}
 
-	// A mixed paste usually means the model copied the display prefix from only
-	// one or two read_file lines. Do not silently strip it: the unprefixed lines
-	// may contain literal pipe characters.
-	if prefixed, total := readFileLinePrefixCounts(oldString); prefixed > 0 && prefixed < total {
-		b.WriteString(" Some old_string lines still include read_file line numbers (NUMBER|) while others do not. Remove every numeric prefix and keep only the text after each |, then retry from a fresh read.")
-		return b.String()
-	}
 	if hint := nearMissHint(content, oldString); hint != "" {
 		b.WriteByte(' ')
 		b.WriteString(hint)
 		return b.String()
 	}
 
-	b.WriteString(" Read the file first and copy only the content after the NUMBER| separator; preserve tabs, spaces, and indentation exactly.")
+	b.WriteString(" Read the file and copy old_string straight out of what it returns; preserve tabs, spaces, and indentation exactly.")
 	return b.String()
-}
-
-func readFileLinePrefixCounts(s string) (prefixed, total int) {
-	lines := strings.Split(strings.ReplaceAll(s, "\r\n", "\n"), "\n")
-	if len(lines) > 1 && lines[len(lines)-1] == "" {
-		lines = lines[:len(lines)-1]
-	}
-	for _, line := range lines {
-		total++
-		i := strings.IndexByte(line, '|')
-		if i > 0 {
-			allDigits := true
-			for _, c := range line[:i] {
-				if c < '0' || c > '9' {
-					allDigits = false
-					break
-				}
-			}
-			if allDigits {
-				prefixed++
-			}
-		}
-	}
-	return prefixed, total
 }
 
 func editAmbiguousMessage(path, content, oldString string, count int) string {
@@ -877,6 +644,7 @@ func occurrenceLines(content, needle string, max int) []int {
 	if needle == "" || max <= 0 {
 		return nil
 	}
+	spans := lineSpans(content)
 	var lines []int
 	for from := 0; from < len(content) && len(lines) < max; {
 		i := strings.Index(content[from:], needle)
@@ -884,22 +652,37 @@ func occurrenceLines(content, needle string, max int) []int {
 			break
 		}
 		at := from + i
-		lines = append(lines, 1+strings.Count(content[:at], "\n"))
+		lines = append(lines, lineOfOffset(spans, at))
 		from = at + len(needle)
 	}
 	return lines
+}
+
+// lineOfOffset returns the 1-based number of the line containing byte offset
+// at. An offset inside a terminator belongs to the line that terminator ends.
+func lineOfOffset(spans []lineSpan, at int) int {
+	if len(spans) == 0 {
+		return 1
+	}
+	next := sort.Search(len(spans), func(i int) bool { return spans[i].start > at })
+	if next == 0 {
+		return 1
+	}
+	return next
 }
 
 // nearMissHint reports a few real lines sharing a distinctive identifier with
 // old_string. It is intentionally short and bounded: the tool should correct
 // the model's stale context without dumping the file into an error response.
 func nearMissHint(content, oldString string) string {
+	spans := lineSpans(content)
 	for _, token := range identifierTokens(oldString) {
-		if len(token) < 8 || strings.Contains(strings.ToLower(token), "read_file") {
+		if len(token) < 8 {
 			continue
 		}
 		var hits []string
-		for i, line := range strings.Split(content, "\n") {
+		for i, sp := range spans {
+			line := content[sp.start:sp.end]
 			if strings.Contains(line, token) {
 				line = strings.TrimRight(line, "\r")
 				if len(line) > 180 {

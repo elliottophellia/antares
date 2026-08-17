@@ -9,7 +9,7 @@ whatever MCP servers add.
 
 | Tool | What it does |
 |---|---|
-| `read_file` | Read a text file as `NUMBER|CONTENT` lines, with offset and limit for large ones |
+| `read_file` | Read a text file's bytes verbatim under a line-range header, with offset and limit for large ones |
 | `write_file` | Create or overwrite, making parent directories |
 | `edit_file` | Replace an exact string, which must appear exactly once unless told otherwise |
 | `list_files` | Directory entries, optionally recursive |
@@ -21,11 +21,44 @@ Paths are relative to the workspace and cannot escape it.
 `edit_file` requiring a unique match is deliberate: an edit that silently hits
 the wrong occurrence is worse than one that fails.
 
-`read_file` prints each line as `NUMBER|CONTENT`. The number and `|` are
-metadata for the model — they are not part of the file. `edit_file` matches
-line endings to the file automatically (so a paste from `read_file` works on
-CRLF files) and will strip a whole-block paste of `NUMBER|` prefixes if the
-model includes them by mistake. Tabs and spaces must still match exactly.
+`read_file` returns one header line, `<path> — lines <first>-<last> of
+<total>`, a blank line, then the file's bytes unaltered — tabs, CRLF, and lone
+CR included. Nothing is stamped onto a line, so there is nothing for the model
+to strip before using a region as an `edit_file` anchor. The same numbers are
+in the result's metadata (`path`, `first_line`, `last_line`, `total_lines`) for
+callers that would otherwise parse the header.
+
+Two things below the header are the tool's rather than the file's: a clipped
+read appends `… N more lines (use offset=N to continue)`, and a read that hit
+the byte cap appends `… file truncated at 400 KB`. Each occupies a line of its
+own beginning with `…`, which is how the model is told to recognise them; an
+anchor must never be taken from one. The newline that starts that line is the
+tool's, so on the byte-cap path it is not evidence that the last content line
+was terminated in the file.
+
+A read the 400 KB cap stopped has not counted the lines behind it, and says so
+rather than reporting what it read as the whole: the header's total becomes
+`≥N`, the continuation note says `at least N more lines`, and the metadata
+drops `total_lines` for `truncated: true` plus `total_lines_at_least`, which is
+the `N` the header states. `last_line` is the last line returned, as on any
+other read, and is smaller than `N` whenever the line limit stopped the read
+before the byte cap did. `grep` counts the whole file (up to 8 MB), so it is the tool
+that can still find something past the cap; asking `read_file` to page to a
+line beyond it is refused, naming the cap.
+
+`edit_file` matches `old_string` byte for byte, and writes `new_string` byte for
+byte on every path but one. That path is the single recovery: if the file uses
+CRLF and an anchor whose every break is LF did not match, it is retried with
+those breaks expanded to CRLF, since a model emits `\n` whatever it read. It
+runs only after the exact match has failed, translates `new_string` only because
+`old_string` had to be, and says so in its result. So when the anchor matched
+exactly, a `new_string` written with LF lands in a CRLF file as LF; the result
+notes that rather than rewriting bytes the caller asked for.
+
+An anchor that is not found is an anchor that is wrong — stale, misremembered,
+or reformatted. The fix is another `read_file`, not more surrounding context.
+Extra context is the answer to the other error, where the anchor matches more
+than once.
 
 ### Terminal
 
