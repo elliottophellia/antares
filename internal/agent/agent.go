@@ -1240,7 +1240,7 @@ func ensureToolResults(msgs []llm.Message) []llm.Message {
 	// outside it. Reversing that order lets a turn whose result was compacted
 	// away reach forward and take the result of a later turn sharing its id,
 	// leaving the live call with a stub and the model with stale output.
-	byID := make(map[string][]int)
+	byID := make(map[string][]int, len(msgs))
 	for i, m := range msgs {
 		if m.Role == llm.RoleTool {
 			byID[m.ToolCallID] = append(byID[m.ToolCallID], i)
@@ -1255,7 +1255,7 @@ func ensureToolResults(msgs []llm.Message) []llm.Message {
 		end   int
 		bound []int // parallel to the turn's ToolCalls; -1 until a result binds
 	}
-	var turns []turn
+	turns := make([]turn, 0, len(msgs))
 	for i, m := range msgs {
 		if m.Role != llm.RoleAssistant {
 			continue
