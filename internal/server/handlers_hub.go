@@ -1,7 +1,6 @@
 package server
 
 import (
-	"context"
 	"errors"
 	"net/http"
 	"strings"
@@ -159,10 +158,6 @@ func (s *Server) handleHubInstallMCP(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
-	if s.mcp != nil {
-		// Connecting can take seconds while npx downloads a package; the
-		// request must not wait on it, and neither must its context.
-		go s.mcp.Connect(context.Background(), s.config())
-	}
+	s.refreshMCPConnections(r.Context())
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "missing_keys": missing})
 }

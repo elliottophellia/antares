@@ -366,18 +366,25 @@ func (s *Server) handleMCPStatus(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleMCPRefresh(w http.ResponseWriter, r *http.Request) {
-	// Check the concrete pointer before boxing it: a nil *mcp.Manager inside a
-	// non-nil mcpRefresher interface would slip past the nil guard in refreshMCP
-	// and panic on the first field access in Refresh.
-	if s.mcp == nil {
-		s.refreshMCP(w, r, nil)
-		return
+	refresher := s.mcpRefresh
+	if refresher == nil {
+		refresher = s.mcp
 	}
-	s.refreshMCP(w, r, s.mcp)
+	s.refreshMCP(w, r, refresher)
 }
 
 type mcpRefresher interface {
 	Refresh(context.Context, *config.Config) []mcp.ServerStatus
+}
+
+func (s *Server) refreshMCPConnections(ctx context.Context) {
+	refresher := s.mcpRefresh
+	if refresher == nil {
+		refresher = s.mcp
+	}
+	if refresher != nil {
+		refresher.Refresh(ctx, s.config())
+	}
 }
 
 func (s *Server) refreshMCP(w http.ResponseWriter, r *http.Request, refresher mcpRefresher) {
