@@ -79,7 +79,7 @@ func (s *Server) handleEngagementSessions(w http.ResponseWriter, r *http.Request
 		Findings int    `json:"findings"`
 		Intel    int    `json:"intel"`
 	}
-	out := make([]row, 0)
+	out := make([]row, 0, len(sessions))
 	for _, sess := range sessions {
 		f, intel := 0, 0
 		if s.agent.Findings() != nil {
