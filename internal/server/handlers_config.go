@@ -173,19 +173,23 @@ func (s *Server) handleModelOptions(w http.ResponseWriter, r *http.Request) {
 
 	// Every provider from the catalogue (configured or not), so the new kinds
 	// can be set up from here — then any custom providers only in the config.
-	// The catalogue's "custom" entry belongs to the first-run wizard only: it
-	// never renders here, so the providers page shows solely built-ins and
-	// providers the user created (named, manageable, deletable).
+	// The catalogue's "custom" entry belongs to the first-run wizard, but older
+	// installations may still use that id for their real custom provider.
 	seen := map[string]bool{}
 	providerList := make([]providerInfo, 0)
 	for _, sp := range setupProviderCatalogue(cfg) {
-		if sp.Custom {
+		p := cfg.Providers[sp.ID]
+		if sp.Custom && !legacyCustomProviderInUse(cfg, p) {
 			seen[sp.ID] = true
 			continue
 		}
-		p := cfg.Providers[sp.ID]
+		label, kind := sp.Label, sp.Kind
+		if sp.Custom {
+			label = firstNonEmpty(p.Label, sp.Label)
+			kind = firstNonEmpty(p.Kind, sp.Kind)
+		}
 		providerList = append(providerList, providerInfo{
-			ID: sp.ID, Label: sp.Label, Kind: sp.Kind,
+			ID: sp.ID, Label: label, Kind: kind,
 			Enabled: p.Enabled, HasKey: p.APIKey != "", Local: sp.Local,
 			BaseURL: firstNonEmpty(p.BaseURL, sp.BaseURL), Active: sp.ID == cfg.Model.Provider,
 			Hint: sp.Hint, KeyHint: sp.KeyHint, KeyURL: sp.KeyURL, KeyLabel: sp.KeyLabel,
@@ -215,6 +219,19 @@ func (s *Server) handleModelOptions(w http.ResponseWriter, r *http.Request) {
 		"active":    map[string]string{"model": cfg.Model.Default, "provider": cfg.Model.Provider},
 		"providers": providerList,
 	})
+}
+
+func legacyCustomProviderInUse(cfg *config.Config, p config.Provider) bool {
+	return cfg.Model.Provider == "custom" ||
+		p.Enabled ||
+		strings.TrimSpace(p.BaseURL) != "" ||
+		strings.TrimSpace(p.APIKey) != "" ||
+		strings.TrimSpace(p.APIKeyEnv) != "" ||
+		strings.TrimSpace(p.APIVersion) != "" ||
+		strings.TrimSpace(p.Region) != "" ||
+		len(p.Headers) > 0 ||
+		len(p.Models) > 0 ||
+		len(p.ModelMeta) > 0
 }
 
 func (s *Server) handleModelList(w http.ResponseWriter, r *http.Request) {
