@@ -375,35 +375,11 @@ func (c *geminiClient) endpoint(model, method string, stream bool) string {
 // use thinkingBudget token counts. includeThoughts requests thought summaries
 // when the endpoint exposes them (not all reverse proxies return thought text).
 func geminiThinkingConfig(model, effort string) map[string]any {
-	e := strings.ToLower(strings.TrimSpace(effort))
-	if e == "" {
+	enc := OfficialReasoning("gemini", "", model).Encode(effort)
+	if enc.Omit || len(enc.GeminiThinking) == 0 {
 		return nil
 	}
-	useLevel := geminiModelUsesThinkingLevel(model)
-	switch e {
-	case "none":
-		if useLevel {
-			return map[string]any{"thinkingLevel": "MINIMAL", "includeThoughts": false}
-		}
-		return map[string]any{"thinkingBudget": 0}
-	case "low":
-		if useLevel {
-			return map[string]any{"thinkingLevel": "LOW", "includeThoughts": true}
-		}
-		return map[string]any{"thinkingBudget": 2048, "includeThoughts": true}
-	case "medium":
-		if useLevel {
-			return map[string]any{"thinkingLevel": "MEDIUM", "includeThoughts": true}
-		}
-		return map[string]any{"thinkingBudget": 8192, "includeThoughts": true}
-	case "high":
-		if useLevel {
-			return map[string]any{"thinkingLevel": "HIGH", "includeThoughts": true}
-		}
-		return map[string]any{"thinkingBudget": 24576, "includeThoughts": true}
-	default:
-		return nil
-	}
+	return enc.GeminiThinking
 }
 
 func geminiModelUsesThinkingLevel(model string) bool {

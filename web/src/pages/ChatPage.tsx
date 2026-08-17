@@ -1485,7 +1485,7 @@ export default function ChatPage() {
           <div className="flex min-w-0 items-center gap-1.5">
             <RolePicker value={role} onChange={pickRole} compact />
             <ModelPicker onModelChange={setActiveModel} />
-            <ReasoningPicker value={reasoning} onChange={pickReasoning} compact />
+            <ReasoningPicker value={reasoning} onChange={pickReasoning} model={activeModel} compact />
             <ProjectPicker
               value={projectDir}
               onChange={(dir) => {

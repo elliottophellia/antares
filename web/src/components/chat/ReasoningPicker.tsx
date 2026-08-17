@@ -1,35 +1,50 @@
 import { useEffect, useRef, useState } from 'react'
 import { Brain, CaretDown, Check } from '@phosphor-icons/react'
+import { get } from '@/lib/api'
 import { cn } from '@/lib/utils'
 
-// Reasoning effort options. Empty value means "use the configured default"
-// (agent.reasoning_effort, then model.reasoning_effort). The rest map to the
-// provider's thinking budget: none disables thinking, low/medium/high raise it.
-const OPTIONS: { value: string; label: string; hint: string }[] = [
-  { value: '', label: 'Default', hint: 'Use the configured effort' },
-  { value: 'none', label: 'Off', hint: 'No reasoning' },
-  { value: 'low', label: 'Low', hint: 'Brief reasoning' },
-  { value: 'medium', label: 'Medium', hint: 'Balanced reasoning' },
-  { value: 'high', label: 'High', hint: 'Deep reasoning' },
-]
+interface Capability {
+  wire?: string
+  values?: string[]
+  default?: string
+}
+
+const LABELS: Record<string, { label: string; hint: string }> = {
+  none: { label: 'Off', hint: 'Disable reasoning' },
+  default: { label: 'Default', hint: 'Provider default on' },
+  minimal: { label: 'Minimal', hint: 'Least thinking' },
+  low: { label: 'Low', hint: 'Light reasoning' },
+  medium: { label: 'Medium', hint: 'Balanced reasoning' },
+  high: { label: 'High', hint: 'Deep reasoning' },
+  xhigh: { label: 'Extra high', hint: 'Highest advertised effort' },
+  max: { label: 'Max', hint: 'Maximum official effort' },
+}
 
 /**
- * Pick the reasoning effort for the next turn straight from the composer. The
- * choice rides on the message body (reasoning_effort) and overrides the
- * configured default for that turn only; it is remembered in localStorage so it
- * survives a reload. Mirrors RolePicker's compact chip style.
+ * Official-provider reasoning control. Options come from the server catalogue
+ * for the active official model. Custom endpoints get no hardcoded ladder.
  */
 export function ReasoningPicker({
   value,
   onChange,
+  model,
   compact = false,
 }: {
   value: string
   onChange: (effort: string) => void
+  model?: string
   compact?: boolean
 }) {
   const [open, setOpen] = useState(false)
+  const [cap, setCap] = useState<Capability>({})
   const ref = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    const q = model ? `?model=${encodeURIComponent(model)}` : ''
+    get<{ reasoning_capability?: Capability }>(`/model/reasoning-capability${q}`)
+      .then((d) => setCap(d.reasoning_capability ?? {}))
+      .catch(() => setCap({}))
+  }, [model])
 
   useEffect(() => {
     if (!open) return
@@ -40,18 +55,30 @@ export function ReasoningPicker({
     return () => document.removeEventListener('mousedown', onClick)
   }, [open])
 
-  const current = OPTIONS.find((o) => o.value === value) ?? OPTIONS[0]
+  const values = cap.values ?? []
+  useEffect(() => {
+    if (value && values.length > 0 && !values.includes(value)) {
+      onChange('')
+    }
+  }, [value, values, onChange])
 
-  const pick = (v: string) => {
-    onChange(v)
-    setOpen(false)
-  }
+  if (values.length === 0) return null
+
+  const options = [
+    { value: '', label: 'Auto', hint: cap.default ? `Provider default (${cap.default})` : 'Provider default' },
+    ...values.map((v) => ({
+      value: v,
+      label: LABELS[v]?.label ?? v,
+      hint: LABELS[v]?.hint ?? v,
+    })),
+  ]
+  const current = options.find((o) => o.value === value) ?? options[0]
 
   return (
     <div ref={ref} className="relative">
       <button
         onClick={() => setOpen((v) => !v)}
-        title="Reasoning effort"
+        title="Reasoning"
         className={cn(
           'flex items-center gap-1.5 border border-border bg-card transition-colors hover:border-primary/40 focus-visible:border-ring',
           compact
@@ -65,11 +92,14 @@ export function ReasoningPicker({
       </button>
 
       {open ? (
-        <div className="absolute bottom-full left-0 z-30 mb-2 w-52 overflow-y-auto rounded-[var(--radius-lg)] border border-border bg-card p-1 shadow-lg">
-          {OPTIONS.map((o) => (
+        <div className="absolute bottom-full left-0 z-30 mb-2 w-56 overflow-y-auto rounded-[var(--radius-lg)] border border-border bg-card p-1 shadow-lg">
+          {options.map((o) => (
             <button
-              key={o.value || 'default'}
-              onClick={() => pick(o.value)}
+              key={o.value || 'auto'}
+              onClick={() => {
+                onChange(o.value)
+                setOpen(false)
+              }}
               className={cn(
                 'flex w-full items-start gap-2 rounded-[var(--radius-sm)] px-2.5 py-1.5 text-left transition-colors hover:bg-muted',
                 value === o.value && 'bg-primary/5',

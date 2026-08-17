@@ -194,14 +194,7 @@ func (c *anthropicClient) buildBody(req Request, stream bool) map[string]any {
 			}
 		}
 	}
-	switch strings.ToLower(req.ReasoningEffort) {
-	case "low":
-		body["thinking"] = map[string]any{"type": "enabled", "budget_tokens": 2048}
-	case "medium":
-		body["thinking"] = map[string]any{"type": "enabled", "budget_tokens": 8192}
-	case "high":
-		body["thinking"] = map[string]any{"type": "enabled", "budget_tokens": 16384}
-	}
+	mergeEncoded(body, OfficialReasoning(c.opts.Kind, c.opts.BaseURL, req.Model).Encode(req.ReasoningEffort))
 	if _, ok := body["thinking"]; ok {
 		// Thinking requires headroom beyond the budget.
 		if maxTokens < 16384 {

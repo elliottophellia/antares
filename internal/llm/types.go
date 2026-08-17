@@ -77,7 +77,7 @@ type Request struct {
 	TopP              float64
 	MaxTokens         int
 	StopSequences     []string
-	ReasoningEffort   string // none|low|medium|high
+	ReasoningEffort   string // provider-native value; empty means Auto
 	ParallelToolCalls bool
 	PromptCache       bool
 	Extra             map[string]any
@@ -113,9 +113,9 @@ func (u Usage) ContextSize() int {
 
 // Response is the final result of a completion.
 type Response struct {
-	Content      string     `json:"content"`
-	Reasoning    string     `json:"reasoning,omitempty"`
-	ToolCalls    []ToolCall `json:"tool_calls,omitempty"`
+	Content   string     `json:"content"`
+	Reasoning string     `json:"reasoning,omitempty"`
+	ToolCalls []ToolCall `json:"tool_calls,omitempty"`
 	// ThoughtSignature is Gemini part-level metadata for the final text turn.
 	// Agent history must copy this onto the assistant Message for multi-turn
 	// continuity when the model is not making tool calls.
@@ -153,16 +153,17 @@ type Event struct {
 
 // ModelInfo describes one model offered by a provider.
 type ModelInfo struct {
-	ID            string  `json:"id"`
-	Name          string  `json:"name"`
-	Provider      string  `json:"provider"`
-	ContextWindow int     `json:"context_window"`
-	MaxOutput     int     `json:"max_output"`
-	InputCost     float64 `json:"input_cost"`  // USD per 1M tokens
-	OutputCost    float64 `json:"output_cost"` // USD per 1M tokens
-	Vision        bool    `json:"vision"`
-	Tools         bool    `json:"tools"`
-	Reasoning     bool    `json:"reasoning"`
+	ID            string                       `json:"id"`
+	Name          string                       `json:"name"`
+	Provider      string                       `json:"provider"`
+	ContextWindow int                          `json:"context_window"`
+	MaxOutput     int                          `json:"max_output"`
+	InputCost     float64                      `json:"input_cost"`  // USD per 1M tokens
+	OutputCost    float64                      `json:"output_cost"` // USD per 1M tokens
+	Vision        bool                         `json:"vision"`
+	Tools         bool                         `json:"tools"`
+	Reasoning     bool                         `json:"reasoning"`
+	ReasoningCap  *OfficialReasoningCapability `json:"reasoning_capability,omitempty"`
 }
 
 // Client is a provider adapter.

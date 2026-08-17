@@ -98,8 +98,9 @@ type chatRequest struct {
 	Role      string   `json:"role"`   // run this turn as a specialist
 	Model     string   `json:"model"`
 	Toolset   string   `json:"toolset"`
-	// ReasoningEffort overrides the configured effort for this turn (none|low|
-	// medium|high). Empty falls back to agent, then model config.
+	// ReasoningEffort is the provider-native reasoning value for this turn.
+	// Empty falls back to agent, then model config. Official adapters send
+	// only values that model advertises.
 	ReasoningEffort string `json:"reasoning_effort"`
 	UserID          string `json:"user_id"`
 	// ProjectDir turns a NEW session into a project session bound to this folder.
