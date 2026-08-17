@@ -136,7 +136,7 @@ func (s *sqlStore) ListSessions(ctx context.Context, f SessionFilter) ([]Session
 	}
 	defer rows.Close()
 
-	out := []Session{}
+	out := make([]Session, 0, limit)
 	for rows.Next() {
 		sess, err := scanSession(rows)
 		if err != nil {
@@ -326,7 +326,7 @@ func (s *sqlStore) SearchMessages(ctx context.Context, query string, limit int) 
 	}
 	defer rows.Close()
 
-	out := []SearchHit{}
+	out := make([]SearchHit, 0, limit)
 	for rows.Next() {
 		var (
 			h       SearchHit

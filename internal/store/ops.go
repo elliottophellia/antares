@@ -105,7 +105,7 @@ func (s *sqlStore) ListCronRuns(ctx context.Context, jobID string, limit int) ([
 		return nil, err
 	}
 	defer rows.Close()
-	out := []CronRun{}
+	out := make([]CronRun, 0, limit)
 	for rows.Next() {
 		var (
 			r        CronRun

@@ -62,7 +62,7 @@ func (s *sqlStore) ListMemories(ctx context.Context, scope, scopeKey string, lim
 		return nil, err
 	}
 	defer rows.Close()
-	out := []Memory{}
+	out := make([]Memory, 0, limit)
 	for rows.Next() {
 		m, err := scanMemory(rows)
 		if err != nil {
@@ -103,7 +103,7 @@ func (s *sqlStore) SearchMemories(ctx context.Context, query string, limit int) 
 		}
 	}
 	defer rows.Close()
-	out := []Memory{}
+	out := make([]Memory, 0, limit)
 	for rows.Next() {
 		m, err := scanMemory(rows)
 		if err != nil {

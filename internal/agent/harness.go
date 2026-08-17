@@ -708,7 +708,7 @@ func (a *Agent) Panel(ctx context.Context, question string, models []string, emi
 	}
 	wg.Wait()
 
-	var usable []PanelAnswer
+	usable := make([]PanelAnswer, 0, len(answers))
 	for _, ans := range answers {
 		if ans.Err == "" && strings.TrimSpace(ans.Answer) != "" {
 			usable = append(usable, ans)
