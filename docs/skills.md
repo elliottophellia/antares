@@ -46,6 +46,11 @@ will.
 Only names and descriptions go into the system prompt — the catalogue. Bodies
 are fetched on demand with the `skill` tool.
 
+
+Disabled names are omitted from new prompts and from the skill tool's list,
+search, read, and chain results. Re-enabling restores access. Already-sent model
+context cannot be retracted, and this preference does not restrict generic
+filesystem tools. Saving skill content does not enable a disabled name.
 Twenty skills therefore cost a few hundred tokens per turn rather than tens of
 thousands, and adding more does not degrade the conversation.
 
