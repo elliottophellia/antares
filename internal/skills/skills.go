@@ -318,6 +318,8 @@ type Filter struct {
 	Tech string
 	// Category matches the skill category exactly.
 	Category string
+	// EnabledOnly excludes disabled names before ranking and limiting results.
+	EnabledOnly bool
 }
 
 // Search finds skills by keyword, ranked by relevance. It matches across the
@@ -343,7 +345,7 @@ func (m *Manager) SearchFiltered(query string, f Filter, limit int) []Skill {
 	}
 	var hits []scored
 	for _, s := range list {
-		if !passesFilter(s, f) {
+		if (f.EnabledOnly && !s.Enabled) || !passesFilter(s, f) {
 			continue
 		}
 		hay := strings.ToLower(strings.Join([]string{

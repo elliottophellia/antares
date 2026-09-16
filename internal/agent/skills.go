@@ -31,20 +31,31 @@ func (a skillAdapter) List() []tools.SkillInfo {
 }
 
 func (a skillAdapter) Search(query string, limit int) []tools.SkillInfo {
-	return infos(a.m.Search(query, limit))
+	return infos(a.m.SearchFiltered(query, skills.Filter{EnabledOnly: true}, limit))
 }
 
 func (a skillAdapter) SearchFiltered(query, cwe, tech, category string, limit int) []tools.SkillInfo {
-	return infos(a.m.SearchFiltered(query, skills.Filter{CWE: cwe, Tech: tech, Category: category}, limit))
+	return infos(a.m.SearchFiltered(query, skills.Filter{CWE: cwe, Tech: tech, Category: category, EnabledOnly: true}, limit))
 }
 
 func (a skillAdapter) Chains(name string) []tools.SkillInfo {
-	return infos(a.m.Chains(name))
+	origin, ok := a.m.Get(name)
+	if !ok || !origin.Enabled {
+		return nil
+	}
+	items := a.m.Chains(name)
+	out := make([]tools.SkillInfo, 0, len(items))
+	for _, s := range items {
+		if s.Enabled {
+			out = append(out, toInfo(s))
+		}
+	}
+	return out
 }
 
 func (a skillAdapter) Read(name string) (tools.SkillInfo, string, bool) {
 	s, ok := a.m.Get(name)
-	if !ok {
+	if !ok || !s.Enabled {
 		return tools.SkillInfo{}, "", false
 	}
 	return toInfo(*s), s.Body, true
