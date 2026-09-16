@@ -9,7 +9,6 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
-	"sync"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -67,45 +66,8 @@ type Options struct {
 	ProjectDir string
 }
 
-// Manager loads and caches skills from configured and discovered directories.
-type Manager struct {
-	mu     sync.RWMutex
-	opts   Options
-	skills map[string]*Skill
-	usage  map[string]int
-}
-
 // ErrReadOnly is returned when a mutation targets an imported skill.
 var ErrReadOnly = errors.New("automatically discovered skills are read-only")
-
-// NewManager builds a manager over independent writable, bundled, user, and
-// project sources. Options are cloned so caller mutations cannot reconfigure it.
-func NewManager(opts Options) *Manager {
-	return &Manager{opts: cloneOptions(opts), skills: map[string]*Skill{}, usage: map[string]int{}}
-}
-
-func cloneOptions(opts Options) Options {
-	opts.Dirs = append([]string(nil), opts.Dirs...)
-	opts.PackDirs = append([]string(nil), opts.PackDirs...)
-	return opts
-}
-
-// Reload rescans every source and atomically publishes all successfully parsed
-// entries. A malformed entry does not hide valid entries from the same scan.
-func (m *Manager) Reload() error {
-	m.mu.RLock()
-	opts := cloneOptions(m.opts)
-	m.mu.RUnlock()
-
-	found, firstErr := discover(opts)
-	m.mu.Lock()
-	for name, sk := range found {
-		sk.UsageCount = m.usage[name]
-	}
-	m.skills = found
-	m.mu.Unlock()
-	return firstErr
-}
 
 // parseFile reads one skill file, tolerating a missing front matter block. Its
 // result is source-neutral: the scanner attaches logical path, fallback name,
@@ -168,27 +130,30 @@ func (m *Manager) Everyday() []Skill {
 	return kept
 }
 
-// List returns all known skills, sorted by name.
+// List returns all effective skills for this scope, sorted by name.
 func (m *Manager) List() []Skill {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	out := make([]Skill, 0, len(m.skills))
-	for _, s := range m.skills {
-		out = append(out, cloneSkill(s))
+	if m == nil {
+		return nil
 	}
+	m.state.mu.RLock()
+	defer m.state.mu.RUnlock()
+	out := m.effectiveListLocked()
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out
 }
 
-// Get returns one skill by name.
+// Get returns one effective skill by name.
 func (m *Manager) Get(name string) (*Skill, bool) {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	s, ok := m.skills[name]
+	if m == nil {
+		return nil, false
+	}
+	m.state.mu.RLock()
+	defer m.state.mu.RUnlock()
+	skill, ok := m.effectiveSkillLocked(name)
 	if !ok {
 		return nil, false
 	}
-	clone := cloneSkill(s)
+	clone := cloneSkillWithUsage(skill, m.state.usage[name])
 	return &clone, true
 }
 
@@ -204,6 +169,11 @@ func cloneSkill(s *Skill) Skill {
 
 // SetEnabled toggles a writable skill by rewriting its front matter.
 func (m *Manager) SetEnabled(name string, enabled bool) error {
+	if m == nil {
+		return errors.New("skills manager is unavailable")
+	}
+	m.state.scanMu.Lock()
+	defer m.state.scanMu.Unlock()
 	s, ok := m.Get(name)
 	if !ok {
 		return fmt.Errorf("skill %q not found", name)
@@ -248,12 +218,17 @@ func (m *Manager) SetEnabled(name string, enabled bool) error {
 	if err := os.WriteFile(s.Path, []byte(text), 0o644); err != nil {
 		return err
 	}
-	return m.Reload()
+	return m.reloadLocked()
 }
 
 // Save writes (or overwrites) a skill file in the first nonempty configured
 // directory. Imported effective names cannot be shadowed through this API.
 func (m *Manager) Save(name, description, body string, tags []string) (*Skill, error) {
+	if m == nil {
+		return nil, errors.New("skills manager is unavailable")
+	}
+	m.state.scanMu.Lock()
+	defer m.state.scanMu.Unlock()
 	if existing, ok := m.Get(name); ok && existing.ReadOnly {
 		return nil, fmt.Errorf("%w: %q", ErrReadOnly, name)
 	}
@@ -282,7 +257,7 @@ func (m *Manager) Save(name, description, body string, tags []string) (*Skill, e
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		return nil, err
 	}
-	if err := m.Reload(); err != nil {
+	if err := m.reloadLocked(); err != nil {
 		return nil, err
 	}
 	s, _ := m.Get(name)
@@ -290,9 +265,9 @@ func (m *Manager) Save(name, description, body string, tags []string) (*Skill, e
 }
 
 func (m *Manager) writeDir() string {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	for _, dir := range m.opts.Dirs {
+	m.state.mu.RLock()
+	defer m.state.mu.RUnlock()
+	for _, dir := range m.state.opts.Dirs {
 		if strings.TrimSpace(dir) != "" {
 			return dir
 		}
@@ -302,6 +277,11 @@ func (m *Manager) writeDir() string {
 
 // Delete removes a writable skill file.
 func (m *Manager) Delete(name string) error {
+	if m == nil {
+		return errors.New("skills manager is unavailable")
+	}
+	m.state.scanMu.Lock()
+	defer m.state.scanMu.Unlock()
 	s, ok := m.Get(name)
 	if !ok {
 		return fmt.Errorf("skill %q not found", name)
@@ -312,17 +292,17 @@ func (m *Manager) Delete(name string) error {
 	if err := os.Remove(s.Path); err != nil {
 		return err
 	}
-	return m.Reload()
+	return m.reloadLocked()
 }
 
 // MarkUsed increments the in-memory usage counter shown in the dashboard.
 func (m *Manager) MarkUsed(name string) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.usage[name]++
-	if s, ok := m.skills[name]; ok {
-		s.UsageCount = m.usage[name]
+	if m == nil {
+		return
 	}
+	m.state.mu.Lock()
+	defer m.state.mu.Unlock()
+	m.state.usage[name]++
 }
 
 // PromptBlock renders the enabled skills as a compact catalogue for the system
@@ -481,14 +461,19 @@ func scoreSkill(s Skill, words []string) int {
 // Chains resolves a skill's chains_with entries to the skills that exist, so
 // the agent can see which follow-on techniques compound with this one.
 func (m *Manager) Chains(name string) []Skill {
-	s, ok := m.Get(name)
+	if m == nil {
+		return nil
+	}
+	m.state.mu.RLock()
+	defer m.state.mu.RUnlock()
+	skill, ok := m.effectiveSkillLocked(name)
 	if !ok {
 		return nil
 	}
-	out := make([]Skill, 0, len(s.ChainsWith))
-	for _, next := range s.ChainsWith {
-		if ns, ok := m.Get(next); ok {
-			out = append(out, *ns)
+	out := make([]Skill, 0, len(skill.ChainsWith))
+	for _, next := range skill.ChainsWith {
+		if chained, ok := m.effectiveSkillLocked(next); ok {
+			out = append(out, cloneSkillWithUsage(chained, m.state.usage[next]))
 		}
 	}
 	return out
@@ -515,18 +500,21 @@ func matchesAll(hay, query string) bool {
 
 // Categories lists the pack skill categories with their counts, for browsing.
 func (m *Manager) Categories() map[string]int {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
 	out := map[string]int{}
-	for _, s := range m.skills {
-		if !s.Pack {
+	if m == nil {
+		return out
+	}
+	m.state.mu.RLock()
+	defer m.state.mu.RUnlock()
+	for skill := range m.effectiveSkillsLocked {
+		if !skill.Pack {
 			continue
 		}
-		cat := s.Category
-		if cat == "" {
-			cat = "uncategorised"
+		category := skill.Category
+		if category == "" {
+			category = "uncategorised"
 		}
-		out[cat]++
+		out[category]++
 	}
 	return out
 }
@@ -537,18 +525,21 @@ func (m *Manager) Library(category string, offset, limit int) ([]Skill, int) {
 	if limit <= 0 {
 		limit = 50
 	}
-	m.mu.RLock()
-	all := make([]Skill, 0)
-	for _, s := range m.skills {
-		if !s.Pack {
-			continue
-		}
-		if category != "" && !strings.EqualFold(s.Category, category) {
-			continue
-		}
-		all = append(all, *s)
+	if m == nil {
+		return nil, 0
 	}
-	m.mu.RUnlock()
+	m.state.mu.RLock()
+	all := make([]Skill, 0)
+	for skill := range m.effectiveSkillsLocked {
+		if !skill.Pack {
+			continue
+		}
+		if category != "" && !strings.EqualFold(skill.Category, category) {
+			continue
+		}
+		all = append(all, cloneSkillWithUsage(skill, m.state.usage[skill.Name]))
+	}
+	m.state.mu.RUnlock()
 
 	sort.Slice(all, func(i, j int) bool { return all[i].Name < all[j].Name })
 	total := len(all)
@@ -564,11 +555,14 @@ func (m *Manager) Library(category string, offset, limit int) ([]Skill, int) {
 
 // PackCount reports how many skills came from the bundled library.
 func (m *Manager) PackCount() int {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
+	if m == nil {
+		return 0
+	}
+	m.state.mu.RLock()
+	defer m.state.mu.RUnlock()
 	n := 0
-	for _, s := range m.skills {
-		if s.Pack {
+	for skill := range m.effectiveSkillsLocked {
+		if skill.Pack {
 			n++
 		}
 	}
@@ -577,11 +571,14 @@ func (m *Manager) PackCount() int {
 
 // Count reports how many skills are enabled.
 func (m *Manager) Count() int {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
+	if m == nil {
+		return 0
+	}
+	m.state.mu.RLock()
+	defer m.state.mu.RUnlock()
 	n := 0
-	for _, s := range m.skills {
-		if s.Enabled {
+	for skill := range m.effectiveSkillsLocked {
+		if skill.Enabled {
 			n++
 		}
 	}

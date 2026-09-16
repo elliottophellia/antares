@@ -40,13 +40,46 @@ var projectSkillRoots = [][]string{
 	{".github", "skills"},
 }
 
-// discover scans roots from low to high priority. Later occurrences of a name
-// replace earlier ones, while malformed entries leave the rest of the freshly
-// discovered catalogue available.
-func discover(opts Options) (map[string]*Skill, error) {
+// discoverShared scans each shared source kind independently. Lower-priority
+// entries remain in their layer so removing an override reveals them later.
+func discoverShared(opts Options) (bundled, user, configured map[string]*Skill, firstErr error) {
+	bundled, err := discoverRoots(rootsForPaths(opts.PackDirs, sourcePack))
+	firstErr = err
+	userRoots := make([]string, 0, len(userSkillRoots))
+	if strings.TrimSpace(opts.UserHome) != "" {
+		for _, parts := range userSkillRoots {
+			userRoots = append(userRoots, filepath.Join(append([]string{opts.UserHome}, parts...)...))
+		}
+	}
+	user, err = discoverRoots(rootsForPaths(userRoots, sourceUser))
+	if firstErr == nil {
+		firstErr = err
+	}
+	configured, err = discoverRoots(rootsForPaths(opts.Dirs, sourceConfigured))
+	if firstErr == nil {
+		firstErr = err
+	}
+	return bundled, user, configured, firstErr
+}
+
+// discoverProject scans only the conventional roots beneath one normalized
+// logical project directory.
+func discoverProject(projectDir string) (map[string]*Skill, error) {
+	paths := make([]string, 0, len(projectSkillRoots))
+	for _, parts := range projectSkillRoots {
+		paths = append(paths, filepath.Join(append([]string{projectDir}, parts...)...))
+	}
+	return discoverRoots(rootsForPaths(paths, sourceProject))
+}
+
+func rootsForPaths(paths []string, kind sourceKind) []sourceRoot {
+	return appendSourceRoots(nil, paths, kind)
+}
+
+func discoverRoots(roots []sourceRoot) (map[string]*Skill, error) {
 	found := make(map[string]*Skill)
 	var firstErr error
-	for _, root := range discoveryRoots(opts) {
+	for _, root := range roots {
 		if err := scanRoot(root, func(skill *Skill) {
 			found[skill.Name] = skill
 		}); err != nil && firstErr == nil {
@@ -54,26 +87,6 @@ func discover(opts Options) (map[string]*Skill, error) {
 		}
 	}
 	return found, firstErr
-}
-
-func discoveryRoots(opts Options) []sourceRoot {
-	roots := make([]sourceRoot, 0, len(opts.PackDirs)+len(opts.Dirs)+12)
-	roots = appendSourceRoots(roots, opts.PackDirs, sourcePack)
-	if strings.TrimSpace(opts.UserHome) != "" {
-		paths := make([]string, 0, len(userSkillRoots))
-		for _, parts := range userSkillRoots {
-			paths = append(paths, filepath.Join(append([]string{opts.UserHome}, parts...)...))
-		}
-		roots = appendSourceRoots(roots, paths, sourceUser)
-	}
-	if strings.TrimSpace(opts.ProjectDir) != "" {
-		paths := make([]string, 0, len(projectSkillRoots))
-		for _, parts := range projectSkillRoots {
-			paths = append(paths, filepath.Join(append([]string{opts.ProjectDir}, parts...)...))
-		}
-		roots = appendSourceRoots(roots, paths, sourceProject)
-	}
-	return appendSourceRoots(roots, opts.Dirs, sourceConfigured)
 }
 
 // appendSourceRoots drops equivalent roots only within one source kind. Walking

@@ -21,11 +21,10 @@ import (
 // buildSystemPrompt assembles identity, environment, memory, and tool guidance.
 func (a *Agent) buildSystemPrompt(ctx context.Context, req Request, sess *store.Session, active []tools.Tool) string {
 	cfg := a.config()
-	// Snapshot the live-replaceable services once, so a mid-prompt reload
-	// (SetRAG / SetSkills) cannot leave the nil check disagreeing with the
-	// use below.
+	// Snapshot the live-replaceable RAG service once, so a mid-prompt reload
+	// cannot leave the nil check disagreeing with the use below. The skills
+	// manager is likewise snapshotted through skillsForSession when enabled.
 	ragProvider := a.RAG()
-	skillsMgr := a.Skills()
 	var b strings.Builder
 
 	b.WriteString("You are ")
@@ -178,11 +177,13 @@ You are running as a worker for another agent. Nobody is watching your stream.
 		}
 	}
 
-	if skillsMgr != nil && cfg.Skills.Enabled {
-		if catalogue := skillsMgr.PromptBlock(60); catalogue != "" {
-			b.WriteString("\n## Your skills\n\n")
-			b.WriteString("Procedures you have learned. Read one with the skill tool before following it.\n\n")
-			b.WriteString(catalogue)
+	if cfg.Skills.Enabled {
+		if skillsMgr := a.skillsForSession(sess); skillsMgr != nil {
+			if catalogue := skillsMgr.PromptBlock(60); catalogue != "" {
+				b.WriteString("\n## Your skills\n\n")
+				b.WriteString("Procedures you have learned. Read one with the skill tool before following it.\n\n")
+				b.WriteString(catalogue)
+			}
 		}
 	}
 

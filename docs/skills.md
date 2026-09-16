@@ -73,8 +73,10 @@ Antares also discovers these directories automatically, in the order shown:
 | `.omp/agent/managed-skills` | `.github/skills` |
 
 Automatic roots use the OS home independently of `ANTARES_HOME`; the OpenCode
-home path does not follow `XDG_CONFIG_HOME`. Project roots are beneath the startup
-directory, without searching parent directories.
+home path does not follow `XDG_CONFIG_HOME`. Project roots are beneath the chat's
+persisted project folder, without searching parent directories. Resumed chats keep
+that binding. The dashboard and chats without a project use the startup directory;
+relative project paths resolve against that startup directory.
 
 Automatic sources accept only `SKILL.md` (case-insensitive), recursively. Supporting
 Markdown and hidden descendants are ignored. A missing name uses the logical parent
@@ -124,6 +126,10 @@ learned it says so and writes nothing.
 /skills                 what is installed
 /skills deploy          filter
 ```
+
+`/skills` uses the current session's project catalog, including for hub-installed
+checks. A project session sees shared user/configured skills and its own project
+skills, not the startup project's or another chat project's procedures.
 
 The dashboard's Skills page lists them with a switch each, shows the body
 inline, and has a Browse button for the hub.
