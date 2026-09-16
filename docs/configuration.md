@@ -234,12 +234,18 @@ which would leave the model reading a call with no answer.
 skills:
   enabled: true
   dirs: [~/.antares/skills]
+  disabled: []
   auto_create: true
   creation_nudge_interval: 20
 ```
 
 `dirs` is searched in order and later directories win, so a personal copy can
 override a shared one. See [Skills](skills.md).
+
+`disabled` contains exact, case-sensitive names turned off for this profile,
+including names whose files are temporarily absent. Dashboard switches update
+this list without changing source files. Legacy configured opt-outs are imported
+once; see [Managing skills](skills.md#managing-them).
 
 ## Server
 

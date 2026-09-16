@@ -24,6 +24,7 @@ type managerState struct {
 	projectErrs map[string]error
 	scopes      map[string]*Manager
 	usage       map[string]int
+	disabled    map[string]struct{}
 	cache       map[string]cachedSkillFile
 	root        *Manager
 	sharedOnly  *Manager
@@ -60,6 +61,7 @@ func NewManager(opts Options) *Manager {
 		projectErrs:    map[string]error{},
 		scopes:         map[string]*Manager{},
 		usage:          map[string]int{},
+		disabled:       map[string]struct{}{},
 		cache:          map[string]cachedSkillFile{},
 		startupBase:    defaultProject,
 		defaultProject: defaultProject,
@@ -242,13 +244,15 @@ func (m *Manager) effectiveListLocked() []Skill {
 	capacity := len(m.state.configured) + len(m.state.user) + len(m.state.bundled) + len(m.selectedProjectLocked())
 	out := make([]Skill, 0, capacity)
 	for skill := range m.effectiveSkillsLocked {
-		out = append(out, cloneSkillWithUsage(skill, m.state.usage[skill.Name]))
+		out = append(out, m.cloneEffectiveSkillLocked(skill))
 	}
 	return out
 }
 
-func cloneSkillWithUsage(skill *Skill, usage int) Skill {
+func (m *Manager) cloneEffectiveSkillLocked(skill *Skill) Skill {
 	clone := cloneSkill(skill)
-	clone.UsageCount = usage
+	clone.UsageCount = m.state.usage[skill.Name]
+	_, disabled := m.state.disabled[skill.Name]
+	clone.Enabled = !disabled
 	return clone
 }

@@ -70,12 +70,18 @@ func TestProjectScopeIsolationAndPrecedence(t *testing.T) {
 	if got := requireSkill(t, relative, "collision"); got.Body != "A_COLLISION" {
 		t.Fatalf("relative A collision = %q", got.Body)
 	}
+	manager.SetDisabled([]string{"collision"})
+	for label, scoped := range map[string]*Manager{"startup": manager, "a": a, "b": b, "relative-a": relative} {
+		if requireSkill(t, scoped, "collision").Enabled {
+			t.Fatalf("%s did not observe shared disabled state", label)
+		}
+	}
 	search := a.Search("collision", 1)
 	if len(search) != 1 || search[0].Body != "A_COLLISION" {
 		t.Fatalf("A search winner = %+v", search)
 	}
-	if got := a.Count(); got != len(a.List()) {
-		t.Fatalf("A enabled count = %d, list length = %d", got, len(a.List()))
+	if got := a.Count(); got != len(a.List())-1 {
+		t.Fatalf("A enabled count = %d, list length = %d with one disabled", got, len(a.List()))
 	}
 	var readers sync.WaitGroup
 	for range 8 {
@@ -108,16 +114,20 @@ func TestProjectScopeIsolationAndPrecedence(t *testing.T) {
 	writeFile(t, filepath.Join(configured, "collision.md"), skillDocument("collision", "configured", "CONFIGURED_COLLISION", true))
 	mustReload(t, a)
 	for label, scoped := range map[string]*Manager{"startup": manager, "a": a, "b": b} {
-		if got := requireSkill(t, scoped, "collision"); got.Body != "CONFIGURED_COLLISION" || got.ReadOnly || got.Pack {
-			t.Fatalf("%s configured winner = %+v", label, got)
+		if got := requireSkill(t, scoped, "collision"); got.Body != "CONFIGURED_COLLISION" || got.ReadOnly || got.Pack || got.Enabled {
+			t.Fatalf("%s configured disabled winner = %+v", label, got)
 		}
 	}
 	if err := os.Remove(filepath.Join(configured, "collision.md")); err != nil {
 		t.Fatal(err)
 	}
 	mustReload(t, b)
-	if requireSkill(t, a, "collision").Body != "A_COLLISION" || requireSkill(t, b, "collision").Body != "B_COLLISION" || requireSkill(t, manager, "collision").Body != "STARTUP_COLLISION" {
-		t.Fatal("removing configured override did not reveal each scope's project layer")
+	for label, scoped := range map[string]*Manager{"startup": manager, "a": a, "b": b} {
+		got := requireSkill(t, scoped, "collision")
+		want := map[string]string{"startup": "STARTUP_COLLISION", "a": "A_COLLISION", "b": "B_COLLISION"}[label]
+		if got.Body != want || got.Enabled {
+			t.Fatalf("%s fallback after configured removal = %+v, want body %q still disabled", label, got, want)
+		}
 	}
 
 	saved, err := a.Save("shared saved", "saved", "SAVED_BODY", []string{"saved"})
@@ -132,12 +142,10 @@ func TestProjectScopeIsolationAndPrecedence(t *testing.T) {
 			t.Fatalf("%s did not observe scoped Save: %+v", label, got)
 		}
 	}
-	if err := b.SetEnabled("shared-saved", false); err != nil {
-		t.Fatal(err)
-	}
+	b.SetDisabled([]string{"collision", "shared-saved"})
 	for label, scoped := range map[string]*Manager{"startup": manager, "a": a, "b": b} {
 		if requireSkill(t, scoped, "shared-saved").Enabled {
-			t.Fatalf("%s did not observe scoped toggle", label)
+			t.Fatalf("%s did not observe scoped SetDisabled", label)
 		}
 	}
 	if err := manager.Delete("shared-saved"); err != nil {

@@ -643,6 +643,8 @@ type Plugins struct {
 type Skills struct {
 	Enabled               bool     `yaml:"enabled" json:"enabled"`
 	Dirs                  []string `yaml:"dirs" json:"dirs"`
+	Disabled              []string `yaml:"disabled" json:"disabled"`
+	FrontmatterMigrated   bool     `yaml:"frontmatter_migrated" json:"frontmatter_migrated"`
 	CreationNudgeInterval int      `yaml:"creation_nudge_interval" json:"creation_nudge_interval"`
 	AutoCreate            bool     `yaml:"auto_create" json:"auto_create"`
 	HubSources            []string `yaml:"hub_sources" json:"hub_sources"`

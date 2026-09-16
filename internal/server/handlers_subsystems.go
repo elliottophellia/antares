@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 	"time"
@@ -50,11 +51,7 @@ func (s *Server) handleListSkills(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleToggleSkill(w http.ResponseWriter, r *http.Request) {
-	mgr := s.currentSkills()
-	if mgr == nil {
-		writeError(w, http.StatusServiceUnavailable, errSkillsOff)
-		return
-	}
+
 	var body struct {
 		Name    string `json:"name"`
 		Enabled bool   `json:"enabled"`
@@ -63,12 +60,25 @@ func (s *Server) handleToggleSkill(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
-	if err := mgr.SetEnabled(body.Name, body.Enabled); err != nil {
-		status := http.StatusBadRequest
-		if errors.Is(err, skills.ErrReadOnly) {
-			status = http.StatusForbidden
-		}
-		writeError(w, status, err)
+
+	s.skillsConfigMu.Lock()
+	defer s.skillsConfigMu.Unlock()
+
+	manager := s.currentSkills()
+	if manager == nil {
+		writeError(w, http.StatusServiceUnavailable, errSkillsOff)
+		return
+	}
+	if _, ok := manager.Get(body.Name); !ok {
+		writeError(w, http.StatusBadRequest, fmt.Errorf("skill %q not found", body.Name))
+		return
+	}
+	if _, err := config.SetSkillEnabled(body.Name, body.Enabled); err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	if err := s.applyReload(); err != nil {
+		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})

@@ -146,8 +146,15 @@ func TestDiscoveryRootsAndFormats(t *testing.T) {
 	if requireSkill(t, m, "native-flat").ReadOnly {
 		t.Fatal("configured flat Markdown must remain writable")
 	}
+	if disabled := requireSkill(t, m, "disabled-native"); !disabled.Enabled {
+		t.Fatalf("legacy enabled header affected runtime state: %+v", disabled)
+	}
+	if got := m.LegacyDisabled(); len(got) != 1 || got[0] != "disabled-native" {
+		t.Fatalf("LegacyDisabled() = %v, want configured legacy input", got)
+	}
+	m.SetDisabled([]string{"disabled-native"})
 	if strings.Contains(m.PromptBlock(0), "disabled-native") {
-		t.Fatal("disabled skill appeared in PromptBlock")
+		t.Fatal("config-disabled skill appeared in PromptBlock")
 	}
 	requireSkill(t, m, "valid-beside-broken")
 	requireSkill(t, m, "hidden-root-visible")
@@ -243,6 +250,7 @@ func TestDiscoveryPrecedenceAndReadOnly(t *testing.T) {
 		t.Fatalf("explicit occurrence was suppressed by equivalent pack root: %+v", got)
 	}
 	m.MarkUsed("winner")
+	m.SetDisabled([]string{"winner"})
 	for i := len(fixtures) - 1; i > 0; i-- {
 		if err := os.Remove(fixtures[i].path); err != nil {
 			t.Fatal(err)
@@ -250,8 +258,8 @@ func TestDiscoveryPrecedenceAndReadOnly(t *testing.T) {
 		mustReload(t, m)
 		got := requireSkill(t, m, "winner")
 		want := fixtures[i-1].body
-		if got.Body != want || got.UsageCount != 1 {
-			t.Fatalf("after removing %q winner = body %q usage %d, want %q usage 1", fixtures[i].body, got.Body, got.UsageCount, want)
+		if got.Body != want || got.UsageCount != 1 || got.Enabled {
+			t.Fatalf("after removing %q winner = body %q usage %d enabled %v, want %q usage 1 disabled", fixtures[i].body, got.Body, got.UsageCount, got.Enabled, want)
 		}
 		wantPack := i-1 == 0
 		wantReadOnly := i-1 >= 1 && i-1 <= 4
@@ -273,11 +281,16 @@ func TestDiscoveryPrecedenceAndReadOnly(t *testing.T) {
 	packMutablePath := filepath.Join(pack, "pack-mutable.md")
 	writeFile(t, packMutablePath, skillDocument("pack-mutable", "pack", "PACK_MUTABLE", true))
 	mustReload(t, m)
-	if err := m.SetEnabled("pack-mutable", false); err != nil {
-		t.Fatalf("pack skill must retain existing mutability: %v", err)
+	packOriginal, err := os.ReadFile(packMutablePath)
+	if err != nil {
+		t.Fatal(err)
 	}
+	m.SetDisabled([]string{"pack-mutable"})
 	if requireSkill(t, m, "pack-mutable").Enabled {
-		t.Fatal("pack toggle did not update the effective skill")
+		t.Fatal("pack preference did not update the effective skill")
+	}
+	if raw, err := os.ReadFile(packMutablePath); err != nil || string(raw) != string(packOriginal) {
+		t.Fatalf("SetDisabled changed pack source: err=%v bytes=%q", err, raw)
 	}
 	importedPath := filepath.Join(user1, "imported", "SKILL.md")
 	original := skillDocument("imported", "imported", "ORIGINAL", true)
@@ -294,7 +307,6 @@ func TestDiscoveryPrecedenceAndReadOnly(t *testing.T) {
 		run  func() error
 	}{
 		{"save", func() error { _, err := m.Save("imported", "changed", "changed", nil); return err }},
-		{"toggle", func() error { return m.SetEnabled("imported", false) }},
 		{"delete", func() error { return m.Delete("imported") }},
 	}
 	for _, operation := range operations {
@@ -302,6 +314,8 @@ func TestDiscoveryPrecedenceAndReadOnly(t *testing.T) {
 			t.Fatalf("%s error = %v, want ErrReadOnly", operation.name, err)
 		}
 	}
+	m.SetDisabled([]string{"imported"})
+	assertSkillDisabled(t, m, "imported")
 	if _, err := m.Save("Mixed Name", "changed", "changed", nil); !errors.Is(err, ErrReadOnly) {
 		t.Fatalf("Save using unsanitized imported metadata name error = %v, want ErrReadOnly", err)
 	}
@@ -333,9 +347,8 @@ func TestDiscoveryPrecedenceAndReadOnly(t *testing.T) {
 	if requireSkill(t, override, "imported").ReadOnly {
 		t.Fatal("explicit configuration of an automatic root must make its winner writable")
 	}
-	if err := override.SetEnabled("imported", false); err != nil {
-		t.Fatalf("explicit override toggle failed: %v", err)
-	}
+	override.SetDisabled([]string{"imported"})
+	assertSkillDisabled(t, override, "imported")
 
 	noWritable := NewManager(Options{Dirs: []string{"", "  "}, UserHome: home})
 	mustReload(t, noWritable)

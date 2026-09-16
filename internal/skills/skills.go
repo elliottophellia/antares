@@ -39,14 +39,15 @@ type Skill struct {
 	Pack bool `json:"pack,omitempty"`
 	// ReadOnly marks automatically discovered user/project skills. Pack roots
 	// preserve their existing management behavior.
-	ReadOnly bool `json:"read_only"`
+	ReadOnly       bool `json:"read_only"`
+	legacyDisabled bool
 }
 
 // frontMatter is the YAML header of a skill file.
 type frontMatter struct {
 	Name        string   `yaml:"name"`
 	Description string   `yaml:"description"`
-	Enabled     *bool    `yaml:"enabled"`
+	Enabled     *bool    `yaml:"enabled,omitempty"`
 	Source      string   `yaml:"source"`
 	Category    string   `yaml:"category"`
 	Tags        []string `yaml:"tags"`
@@ -97,8 +98,8 @@ func parseFile(path string) (*Skill, error) {
 			s.TechStack, s.CWEIDs, s.ChainsWith = fm.TechStack, fm.CWEIDs, fm.ChainsWith
 			s.OWASPID = fm.OWASPID
 			s.Source = fm.Source
-			if fm.Enabled != nil {
-				s.Enabled = *fm.Enabled
+			if fm.Enabled != nil && !*fm.Enabled {
+				s.legacyDisabled = true
 			}
 		}
 	}
@@ -153,7 +154,7 @@ func (m *Manager) Get(name string) (*Skill, bool) {
 	if !ok {
 		return nil, false
 	}
-	clone := cloneSkillWithUsage(skill, m.state.usage[name])
+	clone := m.cloneEffectiveSkillLocked(skill)
 	return &clone, true
 }
 
@@ -167,58 +168,38 @@ func cloneSkill(s *Skill) Skill {
 	return clone
 }
 
-// SetEnabled toggles a writable skill by rewriting its front matter.
-func (m *Manager) SetEnabled(name string, enabled bool) error {
+// SetDisabled replaces the profile-wide set of disabled logical skill names.
+// Names are matched exactly after source precedence has selected a winner.
+func (m *Manager) SetDisabled(names []string) {
 	if m == nil {
-		return errors.New("skills manager is unavailable")
+		return
 	}
-	m.state.scanMu.Lock()
-	defer m.state.scanMu.Unlock()
-	s, ok := m.Get(name)
-	if !ok {
-		return fmt.Errorf("skill %q not found", name)
+	disabled := make(map[string]struct{}, len(names))
+	for _, name := range names {
+		disabled[name] = struct{}{}
 	}
-	if s.ReadOnly {
-		return fmt.Errorf("%w: %q", ErrReadOnly, name)
-	}
-	raw, err := os.ReadFile(s.Path)
-	if err != nil {
-		return err
-	}
-	text := strings.ReplaceAll(string(raw), "\r\n", "\n")
+	m.state.mu.Lock()
+	m.state.disabled = disabled
+	m.state.mu.Unlock()
+}
 
-	value := "false"
-	if enabled {
-		value = "true"
+// LegacyDisabled returns selected configured-source names carrying the retired
+// enabled: false header. The header is migration input only and never affects
+// the manager's effective state.
+func (m *Manager) LegacyDisabled() []string {
+	if m == nil {
+		return nil
 	}
-	switch {
-	case strings.HasPrefix(text, "---\n"):
-		end := strings.Index(text[4:], "\n---")
-		if end < 0 {
-			return errors.New("front matter is not terminated")
+	m.state.mu.RLock()
+	defer m.state.mu.RUnlock()
+	out := make([]string, 0)
+	for name, skill := range m.state.configured {
+		if skill.legacyDisabled {
+			out = append(out, name)
 		}
-		header := text[4 : 4+end]
-		rest := text[4+end:]
-		if strings.Contains(header, "enabled:") {
-			lines := strings.Split(header, "\n")
-			for i, line := range lines {
-				if strings.HasPrefix(strings.TrimSpace(line), "enabled:") {
-					lines[i] = "enabled: " + value
-				}
-			}
-			header = strings.Join(lines, "\n")
-		} else {
-			header += "\nenabled: " + value
-		}
-		text = "---\n" + header + rest
-	default:
-		text = "---\nname: " + s.Name + "\nenabled: " + value + "\n---\n\n" + text
 	}
-
-	if err := os.WriteFile(s.Path, []byte(text), 0o644); err != nil {
-		return err
-	}
-	return m.reloadLocked()
+	sort.Strings(out)
+	return out
 }
 
 // Save writes (or overwrites) a skill file in the first nonempty configured
@@ -473,7 +454,7 @@ func (m *Manager) Chains(name string) []Skill {
 	out := make([]Skill, 0, len(skill.ChainsWith))
 	for _, next := range skill.ChainsWith {
 		if chained, ok := m.effectiveSkillLocked(next); ok {
-			out = append(out, cloneSkillWithUsage(chained, m.state.usage[next]))
+			out = append(out, m.cloneEffectiveSkillLocked(chained))
 		}
 	}
 	return out
@@ -537,7 +518,7 @@ func (m *Manager) Library(category string, offset, limit int) ([]Skill, int) {
 		if category != "" && !strings.EqualFold(skill.Category, category) {
 			continue
 		}
-		all = append(all, cloneSkillWithUsage(skill, m.state.usage[skill.Name]))
+		all = append(all, m.cloneEffectiveSkillLocked(skill))
 	}
 	m.state.mu.RUnlock()
 
@@ -578,7 +559,7 @@ func (m *Manager) Count() int {
 	defer m.state.mu.RUnlock()
 	n := 0
 	for skill := range m.effectiveSkillsLocked {
-		if skill.Enabled {
+		if _, disabled := m.state.disabled[skill.Name]; !disabled {
 			n++
 		}
 	}

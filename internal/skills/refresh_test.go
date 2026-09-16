@@ -93,25 +93,25 @@ func TestWatchRefreshTransitions(t *testing.T) {
 	if !strings.Contains(manager.PromptBlock(0), "live") {
 		t.Fatal("PromptBlock did not expose enabled watched skill")
 	}
+	manager.SetDisabled([]string{"live"})
+	assertSkillDisabled(t, manager, "live")
 
-	writeFile(t, livePath, skillDocument("renamed-live", "changed description", "EDITED_BODY_LONGER", false))
+	writeFile(t, livePath, skillDocument("live", "changed description", "EDITED_BODY_LONGER", false))
 	eventually(t, func() bool {
-		_, old := manager.Get("live")
-		renamed, ok := manager.Get("renamed-live")
-		return !old && ok && renamed.Body == "EDITED_BODY_LONGER" && !renamed.Enabled &&
-			len(manager.Search("changed description", 5)) == 1 && !strings.Contains(manager.PromptBlock(0), "renamed-live")
-	}, "metadata/body edit to update every query surface")
+		updated, ok := manager.Get("live")
+		return ok && updated.Body == "EDITED_BODY_LONGER" && !updated.Enabled &&
+			len(manager.Search("changed description", 5)) == 1 && !strings.Contains(manager.PromptBlock(0), "live")
+	}, "metadata/body edit to refresh while config-disabled state survives")
 
 	atomicTemp := filepath.Join(filepath.Dir(livePath), "replacement.tmp")
-	writeFile(t, atomicTemp, skillDocument("atomic-live", "atomic description", "ATOMIC_BODY", true))
+	writeFile(t, atomicTemp, skillDocument("live", "atomic description", "ATOMIC_BODY", true))
 	if err := os.Rename(atomicTemp, livePath); err != nil {
 		t.Fatal(err)
 	}
 	eventually(t, func() bool {
-		_, old := manager.Get("renamed-live")
-		atomic, ok := manager.Get("atomic-live")
-		return !old && ok && atomic.Body == "ATOMIC_BODY" && strings.Contains(manager.PromptBlock(0), "atomic-live")
-	}, "atomic replacement")
+		atomic, ok := manager.Get("live")
+		return ok && atomic.Body == "ATOMIC_BODY" && !atomic.Enabled && !strings.Contains(manager.PromptBlock(0), "live")
+	}, "atomic replacement preserving disabled state")
 
 	projectAPath := writeProjectSkill(t, projectA, "a-only", "A_INITIAL")
 	eventuallySkill(t, a, "a-only", func(skill *Skill) bool { return skill.Body == "A_INITIAL" })
@@ -132,6 +132,11 @@ func TestWatchRefreshTransitions(t *testing.T) {
 	newDirs := []string{configuredB}
 	if err := manager.Reconfigure(Options{Dirs: newDirs, UserHome: home, ProjectDir: newStartup}); err != nil {
 		t.Fatal(err)
+	}
+	for label, scoped := range map[string]*Manager{"root": manager, "A": a, "B": b} {
+		if requireSkill(t, scoped, "live").Enabled {
+			t.Fatalf("%s reconfigure cleared shared disabled state", label)
+		}
 	}
 	newDirs[0] = configuredA
 	if _, ok := manager.Get("old-configured"); ok {
@@ -159,8 +164,8 @@ func TestWatchRefreshTransitions(t *testing.T) {
 		t.Fatal(err)
 	}
 	eventually(t, func() bool {
-		_, ok := manager.Get("atomic-live")
-		return !ok && len(manager.Search("atomic description", 5)) == 0 && !strings.Contains(manager.PromptBlock(0), "atomic-live")
+		_, ok := manager.Get("live")
+		return !ok && len(manager.Search("atomic description", 5)) == 0 && !strings.Contains(manager.PromptBlock(0), "live")
 	}, "watched removal")
 	var readers sync.WaitGroup
 	for range 12 {

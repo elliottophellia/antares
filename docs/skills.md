@@ -36,7 +36,6 @@ Port 8787 already in use usually means the old process did not exit. Check
 | `description` | **The most important line.** How the agent decides whether this is relevant |
 | `tags` | For your own browsing |
 | `triggers` | Words that make it more likely to surface |
-| `enabled` | `false` keeps it on disk but out of the prompt |
 
 The description does the work. "Deployment stuff" will not get picked; "Deploy
 this project to the home server. Use when asked to deploy, ship, or release."
@@ -86,8 +85,10 @@ For duplicate names, priority from lowest to highest is bundled security pack,
 automatic user roots, automatic project roots, then configured `dirs`. Later roots
 within each group win; files within a root are visited in lexical order.
 
-Automatically discovered skills are read-only through skill management: save,
-toggle, and delete refuse to modify or shadow them. Edit the original file instead.
+Automatically discovered skill content is read-only through skill management:
+save and delete refuse to modify or shadow it. The toggle API changes only Antares
+configuration, including for these borrowed skills. Edit the original file to
+change its content.
 An explicitly configured copy wins and remains writable, including when its directory
 is also an automatic root. Hub installs and `/learn` still write an Antares copy
 to their configured/native destination.
@@ -142,6 +143,16 @@ while visible. Imported cards show a Read-only badge and open a viewer with the
 source path and procedure; their toggle is disabled and editing/deletion controls
 are omitted. Close and reopen the viewer to read a refreshed body. Polling does
 not replace an unsaved draft in a writable skill editor. Browse opens the hub.
+
+Switches save exact, case-sensitive skill names in `skills.disabled` in the active
+profile's configuration; they never rewrite skill files. Preferences remain when
+a file is removed or reinstalled. `skills.enabled` is the separate global gate.
+
+On the first startup with this setting, Antares imports `enabled: false` from
+selected files in configured skill directories. It records completion in
+`skills.frontmatter_migrated`. Later header changes do not affect enablement.
+An unreadable or malformed configured source aborts that initial import; repair
+the source and restart to retry. The dashboard and `/skills` still show off entries.
 
 ```yaml
 skills:
