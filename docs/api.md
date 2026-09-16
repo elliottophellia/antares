@@ -131,8 +131,10 @@ not a transport error.
 | `DELETE /api/rag/collections/{name}` | Drop a collection |
 
 Skill list/get responses include `read_only`. Automatically discovered skills can
-be read, but save, toggle, and delete return HTTP 403 without changing the source
-or creating a configured override. These endpoints use the startup catalog;
+be read and toggled; toggles persist exact names in `skills.disabled`, not source
+files. Save and delete return HTTP 403 without changing borrowed content or
+creating a configured override. Toggle persistence/reload failures return HTTP 500;
+success follows both persistence and live publication. These endpoints use the startup catalog;
 `POST /api/commands/run` with `/skills` and a `session_id` uses that session's
 persisted project binding. See [skill sources and precedence](skills.md#where-they-live).
 

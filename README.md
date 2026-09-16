@@ -281,8 +281,8 @@ keep it fresh as files change.
 
 **Skills.** Markdown procedures in configured Antares directories and twelve
 conventional user/project locations, discovered and refreshed automatically.
-Imported sources are read-only through skill management; project chats use their
-own catalog. Names and descriptions go in the prompt; full bodies are fetched on
+Imported content is read-only; enable/disable preferences live in Antares config.
+Project chats use their own catalog. Names and descriptions go in the prompt; full bodies are fetched on
 demand. See [docs/skills.md](docs/skills.md) for paths, precedence, and refresh timing.
 
 **Scheduling.** A five-field cron parser plus `@daily`/`@every 90m` shorthands.
