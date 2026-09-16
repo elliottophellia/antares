@@ -9,7 +9,7 @@ import {
   TrashSimple,
 } from '@phosphor-icons/react'
 import { del, get, post } from '@/lib/api'
-import { useApi } from '@/lib/hooks'
+import { usePoll } from '@/lib/hooks'
 import { useI18n } from '@/lib/i18n'
 import { cn } from '@/lib/utils'
 import { PageLayout } from '@/components/layout/PageLayout'
@@ -45,6 +45,7 @@ interface Skill {
   path: string
   enabled: boolean
   source: string
+  read_only: boolean
   tags?: string[]
   triggers?: string[]
   updated_at: string
@@ -56,9 +57,7 @@ export default function SkillsPage() {
   const [filter, setFilter] = useState('')
   const [query, setQuery] = useState('')
   const endpoint = query ? `/skills?q=${encodeURIComponent(query)}` : '/skills'
-  const { data, loading, reload } = useApi<{ skills: Skill[]; library?: number }>(endpoint, [
-    endpoint,
-  ])
+  const { data, loading, reload } = usePoll<{ skills: Skill[]; library?: number }>(endpoint, 5000)
   const [busy, setBusy] = useState('')
   const [browsing, setBrowsing] = useState(false)
   const [editing, setEditing] = useState<Skill | null>(null)
@@ -179,11 +178,14 @@ export default function SkillsPage() {
               <button onClick={() => setEditing(s)} className="min-w-0 flex-1 text-left">
                 <div className="flex items-start justify-between gap-2">
                   <span className="min-w-0 truncate text-sm font-medium">{s.name}</span>
-                  <PencilSimple className="size-3.5 shrink-0 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100" />
+                  {!s.read_only ? (
+                    <PencilSimple className="size-3.5 shrink-0 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100" />
+                  ) : null}
                 </div>
                 <p className="mt-1.5 line-clamp-2 text-xs text-muted-foreground">{s.description}</p>
                 <div className="mt-2 flex flex-wrap gap-1.5">
                   <Badge variant="outline">{s.source}</Badge>
+                  {s.read_only ? <Badge variant="secondary">{t('skills.readOnly')}</Badge> : null}
                   {s.usage_count > 0 ? (
                     <Badge variant="secondary">{t('skills.used', { n: s.usage_count })}</Badge>
                   ) : null}
@@ -193,22 +195,24 @@ export default function SkillsPage() {
                 <label className="flex items-center gap-2 text-[11px] text-muted-foreground">
                   <Switch
                     checked={s.enabled}
-                    disabled={busy === s.name}
+                    disabled={s.read_only || busy === s.name}
                     onCheckedChange={(v) => toggle(s.name, v)}
                     aria-label={`${t('common.enable')} ${s.name}`}
                   />
                   {s.enabled ? t('skills.on') : t('skills.off')}
                 </label>
-                <Button
-                  variant="ghost"
-                  size="icon-sm"
-                  disabled={busy === s.name}
-                  onClick={() => del(`/skills/${encodeURIComponent(s.name)}`).then(reload)}
-                  aria-label={t('common.delete')}
-                  className="text-muted-foreground hover:text-destructive"
-                >
-                  <TrashSimple className="size-4" />
-                </Button>
+                {!s.read_only ? (
+                  <Button
+                    variant="ghost"
+                    size="icon-sm"
+                    disabled={busy === s.name}
+                    onClick={() => del(`/skills/${encodeURIComponent(s.name)}`).then(reload)}
+                    aria-label={t('common.delete')}
+                    className="text-muted-foreground hover:text-destructive"
+                  >
+                    <TrashSimple className="size-4" />
+                  </Button>
+                ) : null}
               </div>
             </div>
           ))}
@@ -231,27 +235,42 @@ function SkillEditor({
 }) {
   const { t } = useI18n()
   const isNew = !skill
+  const readOnly = !!skill?.read_only
   const [draft, setDraft] = useState({
     name: skill?.name ?? '',
     description: skill?.description ?? '',
     body: '',
   })
+  const [fullSkill, setFullSkill] = useState<Skill | null>(skill)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string>()
 
-  // Load the body when editing (the list omits it).
+  // The list omits the body. Imported skills also use the fetched metadata so
+  // the viewer reflects the source as it existed when it was opened.
   useEffect(() => {
     if (!skill) return
     let cancelled = false
-    get<{ body: string }>(`/skills/${encodeURIComponent(skill.name)}`)
+    get<{ skill: Skill; body: string }>(`/skills/${encodeURIComponent(skill.name)}`)
       .then((r) => {
-        if (!cancelled) setDraft((d) => ({ ...d, body: r.body }))
+        if (cancelled) return
+        if (readOnly) {
+          setFullSkill(r.skill)
+          setDraft({
+            name: r.skill.name,
+            description: r.skill.description,
+            body: r.body,
+          })
+        } else {
+          setDraft((d) => ({ ...d, body: r.body }))
+        }
       })
-      .catch(() => {})
+      .catch((e: Error) => {
+        if (!cancelled) setError(e.message)
+      })
     return () => {
       cancelled = true
     }
-  }, [skill])
+  }, [readOnly, skill])
 
   const save = async () => {
     if (!draft.name.trim() || !draft.body.trim()) return
@@ -274,44 +293,82 @@ function SkillEditor({
         </DialogHeader>
 
         <DialogBody className="space-y-3.5">
-          <div className="grid gap-3 sm:grid-cols-2">
-            <div className="space-y-1.5">
-              <Label htmlFor="skill-name">{t('skills.name')}</Label>
-              <Input
-                id="skill-name"
-                autoFocus={isNew}
-                disabled={!isNew}
-                value={draft.name}
-                onChange={(e) => setDraft((d) => ({ ...d, name: e.target.value }))}
-                placeholder="deploy-homeserver"
-              />
-              {!isNew ? <p className="text-[11px] text-muted-foreground">{t('skills.nameLocked')}</p> : null}
-            </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="skill-desc">{t('skills.whenToUse')}</Label>
-              <Input
-                id="skill-desc"
-                value={draft.description}
-                onChange={(e) => setDraft((d) => ({ ...d, description: e.target.value }))}
-                placeholder={t('skills.whenToUsePlaceholder')}
-              />
-            </div>
-          </div>
-          <div className="space-y-1.5">
-            <Label htmlFor="skill-body">{t('skills.procedure')}</Label>
-            <Textarea
-              id="skill-body"
-              value={draft.body}
-              onChange={(e) => setDraft((d) => ({ ...d, body: e.target.value }))}
-              placeholder={t('skills.procedurePlaceholder')}
-              className="h-64 font-mono text-xs leading-relaxed"
-            />
-          </div>
+          {readOnly ? (
+            <>
+              <div className="rounded-[var(--radius-sm)] border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
+                {t('skills.discoveredReadOnly')}
+              </div>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <div className="space-y-1.5">
+                  <Label htmlFor="skill-name">{t('skills.name')}</Label>
+                  <Input id="skill-name" readOnly value={fullSkill?.name ?? draft.name} />
+                </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="skill-desc">{t('skills.whenToUse')}</Label>
+                  <Input id="skill-desc" readOnly value={fullSkill?.description ?? draft.description} />
+                </div>
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="skill-path">{t('memory.path')}</Label>
+                <Input
+                  id="skill-path"
+                  readOnly
+                  value={fullSkill?.path ?? skill?.path ?? ''}
+                  className="font-mono text-xs"
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="skill-body">{t('skills.procedure')}</Label>
+                <Textarea
+                  id="skill-body"
+                  readOnly
+                  value={draft.body}
+                  className="h-64 font-mono text-xs leading-relaxed"
+                />
+              </div>
+            </>
+          ) : (
+            <>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <div className="space-y-1.5">
+                  <Label htmlFor="skill-name">{t('skills.name')}</Label>
+                  <Input
+                    id="skill-name"
+                    autoFocus={isNew}
+                    disabled={!isNew}
+                    value={draft.name}
+                    onChange={(e) => setDraft((d) => ({ ...d, name: e.target.value }))}
+                    placeholder="deploy-homeserver"
+                  />
+                  {!isNew ? <p className="text-[11px] text-muted-foreground">{t('skills.nameLocked')}</p> : null}
+                </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="skill-desc">{t('skills.whenToUse')}</Label>
+                  <Input
+                    id="skill-desc"
+                    value={draft.description}
+                    onChange={(e) => setDraft((d) => ({ ...d, description: e.target.value }))}
+                    placeholder={t('skills.whenToUsePlaceholder')}
+                  />
+                </div>
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="skill-body">{t('skills.procedure')}</Label>
+                <Textarea
+                  id="skill-body"
+                  value={draft.body}
+                  onChange={(e) => setDraft((d) => ({ ...d, body: e.target.value }))}
+                  placeholder={t('skills.procedurePlaceholder')}
+                  className="h-64 font-mono text-xs leading-relaxed"
+                />
+              </div>
+            </>
+          )}
           {error ? <p className="text-xs text-destructive">{error}</p> : null}
         </DialogBody>
 
         <DialogFooter className="flex items-center">
-          {!isNew ? (
+          {!readOnly && !isNew ? (
             <Button
               variant="ghost"
               size="sm"
@@ -328,14 +385,16 @@ function SkillEditor({
               {t('common.close')}
             </Button>
           </DialogClose>
-          <Button
-            size="sm"
-            onClick={save}
-            loading={saving}
-            disabled={!draft.name.trim() || !draft.body.trim()}
-          >
-            {t('common.save')}
-          </Button>
+          {!readOnly ? (
+            <Button
+              size="sm"
+              onClick={save}
+              loading={saving}
+              disabled={!draft.name.trim() || !draft.body.trim()}
+            >
+              {t('common.save')}
+            </Button>
+          ) : null}
         </DialogFooter>
       </DialogContent>
     </Dialog>
@@ -364,14 +423,11 @@ function SecurityLibrary() {
   const [reading, setReading] = useState<string | null>(null)
   const [body, setBody] = useState('')
 
-  const { data, loading } = useApi<{
+  const { data, loading } = usePoll<{
     skills: LibSkill[]
     total: number
     categories: Record<string, number>
-  }>(`/skills/library?category=${encodeURIComponent(category)}&offset=${offset}&limit=${LIB_LIMIT}`, [
-    category,
-    offset,
-  ])
+  }>(`/skills/library?category=${encodeURIComponent(category)}&offset=${offset}&limit=${LIB_LIMIT}`, 5000)
 
   const read = async (name: string) => {
     if (reading === name) {

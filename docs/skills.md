@@ -137,8 +137,11 @@ learned it says so and writes nothing.
 checks. A project session sees shared user/configured skills and its own project
 skills, not the startup project's or another chat project's procedures.
 
-The dashboard's Skills page lists them with a switch each, shows the body
-inline, and has a Browse button for the hub.
+The dashboard's Skills page shows the startup catalog and polls every five seconds
+while visible. Imported cards show a Read-only badge and open a viewer with the
+source path and procedure; their toggle is disabled and editing/deletion controls
+are omitted. Close and reopen the viewer to read a refreshed body. Polling does
+not replace an unsaved draft in a writable skill editor. Browse opens the hub.
 
 ```yaml
 skills:

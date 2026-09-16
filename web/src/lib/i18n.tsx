@@ -662,6 +662,9 @@ const en = {
   'skills.compose': 'Write a skill',
   'skills.on': 'On',
   'skills.off': 'Off',
+  'skills.readOnly': 'Read-only',
+  'skills.discoveredReadOnly':
+    'Discovered from another skill directory. Edit the source file to change this skill.',
   'skills.nameLocked': 'The name is the file id and cannot be changed.',
   'skills.composeDesc': 'A reusable procedure. Be concrete — exact commands, paths, and pitfalls.',
   'skills.name': 'Name',

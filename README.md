@@ -279,10 +279,11 @@ dimensions and larger corpora are where the graph earns its keep. With
 knowledge into every turn; a project session can index its whole folder and
 keep it fresh as files change.
 
-**Skills.** Markdown files with YAML front matter in `~/.antares/skills`. The
-agent writes its own after solving something non-obvious; the catalogue (names
-and descriptions only) goes in the prompt, and full bodies are fetched on demand
-so the context stays small.
+**Skills.** Markdown procedures in configured Antares directories and twelve
+conventional user/project locations, discovered and refreshed automatically.
+Imported sources are read-only through skill management; project chats use their
+own catalog. Names and descriptions go in the prompt; full bodies are fetched on
+demand. See [docs/skills.md](docs/skills.md) for paths, precedence, and refresh timing.
 
 **Scheduling.** A five-field cron parser plus `@daily`/`@every 90m` shorthands.
 Jobs are natural-language prompts that run unattended and can deliver their

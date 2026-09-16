@@ -64,7 +64,11 @@ func (s *Server) handleToggleSkill(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := mgr.SetEnabled(body.Name, body.Enabled); err != nil {
-		writeError(w, http.StatusBadRequest, err)
+		status := http.StatusBadRequest
+		if errors.Is(err, skills.ErrReadOnly) {
+			status = http.StatusForbidden
+		}
+		writeError(w, status, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
@@ -102,7 +106,11 @@ func (s *Server) handleSaveSkill(w http.ResponseWriter, r *http.Request) {
 	}
 	sk, err := mgr.Save(body.Name, body.Description, body.Body, body.Tags)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err)
+		status := http.StatusBadRequest
+		if errors.Is(err, skills.ErrReadOnly) {
+			status = http.StatusForbidden
+		}
+		writeError(w, status, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, sk)
@@ -115,7 +123,11 @@ func (s *Server) handleDeleteSkill(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := mgr.Delete(r.PathValue("name")); err != nil {
-		writeError(w, http.StatusBadRequest, err)
+		status := http.StatusBadRequest
+		if errors.Is(err, skills.ErrReadOnly) {
+			status = http.StatusForbidden
+		}
+		writeError(w, status, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]bool{"deleted": true})
