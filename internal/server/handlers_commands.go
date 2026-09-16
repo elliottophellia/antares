@@ -14,7 +14,7 @@ func (s *Server) commandDeps() commands.Deps {
 		Config:  s.config,
 		Agent:   s.agent,
 		Store:   s.db,
-		Skills:  s.skills,
+		Skills:  s.currentSkills(),
 		MCP:     s.mcp,
 		Reload:  s.applyReload,
 		Version: version.Version,

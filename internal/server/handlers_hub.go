@@ -31,8 +31,8 @@ func (s *Server) handleHubSkills(w http.ResponseWriter, r *http.Request) {
 
 	// Mark what is already on disk so the UI can offer the right action.
 	installed := map[string]bool{}
-	if s.skills != nil {
-		for _, sk := range s.skills.List() {
+	if manager := s.currentSkills(); manager != nil {
+		for _, sk := range manager.List() {
 			installed[sk.Name] = true
 		}
 	}
@@ -57,8 +57,8 @@ func (s *Server) handleHubInstallSkill(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": err.Error()})
 		return
 	}
-	if s.skills != nil {
-		_ = s.skills.Reload()
+	if manager := s.currentSkills(); manager != nil {
+		_ = manager.Reload()
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"ok": true, "name": entry.Name, "path": path, "summary": entry.Summary,

@@ -36,7 +36,6 @@ Port 8787 already in use usually means the old process did not exit. Check
 | `description` | **The most important line.** How the agent decides whether this is relevant |
 | `tags` | For your own browsing |
 | `triggers` | Words that make it more likely to surface |
-| `enabled` | `false` keeps it on disk but out of the prompt |
 
 The description does the work. "Deployment stuff" will not get picked; "Deploy
 this project to the home server. Use when asked to deploy, ship, or release."
@@ -99,6 +98,16 @@ learned it says so and writes nothing.
 
 The dashboard's Skills page lists them with a switch each, shows the body
 inline, and has a Browse button for the hub.
+
+Switches save exact, case-sensitive skill names in `skills.disabled` in the active
+profile's configuration; they never rewrite skill files. Preferences remain when
+a file is removed or reinstalled. `skills.enabled` is the separate global gate.
+
+On the first startup with this setting, Antares imports `enabled: false` from
+selected files in configured skill directories. It records completion in
+`skills.frontmatter_migrated`. Later header changes do not affect enablement.
+An unreadable or malformed configured source aborts that initial import; repair
+the source and restart to retry. The dashboard and `/skills` still show off entries.
 
 ```yaml
 skills:

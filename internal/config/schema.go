@@ -105,6 +105,7 @@ func tierFor(path string) string {
 // never match a login (a non-bcrypt string fails every comparison).
 var hidden = map[string]bool{
 	"server.dashboard_password_hash": true,
+	"skills.frontmatter_migrated":    true,
 }
 
 var enums = map[string][]string{

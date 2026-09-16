@@ -38,14 +38,15 @@ type Skill struct {
 	// Pack marks a skill from the bundled security library: searchable and
 	// loadable, but kept out of the prompt catalogue so thousands of them do
 	// not bury the conversation.
-	Pack bool `json:"pack,omitempty"`
+	Pack           bool `json:"pack,omitempty"`
+	legacyDisabled bool
 }
 
 // frontMatter is the YAML header of a skill file.
 type frontMatter struct {
 	Name        string   `yaml:"name"`
 	Description string   `yaml:"description"`
-	Enabled     *bool    `yaml:"enabled"`
+	Enabled     *bool    `yaml:"enabled,omitempty"`
 	Source      string   `yaml:"source"`
 	Category    string   `yaml:"category"`
 	Tags        []string `yaml:"tags"`
@@ -63,6 +64,7 @@ type Manager struct {
 	packDirs []string
 	skills   map[string]*Skill
 	usage    map[string]int
+	disabled map[string]struct{}
 }
 
 // NewManager builds a manager over the given directories.
@@ -97,11 +99,14 @@ func (m *Manager) Reload() error {
 		if strings.TrimSpace(dir) == "" {
 			continue
 		}
-		if err := os.MkdirAll(dir, 0o755); err != nil && firstErr == nil {
+		if err := os.MkdirAll(dir, 0o755); err != nil && firstErr == nil && !errors.Is(err, os.ErrNotExist) {
 			firstErr = err
 		}
 		err := filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
 			if err != nil {
+				if firstErr == nil && !errors.Is(err, os.ErrNotExist) {
+					firstErr = err
+				}
 				return nil
 			}
 			if d.IsDir() {
@@ -115,7 +120,7 @@ func (m *Manager) Reload() error {
 			}
 			s, err := parseFile(path)
 			if err != nil {
-				if firstErr == nil {
+				if firstErr == nil && !errors.Is(err, os.ErrNotExist) {
 					firstErr = err
 				}
 				return nil
@@ -124,7 +129,7 @@ func (m *Manager) Reload() error {
 			found[s.Name] = s
 			return nil
 		})
-		if err != nil && firstErr == nil {
+		if err != nil && firstErr == nil && !errors.Is(err, os.ErrNotExist) {
 			firstErr = err
 		}
 	}
@@ -178,8 +183,8 @@ func parseFile(path string) (*Skill, error) {
 			if fm.Source != "" {
 				s.Source = fm.Source
 			}
-			if fm.Enabled != nil {
-				s.Enabled = *fm.Enabled
+			if fm.Enabled != nil && !*fm.Enabled {
+				s.legacyDisabled = true
 			}
 		}
 	}
@@ -217,7 +222,7 @@ func (m *Manager) List() []Skill {
 	defer m.mu.RUnlock()
 	out := make([]Skill, 0, len(m.skills))
 	for _, s := range m.skills {
-		out = append(out, *s)
+		out = append(out, m.effectiveSkillLocked(s))
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out
@@ -231,54 +236,43 @@ func (m *Manager) Get(name string) (*Skill, bool) {
 	if !ok {
 		return nil, false
 	}
-	cp := *s
+	cp := m.effectiveSkillLocked(s)
 	return &cp, true
 }
 
-// SetEnabled toggles a skill by rewriting its front matter.
-func (m *Manager) SetEnabled(name string, enabled bool) error {
-	s, ok := m.Get(name)
-	if !ok {
-		return fmt.Errorf("skill %q not found", name)
+// SetDisabled replaces the profile-wide set of disabled logical skill names.
+// Names are matched exactly after source precedence has selected a winner.
+func (m *Manager) SetDisabled(names []string) {
+	disabled := make(map[string]struct{}, len(names))
+	for _, name := range names {
+		disabled[name] = struct{}{}
 	}
-	raw, err := os.ReadFile(s.Path)
-	if err != nil {
-		return err
-	}
-	text := strings.ReplaceAll(string(raw), "\r\n", "\n")
+	m.mu.Lock()
+	m.disabled = disabled
+	m.mu.Unlock()
+}
 
-	value := "false"
-	if enabled {
-		value = "true"
-	}
-	switch {
-	case strings.HasPrefix(text, "---\n"):
-		end := strings.Index(text[4:], "\n---")
-		if end < 0 {
-			return errors.New("front matter is not terminated")
+// LegacyDisabled returns the selected source names carrying the retired
+// enabled: false header. The header is migration input only and never affects
+// the manager's effective state.
+func (m *Manager) LegacyDisabled() []string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	out := make([]string, 0)
+	for name, s := range m.skills {
+		if s.legacyDisabled {
+			out = append(out, name)
 		}
-		header := text[4 : 4+end]
-		rest := text[4+end:]
-		if strings.Contains(header, "enabled:") {
-			lines := strings.Split(header, "\n")
-			for i, l := range lines {
-				if strings.HasPrefix(strings.TrimSpace(l), "enabled:") {
-					lines[i] = "enabled: " + value
-				}
-			}
-			header = strings.Join(lines, "\n")
-		} else {
-			header += "\nenabled: " + value
-		}
-		text = "---\n" + header + rest
-	default:
-		text = "---\nname: " + s.Name + "\nenabled: " + value + "\n---\n\n" + text
 	}
+	sort.Strings(out)
+	return out
+}
 
-	if err := os.WriteFile(s.Path, []byte(text), 0o644); err != nil {
-		return err
-	}
-	return m.Reload()
+func (m *Manager) effectiveSkillLocked(s *Skill) Skill {
+	cp := *s
+	_, disabled := m.disabled[s.Name]
+	cp.Enabled = !disabled
+	return cp
 }
 
 // Save writes (or overwrites) a skill file in the first configured directory.
@@ -556,7 +550,7 @@ func (m *Manager) Library(category string, offset, limit int) ([]Skill, int) {
 		if category != "" && !strings.EqualFold(s.Category, category) {
 			continue
 		}
-		all = append(all, *s)
+		all = append(all, m.effectiveSkillLocked(s))
 	}
 	m.mu.RUnlock()
 
@@ -590,8 +584,8 @@ func (m *Manager) Count() int {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	n := 0
-	for _, s := range m.skills {
-		if s.Enabled {
+	for name := range m.skills {
+		if _, disabled := m.disabled[name]; !disabled {
 			n++
 		}
 	}

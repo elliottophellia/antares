@@ -215,6 +215,10 @@ func bootstrap(ctx context.Context) (*runtimeServices, error) {
 	if err != nil {
 		return nil, err
 	}
+	cfg, err = migrateSkillState(cfg)
+	if err != nil {
+		return nil, err
+	}
 	if err := logx.Setup(cfg.Logging.Level, cfg.Logging.File, cfg.Logging.JSON); err != nil {
 		return nil, fmt.Errorf("setting up logging: %w", err)
 	}
@@ -694,6 +698,10 @@ func (rt *runtimeServices) reload() error {
 	defer rt.mu.Unlock()
 
 	cfg, err := config.Reload()
+	if err != nil {
+		return err
+	}
+	cfg, err = migrateSkillState(cfg)
 	if err != nil {
 		return err
 	}
