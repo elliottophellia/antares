@@ -92,6 +92,12 @@ An explicitly configured copy wins and remains writable, including when its dire
 is also an automatic root. Hub installs and `/learn` still write an Antares copy
 to their configured/native destination.
 
+The running manager rescans every five seconds, including when skills are disabled
+for the agent. Additions, normal edits, removals, and symlink retargets are visible
+on the next scan without restarting. Edits preserving file identity, size, and
+mtime are reparsed every twelve ticks (about one minute). A new prompt uses the
+current catalog; a prompt already sent to a model is not rewritten.
+
 ## Getting them
 
 **Bundled.** Eight are written on first run. See [the hub](hub.md).

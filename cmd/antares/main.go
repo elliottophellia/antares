@@ -207,6 +207,8 @@ type runtimeServices struct {
 	social           *socialbrowser.Manager
 	skillsHome       string
 	skillsProjectDir string
+	skillsCancel     context.CancelFunc
+	skillsDone       chan struct{}
 }
 
 func bootstrap(ctx context.Context) (*runtimeServices, error) {
@@ -342,6 +344,7 @@ func bootstrap(ctx context.Context) (*runtimeServices, error) {
 		}
 	}
 
+	rt.startSkillRefresh(ctx)
 	return rt, nil
 }
 
@@ -733,14 +736,12 @@ func (rt *runtimeServices) reload() error {
 	rt.agent.SetRAG(ragProvider)
 
 	packDir := config.Path("security-skills")
-	rt.skills = skills.NewManager(skills.Options{
+	if err := rt.skills.Reconfigure(skills.Options{
 		Dirs: expandAll(cfg.Skills.Dirs), PackDirs: []string{packDir},
 		UserHome: rt.skillsHome, ProjectDir: rt.skillsProjectDir,
-	})
-	if err := rt.skills.Reload(); err != nil {
+	}); err != nil {
 		slog.Warn("some skills failed to load", "error", err)
 	}
-	rt.agent.SetSkills(rt.skills)
 
 	if cfg.Plugins.Enabled {
 		pluginMgr := plugin.NewManager(expandAll(cfg.Plugins.Dirs))
@@ -771,7 +772,43 @@ func (rt *runtimeServices) reload() error {
 	return nil
 }
 
+// startSkillRefresh owns the one catalog worker for this runtime, including when
+// skills are loaded for the dashboard but disabled for agent prompts and tools.
+func (rt *runtimeServices) startSkillRefresh(ctx context.Context) {
+	if rt == nil {
+		return
+	}
+	rt.mu.Lock()
+	defer rt.mu.Unlock()
+	if rt.skills == nil || rt.skillsDone != nil {
+		return
+	}
+	ctx, rt.skillsCancel = context.WithCancel(ctx)
+	done := make(chan struct{})
+	rt.skillsDone = done
+	mgr := rt.skills
+	go func() {
+		defer close(done)
+		mgr.Watch(ctx, 5*time.Second)
+	}()
+}
+
+func (rt *runtimeServices) stopSkillRefresh() {
+	if rt == nil {
+		return
+	}
+	rt.mu.Lock()
+	cancel, done := rt.skillsCancel, rt.skillsDone
+	rt.mu.Unlock()
+	if cancel == nil {
+		return
+	}
+	cancel()
+	<-done
+}
+
 func (rt *runtimeServices) close() {
+	rt.stopSkillRefresh()
 	if rt.mcp != nil {
 		rt.mcp.Close()
 	}

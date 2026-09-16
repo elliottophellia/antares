@@ -22,7 +22,8 @@ var (
 // ---- skills -----------------------------------------------------------------
 
 func (s *Server) handleListSkills(w http.ResponseWriter, r *http.Request) {
-	if s.skills == nil {
+	mgr := s.currentSkills()
+	if mgr == nil {
 		writeJSON(w, http.StatusOK, map[string]any{"skills": []any{}})
 		return
 	}
@@ -36,20 +37,21 @@ func (s *Server) handleListSkills(w http.ResponseWriter, r *http.Request) {
 	category := strings.TrimSpace(r.URL.Query().Get("category"))
 	if q != "" || cwe != "" || tech != "" || category != "" {
 		writeJSON(w, http.StatusOK, map[string]any{
-			"skills":    s.skills.SearchFiltered(q, skills.Filter{CWE: cwe, Tech: tech, Category: category}, 100),
+			"skills":    mgr.SearchFiltered(q, skills.Filter{CWE: cwe, Tech: tech, Category: category}, 100),
 			"searching": true,
-			"library":   s.skills.PackCount(),
+			"library":   mgr.PackCount(),
 		})
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"skills":  s.skills.Everyday(),
-		"library": s.skills.PackCount(),
+		"skills":  mgr.Everyday(),
+		"library": mgr.PackCount(),
 	})
 }
 
 func (s *Server) handleToggleSkill(w http.ResponseWriter, r *http.Request) {
-	if s.skills == nil {
+	mgr := s.currentSkills()
+	if mgr == nil {
 		writeError(w, http.StatusServiceUnavailable, errSkillsOff)
 		return
 	}
@@ -61,7 +63,7 @@ func (s *Server) handleToggleSkill(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
-	if err := s.skills.SetEnabled(body.Name, body.Enabled); err != nil {
+	if err := mgr.SetEnabled(body.Name, body.Enabled); err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
@@ -69,11 +71,12 @@ func (s *Server) handleToggleSkill(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleGetSkill(w http.ResponseWriter, r *http.Request) {
-	if s.skills == nil {
+	mgr := s.currentSkills()
+	if mgr == nil {
 		writeError(w, http.StatusServiceUnavailable, errSkillsOff)
 		return
 	}
-	sk, ok := s.skills.Get(r.PathValue("name"))
+	sk, ok := mgr.Get(r.PathValue("name"))
 	if !ok {
 		writeError(w, http.StatusNotFound, errNotFound)
 		return
@@ -82,7 +85,8 @@ func (s *Server) handleGetSkill(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleSaveSkill(w http.ResponseWriter, r *http.Request) {
-	if s.skills == nil {
+	mgr := s.currentSkills()
+	if mgr == nil {
 		writeError(w, http.StatusServiceUnavailable, errSkillsOff)
 		return
 	}
@@ -96,7 +100,7 @@ func (s *Server) handleSaveSkill(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
-	sk, err := s.skills.Save(body.Name, body.Description, body.Body, body.Tags)
+	sk, err := mgr.Save(body.Name, body.Description, body.Body, body.Tags)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return
@@ -105,11 +109,12 @@ func (s *Server) handleSaveSkill(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleDeleteSkill(w http.ResponseWriter, r *http.Request) {
-	if s.skills == nil {
+	mgr := s.currentSkills()
+	if mgr == nil {
 		writeError(w, http.StatusServiceUnavailable, errSkillsOff)
 		return
 	}
-	if err := s.skills.Delete(r.PathValue("name")); err != nil {
+	if err := mgr.Delete(r.PathValue("name")); err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
@@ -501,19 +506,20 @@ func (s *Server) refreshMCP(w http.ResponseWriter, r *http.Request, refresher mc
 // handleSkillLibrary browses the bundled security skill library — paged, by
 // category — so thousands of skills are explorable without searching blind.
 func (s *Server) handleSkillLibrary(w http.ResponseWriter, r *http.Request) {
-	if s.skills == nil {
+	mgr := s.currentSkills()
+	if mgr == nil {
 		writeJSON(w, http.StatusOK, map[string]any{"skills": []any{}, "categories": map[string]int{}, "total": 0})
 		return
 	}
 	category := r.URL.Query().Get("category")
 	offset := queryInt(r, "offset", 0)
 	limit := queryInt(r, "limit", 50)
-	page, total := s.skills.Library(category, offset, limit)
+	page, total := mgr.Library(category, offset, limit)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"skills":     page,
 		"total":      total,
 		"offset":     offset,
 		"limit":      limit,
-		"categories": s.skills.Categories(),
+		"categories": mgr.Categories(),
 	})
 }

@@ -133,10 +133,6 @@ func (s *Server) applyReload() error {
 		return err
 	}
 	s.SetConfig(config.Get())
-	// The agent owns the rebuilt skill library after a reload.
-	if m := s.agent.Skills(); m != nil {
-		s.skills = m
-	}
 	return nil
 }
 

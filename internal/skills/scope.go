@@ -1,9 +1,9 @@
 package skills
 
 import (
+	"context"
 	"fmt"
 	"path/filepath"
-	"sort"
 	"strings"
 	"sync"
 )
@@ -24,19 +24,21 @@ type managerState struct {
 	projectErrs map[string]error
 	scopes      map[string]*Manager
 	usage       map[string]int
+	cache       map[string]cachedSkillFile
 	root        *Manager
 	sharedOnly  *Manager
 
-	// startupDir is the normalized logical startup project directory used both
-	// by the root handle and as the base for relative session project paths.
-	startupDir string
-	defaultErr error
-	sharedErr  error
+	// startupBase never changes: relative session bindings remain anchored to
+	// the process's originally captured startup directory after reconfiguration.
+	startupBase    string
+	defaultProject string
+	defaultErr     error
+	sharedErr      error
 }
 
 // Manager is a lightweight view over shared skill source snapshots. An empty
 // projectDir denotes the root handle, whose selected project follows the
-// state's default. A bound handle keeps its logical project path for life.
+// state's current default. A bound handle keeps its logical project path.
 type Manager struct {
 	state      *managerState
 	projectDir string
@@ -47,19 +49,21 @@ type Manager struct {
 // project sources. Options are cloned so caller mutations cannot reconfigure it.
 func NewManager(opts Options) *Manager {
 	opts = cloneOptions(opts)
-	startupDir, defaultErr := normalizeStartupProject(opts.ProjectDir)
-	opts.ProjectDir = startupDir
+	defaultProject, defaultErr := normalizeStartupProject(opts.ProjectDir)
+	opts.ProjectDir = defaultProject
 	state := &managerState{
-		opts:        opts,
-		bundled:     map[string]*Skill{},
-		user:        map[string]*Skill{},
-		configured:  map[string]*Skill{},
-		projects:    map[string]map[string]*Skill{},
-		projectErrs: map[string]error{},
-		scopes:      map[string]*Manager{},
-		usage:       map[string]int{},
-		startupDir:  startupDir,
-		defaultErr:  defaultErr,
+		opts:           opts,
+		bundled:        map[string]*Skill{},
+		user:           map[string]*Skill{},
+		configured:     map[string]*Skill{},
+		projects:       map[string]map[string]*Skill{},
+		projectErrs:    map[string]error{},
+		scopes:         map[string]*Manager{},
+		usage:          map[string]int{},
+		cache:          map[string]cachedSkillFile{},
+		startupBase:    defaultProject,
+		defaultProject: defaultProject,
+		defaultErr:     defaultErr,
 	}
 	state.root = &Manager{state: state}
 	state.sharedOnly = &Manager{state: state, sharedOnly: true}
@@ -86,10 +90,25 @@ func normalizeStartupProject(projectDir string) (string, error) {
 	return filepath.Clean(logical), nil
 }
 
+func normalizeReconfiguredProject(projectDir, startupBase string) (string, error) {
+	if strings.TrimSpace(projectDir) == "" {
+		return "", nil
+	}
+	if strings.IndexByte(projectDir, 0) >= 0 {
+		return "", fmt.Errorf("normalize project directory: path contains NUL")
+	}
+	if filepath.IsAbs(projectDir) {
+		return filepath.Clean(projectDir), nil
+	}
+	if startupBase == "" {
+		return "", fmt.Errorf("normalize relative project directory %q: startup project directory is unavailable", projectDir)
+	}
+	return filepath.Clean(filepath.Join(startupBase, projectDir)), nil
+}
+
 // ForProject returns a lightweight catalogue view bound to projectDir. Relative
-// paths resolve against the captured startup project. A normalization failure
-// returns a shared-only view so callers never accidentally observe the startup
-// or another project's skills.
+// paths resolve against the originally captured startup project. A normalization
+// failure returns a shared-only view rather than another project's catalogue.
 func (m *Manager) ForProject(projectDir string) (*Manager, error) {
 	if m == nil {
 		return nil, nil
@@ -101,8 +120,8 @@ func (m *Manager) ForProject(projectDir string) (*Manager, error) {
 		if err == nil {
 			err = m.state.sharedErr
 		}
-		if err == nil && m.state.startupDir != "" {
-			err = m.state.projectErrs[m.state.startupDir]
+		if err == nil && m.state.defaultProject != "" {
+			err = m.state.projectErrs[m.state.defaultProject]
 		}
 		m.state.mu.RUnlock()
 		return root, err
@@ -113,8 +132,8 @@ func (m *Manager) ForProject(projectDir string) (*Manager, error) {
 		return m.state.sharedOnly, err
 	}
 
-	m.state.scanMu.Lock()
-	defer m.state.scanMu.Unlock()
+	// Registered scopes are the common path. Avoid queueing behind an active
+	// filesystem scan when their immutable snapshot can be returned immediately.
 	m.state.mu.RLock()
 	view, registered := m.state.scopes[logical]
 	registeredErr := m.state.sharedErr
@@ -126,12 +145,29 @@ func (m *Manager) ForProject(projectDir string) (*Manager, error) {
 		return view, registeredErr
 	}
 
+	m.state.scanMu.Lock()
+	defer m.state.scanMu.Unlock()
+	// Another first-use registration may have completed while this caller waited.
+	m.state.mu.RLock()
+	view, registered = m.state.scopes[logical]
+	registeredErr = m.state.sharedErr
+	if registeredErr == nil {
+		registeredErr = m.state.projectErrs[logical]
+	}
+	previous := m.state.cache
+	m.state.mu.RUnlock()
+	if registered {
+		return view, registeredErr
+	}
+
 	view = &Manager{state: m.state, projectDir: logical}
-	found, scanErr := discoverProject(logical)
+	scan := newDiscoveryScan(context.Background(), false, previous, true)
+	found, scanErr := discoverProject(scan, logical)
 	m.state.mu.Lock()
 	m.state.projects[logical] = found
 	m.state.projectErrs[logical] = scanErr
 	m.state.scopes[logical] = view
+	m.state.cache = scan.cache()
 	sharedErr := m.state.sharedErr
 	m.state.mu.Unlock()
 	if sharedErr != nil {
@@ -148,78 +184,12 @@ func (m *Manager) normalizeProject(projectDir string) (string, error) {
 		return filepath.Clean(projectDir), nil
 	}
 	m.state.mu.RLock()
-	startupDir := m.state.startupDir
+	startupBase := m.state.startupBase
 	m.state.mu.RUnlock()
-	if startupDir == "" {
+	if startupBase == "" {
 		return "", fmt.Errorf("normalize relative project directory %q: startup project directory is unavailable", projectDir)
 	}
-	return filepath.Clean(filepath.Join(startupDir, projectDir)), nil
-}
-
-// Reload rescans shared sources once and every registered logical project. All
-// successful partial snapshots are published atomically; usage counters remain
-// shared and name-keyed.
-func (m *Manager) Reload() error {
-	if m == nil {
-		return nil
-	}
-	m.state.scanMu.Lock()
-	defer m.state.scanMu.Unlock()
-	return m.reloadLocked()
-}
-
-// reloadLocked requires scanMu. Mutation methods use it after writing so they
-// do not recursively acquire the scan lock.
-func (m *Manager) reloadLocked() error {
-	state := m.state
-	state.mu.RLock()
-	opts := cloneOptions(state.opts)
-	projectDirs := make([]string, 0, len(state.projects))
-	for projectDir := range state.projects {
-		projectDirs = append(projectDirs, projectDir)
-	}
-	startupDir := state.startupDir
-	defaultErr := state.defaultErr
-	state.mu.RUnlock()
-	if startupDir != "" {
-		registered := false
-		for _, projectDir := range projectDirs {
-			if projectDir == startupDir {
-				registered = true
-				break
-			}
-		}
-		if !registered {
-			projectDirs = append(projectDirs, startupDir)
-		}
-	}
-	sort.Strings(projectDirs)
-
-	bundled, user, configured, sharedErr := discoverShared(opts)
-	projects := make(map[string]map[string]*Skill, len(projectDirs))
-	projectErrs := make(map[string]error, len(projectDirs))
-	firstErr := defaultErr
-	if firstErr == nil {
-		firstErr = sharedErr
-	}
-	for _, projectDir := range projectDirs {
-		found, err := discoverProject(projectDir)
-		projects[projectDir] = found
-		projectErrs[projectDir] = err
-		if firstErr == nil && err != nil {
-			firstErr = err
-		}
-	}
-
-	state.mu.Lock()
-	state.bundled = bundled
-	state.user = user
-	state.configured = configured
-	state.projects = projects
-	state.projectErrs = projectErrs
-	state.sharedErr = sharedErr
-	state.mu.Unlock()
-	return firstErr
+	return filepath.Clean(filepath.Join(startupBase, projectDir)), nil
 }
 
 func (m *Manager) selectedProjectLocked() map[string]*Skill {
@@ -228,7 +198,7 @@ func (m *Manager) selectedProjectLocked() map[string]*Skill {
 	}
 	projectDir := m.projectDir
 	if projectDir == "" {
-		projectDir = m.state.startupDir
+		projectDir = m.state.defaultProject
 	}
 	if projectDir == "" {
 		return nil
