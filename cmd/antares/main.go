@@ -195,16 +195,18 @@ func cmdTUI() error {
 // runtimeServices bundles everything a running server needs, so a config reload
 // can rebuild the pieces that depend on configuration.
 type runtimeServices struct {
-	mu      sync.Mutex
-	cfg     *config.Config
-	db      store.Store
-	shell   *tools.ShellManager
-	agent   *agent.Agent
-	skills  *skills.Manager
-	cron    *cron.Runner
-	gateway *gateway.Manager
-	mcp     *mcp.Manager
-	social  *socialbrowser.Manager
+	mu               sync.Mutex
+	cfg              *config.Config
+	db               store.Store
+	shell            *tools.ShellManager
+	agent            *agent.Agent
+	skills           *skills.Manager
+	cron             *cron.Runner
+	gateway          *gateway.Manager
+	mcp              *mcp.Manager
+	social           *socialbrowser.Manager
+	skillsHome       string
+	skillsProjectDir string
 }
 
 func bootstrap(ctx context.Context) (*runtimeServices, error) {
@@ -274,9 +276,20 @@ func bootstrap(ctx context.Context) (*runtimeServices, error) {
 		slog.Info("unpacked the security skill library", "count", n)
 	}
 
-	skillDirs := append(append([]string{}, cfg.Skills.Dirs...), "~/.antares/security-skills")
-	skillMgr := skills.NewManager(expandAll(skillDirs))
-	skillMgr.SetPackDirs([]string{packDir})
+	skillsHome, err := os.UserHomeDir()
+	if err != nil || strings.TrimSpace(skillsHome) == "" {
+		slog.Warn("automatic user skills unavailable", "error", err)
+		skillsHome = ""
+	}
+	skillsProjectDir, err := os.Getwd()
+	if err != nil {
+		slog.Warn("automatic project skills unavailable", "error", err)
+		skillsProjectDir = ""
+	}
+	skillMgr := skills.NewManager(skills.Options{
+		Dirs: expandAll(cfg.Skills.Dirs), PackDirs: []string{packDir},
+		UserHome: skillsHome, ProjectDir: skillsProjectDir,
+	})
 	if err := skillMgr.Reload(); err != nil {
 		slog.Warn("some skills failed to load", "error", err)
 	}
@@ -300,6 +313,7 @@ func bootstrap(ctx context.Context) (*runtimeServices, error) {
 	ag.SetRoles(roleReg)
 
 	rt := &runtimeServices{cfg: cfg, db: db, shell: shell, agent: ag, skills: skillMgr}
+	rt.skillsHome, rt.skillsProjectDir = skillsHome, skillsProjectDir
 	rt.social = socialbrowser.New()
 	ag.SetSocialBrowser(rt.social)
 
@@ -719,9 +733,10 @@ func (rt *runtimeServices) reload() error {
 	rt.agent.SetRAG(ragProvider)
 
 	packDir := config.Path("security-skills")
-	skillDirs := append(append([]string{}, cfg.Skills.Dirs...), "~/.antares/security-skills")
-	rt.skills = skills.NewManager(expandAll(skillDirs))
-	rt.skills.SetPackDirs([]string{packDir})
+	rt.skills = skills.NewManager(skills.Options{
+		Dirs: expandAll(cfg.Skills.Dirs), PackDirs: []string{packDir},
+		UserHome: rt.skillsHome, ProjectDir: rt.skillsProjectDir,
+	})
 	if err := rt.skills.Reload(); err != nil {
 		slog.Warn("some skills failed to load", "error", err)
 	}

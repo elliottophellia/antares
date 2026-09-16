@@ -58,9 +58,37 @@ skills:
   dirs: [~/.antares/skills]
 ```
 
-Several directories are searched in order and later ones win, so a personal copy
-overrides a shared one — useful for a team directory in a repository plus your
-own adjustments.
+Configured `dirs` remain writable; new skills save to the first nonblank directory.
+Native `~/.antares` paths follow `ANTARES_HOME`. Flat `.md` files still work there.
+
+Antares also discovers these directories automatically, in the order shown:
+
+| Under the OS user home | Under the selected project |
+|---|---|
+| `.agent/skills` | `.agent/skills` |
+| `.agents/skills` | `.agents/skills` |
+| `.claude/skills` | `.claude/skills` |
+| `.codex/skills` | `.codex/skills` |
+| `.config/opencode/skills` | `.opencode/skills` |
+| `.omp/agent/managed-skills` | `.github/skills` |
+
+Automatic roots use the OS home independently of `ANTARES_HOME`; the OpenCode
+home path does not follow `XDG_CONFIG_HOME`. Project roots are beneath the startup
+directory, without searching parent directories.
+
+Automatic sources accept only `SKILL.md` (case-insensitive), recursively. Supporting
+Markdown and hidden descendants are ignored. A missing name uses the logical parent
+folder name. Symlinks are followed with cycle detection; missing roots are not created.
+
+For duplicate names, priority from lowest to highest is bundled security pack,
+automatic user roots, automatic project roots, then configured `dirs`. Later roots
+within each group win; files within a root are visited in lexical order.
+
+Automatically discovered skills are read-only through skill management: save,
+toggle, and delete refuse to modify or shadow them. Edit the original file instead.
+An explicitly configured copy wins and remains writable, including when its directory
+is also an automatic root. Hub installs and `/learn` still write an Antares copy
+to their configured/native destination.
 
 ## Getting them
 
