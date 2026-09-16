@@ -57,8 +57,9 @@ export default function SkillsPage() {
   const [filter, setFilter] = useState('')
   const [query, setQuery] = useState('')
   const endpoint = query ? `/skills?q=${encodeURIComponent(query)}` : '/skills'
-  const { data, loading, reload } = usePoll<{ skills: Skill[]; library?: number }>(endpoint, 5000)
+  const { data, loading, reload, setData } = usePoll<{ skills: Skill[]; library?: number }>(endpoint, 5000)
   const [busy, setBusy] = useState('')
+  const [toggleError, setToggleError] = useState('')
   const [browsing, setBrowsing] = useState(false)
   const [editing, setEditing] = useState<Skill | null>(null)
   const [creating, setCreating] = useState(false)
@@ -85,8 +86,13 @@ export default function SkillsPage() {
 
   const toggle = async (name: string, enabled: boolean) => {
     setBusy(name)
+    setToggleError('')
     try {
       await post('/skills/toggle', { name, enabled })
+      if (data) setData({ ...data, skills: data.skills.map((s) => s.name === name ? { ...s, enabled } : s) })
+      reload()
+    } catch (e) {
+      setToggleError(`${name}: ${(e as Error).message}`)
       reload()
     } finally {
       setBusy('')
@@ -123,6 +129,7 @@ export default function SkillsPage() {
           />
         </div>
       ) : null}
+      {toggleError ? <p role="alert" className="text-xs text-destructive">{toggleError}</p> : null}
     </div>
   )
 
@@ -195,7 +202,7 @@ export default function SkillsPage() {
                 <label className="flex items-center gap-2 text-[11px] text-muted-foreground">
                   <Switch
                     checked={s.enabled}
-                    disabled={s.read_only || busy === s.name}
+                    disabled={s.read_only || busy !== ''}
                     onCheckedChange={(v) => toggle(s.name, v)}
                     aria-label={`${t('common.enable')} ${s.name}`}
                   />
