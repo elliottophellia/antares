@@ -144,9 +144,10 @@ checks. A project session sees shared user/configured skills and its own project
 skills, not the startup project's or another chat project's procedures.
 
 The dashboard's Skills page shows the startup catalog and polls every five seconds
-while visible. Imported cards show a Read-only badge and open a viewer with the
-source path and procedure; their toggle is disabled and editing/deletion controls
-are omitted. Close and reopen the viewer to read a refreshed body. Polling does
+while visible. Imported cards show a Read-only content badge and open a viewer
+with the source path and procedure. Their switches update Antares configuration;
+editing/deletion controls are omitted. Close and reopen the viewer to read a
+refreshed body. Polling does
 not replace an unsaved draft in a writable skill editor. Browse opens the hub.
 
 Switches save exact, case-sensitive skill names in `skills.disabled` in the active

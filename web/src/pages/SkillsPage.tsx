@@ -202,7 +202,7 @@ export default function SkillsPage() {
                 <label className="flex items-center gap-2 text-[11px] text-muted-foreground">
                   <Switch
                     checked={s.enabled}
-                    disabled={s.read_only || busy !== ''}
+                    disabled={busy !== ''}
                     onCheckedChange={(v) => toggle(s.name, v)}
                     aria-label={`${t('common.enable')} ${s.name}`}
                   />
