@@ -89,6 +89,11 @@ type Model struct {
 	picker picker
 	input  inputModal
 
+	// pending is a staged /undo or /revert awaiting the operator's "y" to
+	// commit. Nil when nothing is pending; a pointer keeps the hot-path
+	// check cheap (nil vs zero-valued struct).
+	pending *pendingRevert
+
 	cache map[string]string // memoised block renders, keyed by content+width
 
 	welcomeFrame int // animation frame for the empty-state splash
@@ -258,6 +263,29 @@ func (m *Model) onKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.picker.active {
 		m.picker.onKey(m, msg)
 		return m, m.modalCmd()
+	}
+
+	// A staged /undo or /revert intercepts the next keystroke: "y" (with
+	// an empty composer) commits, Esc discards, everything else discards
+	// and falls through so the keystroke still lands normally. Placed
+	// above the palette check so a stray key while a rollback is pending
+	// never silently disappears into palette navigation.
+	if m.pending != nil {
+		if m.ta.Value() == "" {
+			if r := msg.Runes; len(r) == 1 && (r[0] == 'y' || r[0] == 'Y') {
+				m.commitPending()
+				m.refreshTranscript()
+				return m, nil
+			}
+			if msg.Type == tea.KeyEsc {
+				m.cancelPending()
+				m.refreshTranscript()
+				return m, nil
+			}
+		}
+		m.cancelPending()
+		m.refreshTranscript()
+		// fall through so the keystroke still routes as normal input
 	}
 
 	// Palette navigation takes priority.
