@@ -195,16 +195,20 @@ func cmdTUI() error {
 // runtimeServices bundles everything a running server needs, so a config reload
 // can rebuild the pieces that depend on configuration.
 type runtimeServices struct {
-	mu      sync.Mutex
-	cfg     *config.Config
-	db      store.Store
-	shell   *tools.ShellManager
-	agent   *agent.Agent
-	skills  *skills.Manager
-	cron    *cron.Runner
-	gateway *gateway.Manager
-	mcp     *mcp.Manager
-	social  *socialbrowser.Manager
+	mu               sync.Mutex
+	cfg              *config.Config
+	db               store.Store
+	shell            *tools.ShellManager
+	agent            *agent.Agent
+	skills           *skills.Manager
+	cron             *cron.Runner
+	gateway          *gateway.Manager
+	mcp              *mcp.Manager
+	social           *socialbrowser.Manager
+	skillsHome       string
+	skillsProjectDir string
+	skillsCancel     context.CancelFunc
+	skillsDone       chan struct{}
 }
 
 func bootstrap(ctx context.Context) (*runtimeServices, error) {
@@ -212,6 +216,10 @@ func bootstrap(ctx context.Context) (*runtimeServices, error) {
 		return nil, fmt.Errorf("preparing %s: %w", config.Home(), err)
 	}
 	cfg, err := config.Load()
+	if err != nil {
+		return nil, err
+	}
+	cfg, err = migrateSkillState(cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -274,9 +282,20 @@ func bootstrap(ctx context.Context) (*runtimeServices, error) {
 		slog.Info("unpacked the security skill library", "count", n)
 	}
 
-	skillDirs := append(append([]string{}, cfg.Skills.Dirs...), "~/.antares/security-skills")
-	skillMgr := skills.NewManager(expandAll(skillDirs))
-	skillMgr.SetPackDirs([]string{packDir})
+	skillsHome, err := os.UserHomeDir()
+	if err != nil || strings.TrimSpace(skillsHome) == "" {
+		slog.Warn("automatic user skills unavailable", "error", err)
+		skillsHome = ""
+	}
+	skillsProjectDir, err := os.Getwd()
+	if err != nil {
+		slog.Warn("automatic project skills unavailable", "error", err)
+		skillsProjectDir = ""
+	}
+	skillMgr := skills.NewManager(skills.Options{
+		Dirs: expandAll(cfg.Skills.Dirs), PackDirs: []string{packDir},
+		UserHome: skillsHome, ProjectDir: skillsProjectDir,
+	})
 	if err := skillMgr.Reload(); err != nil {
 		slog.Warn("some skills failed to load", "error", err)
 	}
@@ -300,6 +319,7 @@ func bootstrap(ctx context.Context) (*runtimeServices, error) {
 	ag.SetRoles(roleReg)
 
 	rt := &runtimeServices{cfg: cfg, db: db, shell: shell, agent: ag, skills: skillMgr}
+	rt.skillsHome, rt.skillsProjectDir = skillsHome, skillsProjectDir
 	rt.social = socialbrowser.New()
 	ag.SetSocialBrowser(rt.social)
 
@@ -328,6 +348,7 @@ func bootstrap(ctx context.Context) (*runtimeServices, error) {
 		}
 	}
 
+	rt.startSkillRefresh(ctx)
 	return rt, nil
 }
 
@@ -697,6 +718,10 @@ func (rt *runtimeServices) reload() error {
 	if err != nil {
 		return err
 	}
+	cfg, err = migrateSkillState(cfg)
+	if err != nil {
+		return err
+	}
 	cfg, _ = config.Effective(rt.cfg, cfg)
 	previous := rt.cfg
 	if err := cfg.Server.ValidateListen(); err != nil {
@@ -719,13 +744,12 @@ func (rt *runtimeServices) reload() error {
 	rt.agent.SetRAG(ragProvider)
 
 	packDir := config.Path("security-skills")
-	skillDirs := append(append([]string{}, cfg.Skills.Dirs...), "~/.antares/security-skills")
-	rt.skills = skills.NewManager(expandAll(skillDirs))
-	rt.skills.SetPackDirs([]string{packDir})
-	if err := rt.skills.Reload(); err != nil {
+	if err := rt.skills.Reconfigure(skills.Options{
+		Dirs: expandAll(cfg.Skills.Dirs), PackDirs: []string{packDir},
+		UserHome: rt.skillsHome, ProjectDir: rt.skillsProjectDir,
+	}); err != nil {
 		slog.Warn("some skills failed to load", "error", err)
 	}
-	rt.agent.SetSkills(rt.skills)
 
 	if cfg.Plugins.Enabled {
 		pluginMgr := plugin.NewManager(expandAll(cfg.Plugins.Dirs))
@@ -756,7 +780,43 @@ func (rt *runtimeServices) reload() error {
 	return nil
 }
 
+// startSkillRefresh owns the one catalog worker for this runtime, including when
+// skills are loaded for the dashboard but disabled for agent prompts and tools.
+func (rt *runtimeServices) startSkillRefresh(ctx context.Context) {
+	if rt == nil {
+		return
+	}
+	rt.mu.Lock()
+	defer rt.mu.Unlock()
+	if rt.skills == nil || rt.skillsDone != nil {
+		return
+	}
+	ctx, rt.skillsCancel = context.WithCancel(ctx)
+	done := make(chan struct{})
+	rt.skillsDone = done
+	mgr := rt.skills
+	go func() {
+		defer close(done)
+		mgr.Watch(ctx, 5*time.Second)
+	}()
+}
+
+func (rt *runtimeServices) stopSkillRefresh() {
+	if rt == nil {
+		return
+	}
+	rt.mu.Lock()
+	cancel, done := rt.skillsCancel, rt.skillsDone
+	rt.mu.Unlock()
+	if cancel == nil {
+		return
+	}
+	cancel()
+	<-done
+}
+
 func (rt *runtimeServices) close() {
+	rt.stopSkillRefresh()
 	if rt.mcp != nil {
 		rt.mcp.Close()
 	}

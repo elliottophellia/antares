@@ -55,6 +55,9 @@ type Server struct {
 
 	mu       sync.RWMutex
 	reloadFn func() error
+	// skillsConfigMu serializes skill preference writes through live publication,
+	// so concurrent toggles cannot overwrite one another or publish out of order.
+	skillsConfigMu sync.Mutex
 
 	// dashSessions holds active dashboard login session tokens (cookie value →
 	// expiry). Guarded by its own mutex; cleared when the password changes.
@@ -106,6 +109,12 @@ func New(o Options) *Server {
 		reloadFn: o.Reload,
 
 		dashSessions: map[string]time.Time{},
+	}
+	// An embedded server may have no agent-owned manager. Seed its fallback
+	// manager from the supplied config so administrative reads are correct from
+	// the first request rather than only after a reload.
+	if s.skills != nil && (s.agent == nil || s.agent.Skills() == nil) && s.cfg != nil {
+		s.skills.SetDisabled(s.cfg.Skills.Disabled)
 	}
 	// Restore dashboard logins so a daemon restart does not break EventSource
 	// reattach (/api/chat/attach) for browsers that still hold a valid cookie.

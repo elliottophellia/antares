@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"sort"
 	"strconv"
 	"strings"
@@ -225,8 +226,31 @@ func cmdToolset(_ context.Context, d Deps, in Input) (Result, error) {
 }
 
 func cmdSkills(ctx context.Context, d Deps, in Input) (Result, error) {
+	if d.Agent != nil {
+		if mgr := d.Agent.Skills(); mgr != nil {
+			d.Skills = mgr
+		}
+	}
+	var projectDir string
+	if in.SessionID != "" {
+		if d.Store == nil {
+			return Result{}, errNoStore
+		}
+		sess, err := d.Store.GetSession(ctx, in.SessionID)
+		if err != nil {
+			return Result{}, err
+		}
+		if sess != nil {
+			projectDir, _ = sess.Meta["project_dir"].(string)
+		}
+	}
 	if d.Skills == nil {
 		return Result{}, errNoSkills
+	}
+	var err error
+	d.Skills, err = d.Skills.ForProject(projectDir)
+	if err != nil {
+		slog.Warn("some skills failed to load", "error", err)
 	}
 	// "/skills search foo" and "/skills install id" reach the hub; anything
 	// else lists what is already installed.
