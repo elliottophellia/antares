@@ -40,6 +40,7 @@ func TestPreviewText(t *testing.T) {
 //  3. pending with mixed changes → counts revertable / external / deletes,
 //     shows up to a handful of paths, and always ends on the "y to confirm"
 //     line so the user always sees the escape hatch.
+//
 // A regression here would ship a confusing prompt to real users; the block
 // is the entire UX of the feature, so it earns a test.
 func TestPendingConfirmMessage(t *testing.T) {

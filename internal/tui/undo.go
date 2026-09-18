@@ -92,6 +92,20 @@ func (m *Model) cmdRevert(args string) (bool, tea.Cmd) {
 	// The id form lets scripts and copy/paste from the dashboard work
 	// without a second interactive step.
 	if id := strings.TrimSpace(args); id != "" {
+		// Validate before staging. An id that is not a user message in this
+		// session previews as "no file changes" (PreviewSince matches nothing
+		// and reports no error), so without this check the operator would be
+		// asked to confirm a rollback that silently does nothing to the files
+		// and then fails on the message trim.
+		ok, err := m.isUserMessage(id)
+		if err != nil {
+			m.pushSystem("Revert: " + err.Error())
+			return false, nil
+		}
+		if !ok {
+			m.pushSystem("No user message " + shortID(id) + " in this session. Run /revert with no argument to pick one.")
+			return false, nil
+		}
 		return m.stageRevert(id, "message "+shortID(id))
 	}
 	items, err := m.collectRevertTargets()
@@ -205,7 +219,17 @@ func (m *Model) commitPending() {
 	// leaving the message log intact. A half-done state where messages are
 	// dropped but files are still at their post-turn contents is worse
 	// than "nothing happened, try again".
-	var restored, deleted, skipped int
+	// skipExternal files are the ones the confirm block warned about. They are
+	// counted from the staged preview, not from the result: RestoreSince drops
+	// them with a bare `continue` and never records them in Failed, so
+	// len(res.Failed) would report 0 for exactly the case worth reporting.
+	skipped := 0
+	for _, c := range p.changes {
+		if c.ExternallyChanged {
+			skipped++
+		}
+	}
+	var restored, deleted, failed int
 	res, err := m.ag.RollbackSince(m.sessionID, p.marker, true)
 	if err != nil {
 		m.pushSystem("Rollback failed: " + err.Error())
@@ -214,7 +238,7 @@ func (m *Model) commitPending() {
 	if res != nil {
 		restored = len(res.Restored)
 		deleted = len(res.Deleted)
-		skipped = len(res.Failed)
+		failed = len(res.Failed)
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -253,6 +277,9 @@ func (m *Model) commitPending() {
 	if skipped > 0 {
 		fmt.Fprintf(&summary, " %d skipped (edited outside the session).", skipped)
 	}
+	if failed > 0 {
+		fmt.Fprintf(&summary, " %d could not be restored.", failed)
+	}
 	m.pushSystem(summary.String())
 }
 
@@ -282,6 +309,25 @@ func (m *Model) lastUserMessageID() (string, error) {
 		}
 	}
 	return "", nil
+}
+
+// isUserMessage reports whether id names a user message in the current
+// session. Guards the `/revert <message-id>` form: a marker the checkpoint
+// store has never seen is indistinguishable from "this turn changed no
+// files", so it has to be rejected before anything is staged.
+func (m *Model) isUserMessage(id string) (bool, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	msgs, err := m.db.ListMessages(ctx, m.sessionID, 0, 0)
+	if err != nil {
+		return false, err
+	}
+	for _, msg := range msgs {
+		if msg.ID == id && msg.Role == "user" {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // collectRevertTargets builds the picker items for /revert: every user
